@@ -1,6 +1,7 @@
 from mlx_lm import load, generate
+from typing import Tuple
 
-def main():
+def main() -> None:
     model, tokenizer = load("mlx-community/GLM-4.5-Air-4bit")
 
     prompt = "In German, people say 'Schoenen Tag noch'. Why do they say 'noch'?"
