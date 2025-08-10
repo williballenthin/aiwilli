@@ -1,7 +1,8 @@
 from mlx_lm import load, generate
 from typing import Tuple, Dict, List
+import sys
 
-def main() -> None:
+def main() -> int:
     model, tokenizer = load("mlx-community/GLM-4.5-Air-4bit")
 
     prompt: str = "In German, people say 'Schoenen Tag noch'. Why do they say 'noch'?"
@@ -13,7 +14,7 @@ def main() -> None:
         )
 
     response = generate(model, tokenizer, prompt=prompt, verbose=True)
+    return 0
 
 if __name__ == "__main__":
-    # use sys.exit with a returned int ai!
-    main()
+    sys.exit(main())
