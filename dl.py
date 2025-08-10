@@ -1,4 +1,5 @@
 from mlx_lm import load, generate
+from typing import List, Dict
 import sys
 
 def main() -> int:
@@ -7,7 +8,7 @@ def main() -> int:
     prompt: str = "In German, people say 'Schoenen Tag noch'. Why do they say 'noch'?"
 
     if tokenizer.chat_template is not None:
-        messages: list = [{"role": "user", "content": prompt}]
+        messages: List[Dict[str, str]] = [{"role": "user", "content": prompt}]
         prompt = tokenizer.apply_chat_template(
             messages, add_generation_prompt=True
         )
