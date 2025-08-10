@@ -15,4 +15,5 @@ def main() -> None:
     response = generate(model, tokenizer, prompt=prompt, verbose=True)
 
 if __name__ == "__main__":
+    # use sys.exit with a returned int ai!
     main()
