@@ -1,0 +1,6 @@
+[submodule "ocr/deps/GetWindowID"]
+	path = ocr/deps/GetWindowID
+	url = git@github.com:smokris/GetWindowID.git
+[submodule "ocr/deps/cliclick"]
+	path = ocr/deps/cliclick
+	url = git@github.com:BlueM/cliclick.git
