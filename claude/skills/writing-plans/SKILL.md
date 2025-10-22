@@ -84,11 +84,46 @@ git add tests/path/test.py src/path/file.py
 git commit -m "feat: add specific feature"
 ```
 
+## Version Control Commands
+
+Plans should use the project's VCS. Detect which VCS is in use:
+
+```bash
+if [ -d .jj ]; then
+  VCS="jj"
+elif [ -d .git ]; then
+  VCS="git"
+fi
+```
+
+**For VCS command reference:**
+- Git projects: See @working-with-git skill
+- Jujutsu projects: See @working-with-jj skill
+
+**In commit steps, provide both git and jj commands:**
+
+```markdown
+**Step 5: Commit**
+
+Git:
+```bash
+git add tests/path/test.py src/path/file.py
+git commit -m "feat: add specific feature"
+```
+
+Jujutsu:
+```bash
+jj describe -m "feat: add specific feature"
+jj new
+```
+```
+
 ## Remember
 - Exact file paths always
 - Complete code in plan (not "add validation")
 - Exact commands with expected output
 - Reference relevant skills with @ syntax
+- Provide both git and jj commands in commit steps
 - DRY, YAGNI, TDD, frequent commits
 
 ## Execution Handoff

@@ -98,7 +98,7 @@ Task 1: Hook installation script
 [Dispatch wb:task-implementer]
 Subagent: Implemented install-hook with tests, 5/5 passing, committed as abc123
 
-[Get git SHAs, dispatch wb:code-reviewer]
+[Get commit SHAs (see @working-with-git or @working-with-jj), dispatch wb:code-reviewer]
 Reviewer: Strengths: Good test coverage. Issues: None. Ready.
 
 [Mark Task 1 complete]

@@ -23,10 +23,18 @@ Dispatch code-reviewer subagent to catch issues before they cascade.
 
 ## How to Request
 
-**1. Get git SHAs:**
+**1. Detect VCS and get commit references:**
+
+For Git (see @working-with-git skill):
 ```bash
 BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
 HEAD_SHA=$(git rev-parse HEAD)
+```
+
+For Jujutsu (see @working-with-jj skill):
+```bash
+BASE_SHA=$(jj log -r @- -T commit_id --no-graph)
+HEAD_SHA=$(jj log -r @ -T commit_id --no-graph)
 ```
 
 **2. Dispatch code-reviewer subagent:**
