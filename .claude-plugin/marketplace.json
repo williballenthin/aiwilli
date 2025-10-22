@@ -1,0 +1,30 @@
+{
+  "name": "williballenthin",
+  "description": "marketplace of skills by williballenthin",
+  "owner": {
+    "name": "Willi Ballenthin",
+    "email": "willi.ballenthin@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "wb",
+      "description": "core extensions for Claude",
+      "source": "./claude/",
+      "version": "0.1.0",
+      "agents": [
+        "./agents/code-reviewer.md",
+        "./agents/task-implementer.md"
+      ],
+      "skills": [
+        "./skills/brainstorming",
+        "./skills/writing-plans",
+        "./skills/executing-plans",
+        "./skills/test-driven-development",
+        "./skills/requesting-code-review"
+      ],
+      "commands": [
+        "./commands/brainstorm.md"
+      ]
+    }
+  ]
+}
