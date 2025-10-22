@@ -42,9 +42,17 @@ Brainstorming Progress:
 - **Use AskUserQuestion tool** when you have multiple choice options
 - Gather: Purpose, constraints, success criteria
 
+**IMPORTANT: Question Pacing**
+- At the start, you may enumerate pending questions to show your thinking (e.g., "I have questions about: 1) storage approach, 2) authentication method, 3) user experience")
+- BUT: Only ask ONE question at a time with its answer options
+- Wait for response before asking the next question
+- This prevents overwhelming your partner with too many choices at once
+
 **Example using AskUserQuestion:**
 ```
-Question: "Where should the authentication data be stored?"
+"I'm going to ask about storage, authentication, and user flows.
+
+First question - Where should the authentication data be stored?"
 Options:
   - "Session storage" (clears on tab close, more secure)
   - "Local storage" (persists across sessions, more convenient)
@@ -144,7 +152,7 @@ digraph revisit_phases {
 
 | Principle | Application |
 |-----------|-------------|
-| **One question at a time** | Phase 1: Single question per message, use AskUserQuestion for choices |
+| **One question at a time** | Enumerate pending questions, then ask ONE question with options. Wait for response. Repeat. |
 | **Structured choices** | Use AskUserQuestion tool for 2-4 options with trade-offs |
 | **YAGNI ruthlessly** | Remove unnecessary features from all designs |
 | **Explore alternatives** | Always propose 2-3 approaches before settling |
