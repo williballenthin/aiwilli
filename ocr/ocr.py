@@ -8,37 +8,69 @@
 # ///
 """OCR + page break fixing in two passes: OCR → Stitch."""
 
-import sys
 import re
+import sys
+
 import requests
 import rich
-
 from docling.datamodel import vlm_model_specs
+from docling.datamodel.accelerator_options import AcceleratorDevice
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import VlmPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption, ImageFormatOption
+from docling.datamodel.pipeline_options_vlm_model import (
+    InferenceFramework,
+    InlineVlmOptions,
+    ResponseFormat,
+    TransformersModelType,
+)
+from docling.document_converter import (
+    DocumentConverter,
+    ImageFormatOption,
+)
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
 # LM Studio API endpoint (default)
 LM_STUDIO_URL = "http://localhost:1234/v1/completions"
 LM_STUDIO_MODEL = "openai/gpt-oss-20b"
 
+
 def debug(msg: str) -> None:
     """Print debug message to stderr."""
     rich.print(msg, file=sys.stderr)
 
+
+qwen_pipeline_options = VlmPipelineOptions(
+    vlm_options=InlineVlmOptions(
+        # repo_id="lmstudio-community/Qwen3-VL-8B-Instruct-MLX-8bit",
+        repo_id="Qwen/Qwen3-VL-8B-Instruct",
+        prompt="Convert this page to markdown. Do not miss any text and only output the bare markdown!",
+        response_format=ResponseFormat.MARKDOWN,
+        inference_framework=InferenceFramework.TRANSFORMERS,
+        transformers_model_type=TransformersModelType.AUTOMODEL_VISION2SEQ,
+        supported_devices=[
+            AcceleratorDevice.CPU,
+            AcceleratorDevice.MPS,
+        ],
+        scale=2.0,
+        temperature=0.0,
+    )
+)
+
+pixtral_pipeline_options = VlmPipelineOptions(
+    vlm_options=vlm_model_specs.PIXTRAL_12B_MLX,
+)
+
+granite_pipeline_options = VlmPipelineOptions(
+    vlm_options=vlm_model_specs.GRANITEDOCLING_MLX,
+)
+
+
 def ocr_pass(sources: list[str]) -> str:
     """Convert sources to merged HTML."""
-    pipeline_options = VlmPipelineOptions(
-        vlm_options=vlm_model_specs.GRANITEDOCLING_MLX,
-    )
+    pipeline_options = pixtral_pipeline_options
 
     converter = DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(
-                pipeline_cls=VlmPipeline,
-                pipeline_options=pipeline_options,
-            ),
             InputFormat.IMAGE: ImageFormatOption(
                 pipeline_cls=VlmPipeline,
                 pipeline_options=pipeline_options,
@@ -73,6 +105,7 @@ def ocr_pass(sources: list[str]) -> str:
     merged_html = header + "\n".join(body_content) + base_footer
     return merged_html
 
+
 def find_page_break(content: str) -> tuple[int, str] | None:
     """Find the first page break pattern and return (position, match_string)."""
     pattern = r"</p>\n</div>\n<div class='page'>\n<p>"
@@ -81,7 +114,10 @@ def find_page_break(content: str) -> tuple[int, str] | None:
         return (match.start(), match.group())
     return None
 
-def extract_context(content: str, match_pos: int, match_string: str, context_chars: int = 256) -> str:
+
+def extract_context(
+    content: str, match_pos: int, match_string: str, context_chars: int = 256
+) -> str:
     """Extract context around the match (N characters before and after)."""
     before_start = max(0, match_pos - context_chars)
     before_context = content[before_start:match_pos].rpartition("<p>")[2]
@@ -93,6 +129,7 @@ def extract_context(content: str, match_pos: int, match_string: str, context_cha
     context = f"{before_context}\n<page break />\n{after_context}"
 
     return context
+
 
 def call_lm_studio(context: str) -> str | None:
     """Call LM Studio API and get response."""
@@ -119,13 +156,13 @@ Respond with either "true" (merge) or "false" (keep separate). End your response
                 "model": LM_STUDIO_MODEL,
                 "prompt": prompt,
             },
-            timeout=60
+            timeout=60,
         )
         response.raise_for_status()
         result = response.json()
 
-        if 'choices' in result and len(result['choices']) > 0:
-            text = result['choices'][0].get('text', '').strip()
+        if "choices" in result and len(result["choices"]) > 0:
+            text = result["choices"][0].get("text", "").strip()
             debug(f"[gray69]LM Studio response: [/gray69][green]{text}[/green]")
             return text
         else:
@@ -135,6 +172,7 @@ Respond with either "true" (merge) or "false" (keep separate). End your response
     except Exception as e:
         debug(f"[red]Error calling LM Studio: {e}[/red]")
         return None
+
 
 def get_llm_decision(context: str) -> bool | None:
     """Keep prompting LLM until we get a valid "true" or "false" response."""
@@ -146,16 +184,20 @@ def get_llm_decision(context: str) -> bool | None:
 
         response = call_lm_studio(context)
         if response is None:
-            debug(f"[yellow]No response from LLM, retrying...[/yellow]")
+            debug("[yellow]No response from LLM, retrying...[/yellow]")
             continue
 
         response = response.lower().strip().rstrip(".")
 
         if response.endswith("answer true"):
-            debug(f"[gray69]LLM decision: [/gray69][blue]MERGE paragraphs (true)[/blue]")
+            debug(
+                "[gray69]LLM decision: [/gray69][blue]MERGE paragraphs (true)[/blue]"
+            )
             return True
         if response.endswith("answer false"):
-            debug(f"[gray69]LLM decision: [/gray69][cyan]KEEP SEPARATE paragraphs (false)[/cyan]")
+            debug(
+                "[gray69]LLM decision: [/gray69][cyan]KEEP SEPARATE paragraphs (false)[/cyan]"
+            )
             return False
         else:
             debug(f"[yellow]Invalid response '{response}', retrying...[/yellow]")
@@ -163,16 +205,17 @@ def get_llm_decision(context: str) -> bool | None:
     debug(f"[red]Failed to get valid response after {max_attempts} attempts[/red]")
     return None
 
+
 def stitch_pass(content: str) -> str:
     """Fix page breaks with LLM guidance."""
-    debug(f"[gray69]Starting stitch pass[/gray69]")
+    debug("[gray69]Starting stitch pass[/gray69]")
 
     for i in range(1000):
         debug(f"[gray69]pass: {i}[/gray69]")
 
         result = find_page_break(content)
         if result is None:
-            debug(f"[gray69]all pages merged[/gray69]")
+            debug("[gray69]all pages merged[/gray69]")
             break
 
         match_pos, match_string = result
@@ -182,22 +225,30 @@ def stitch_pass(content: str) -> str:
 
         should_merge = get_llm_decision(context)
         if should_merge is None:
-            debug(f"[red]Error: Could not get valid LLM response[/red]")
+            debug("[red]Error: Could not get valid LLM response[/red]")
             sys.exit(1)
 
         if should_merge:
-            debug(f"[gray69]Removing page break (merging paragraphs)[/gray69]")
-            updated_content = content[:match_pos] + " " + content[match_pos + len(match_string):]
+            debug("[gray69]Removing page break (merging paragraphs)[/gray69]")
+            updated_content = (
+                content[:match_pos] + " " + content[match_pos + len(match_string) :]
+            )
         else:
-            debug(f"[gray69]Replacing page break with paragraph marker[/gray69]")
-            updated_content = content[:match_pos] + "</p><p>" + content[match_pos + len(match_string):]
+            debug("[gray69]Replacing page break with paragraph marker[/gray69]")
+            updated_content = (
+                content[:match_pos]
+                + "</p><p>"
+                + content[match_pos + len(match_string) :]
+            )
 
         content = updated_content
         debug("")
         debug("")
 
     # via: https://iangmcdowell.com/blog/posts/laying-out-a-book-with-css/
-    content = content.replace("<style>", """<style>
+    content = content.replace(
+        "<style>",
+        """<style>
 h2 {
     text-align: center;
     font-family: "Jost";  
@@ -228,10 +279,12 @@ p {
   }
 }
 
-<!--""")
+<!--""",
+    )
     content = content.replace("</style>", "--> </style>")
 
     return content
+
 
 def main() -> None:
     """Main entry point."""
@@ -242,18 +295,19 @@ def main() -> None:
     sources = sys.argv[1:]
 
     # Pass 1: OCR
-    debug(f"[gray69]Pass 1: OCR processing[/gray69]")
+    debug("[gray69]Pass 1: OCR processing[/gray69]")
     html = ocr_pass(sources)
     debug(f"[gray69]OCR complete, HTML size: {len(html)} bytes[/gray69]")
     debug("")
 
     # Pass 2: Stitch
-    debug(f"[gray69]Pass 2: Stitch fixup[/gray69]")
+    debug("[gray69]Pass 2: Stitch fixup[/gray69]")
     html = stitch_pass(html)
-    debug(f"[gray69]Stitch complete[/gray69]")
+    debug("[gray69]Stitch complete[/gray69]")
 
     # Output
     sys.stdout.write(html)
+
 
 if __name__ == "__main__":
     main()
