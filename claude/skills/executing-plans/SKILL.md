@@ -131,6 +131,7 @@ Done!
 - Subagents follow TDD naturally
 - Fresh context per task (no confusion)
 - Parallel-safe (subagents don't interfere)
+- Linting enforced before each code review (consistent quality)
 
 **Cost:**
 - More subagent invocations
