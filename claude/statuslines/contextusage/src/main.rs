@@ -31,9 +31,13 @@ struct Message {
 #[derive(Deserialize)]
 struct Usage {
     #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_read_input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,12 +57,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(&line) {
             if let Some(message) = entry.message {
                 if let Some(usage) = message.usage {
-                    let create_tokens = usage.cache_creation_input_tokens;
-                    let read_tokens = usage.cache_read_input_tokens;
-                    let input_tokens = create_tokens + read_tokens;
+                    let total_tokens = usage.input_tokens
+                        + usage.cache_creation_input_tokens
+                        + usage.cache_read_input_tokens
+                        + usage.output_tokens;
 
-                    if input_tokens > 0 {
-                        current_token_usage = input_tokens;
+                    if total_tokens > 0 {
+                        current_token_usage = total_tokens;
                     }
                 }
             }

@@ -23,14 +23,16 @@ def main():
         if not usage:
             continue
 
+        input_tokens = usage.get("input_tokens", 0)
         create_tokens = usage.get("cache_creation_input_tokens", 0)
         read_tokens = usage.get("cache_read_input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
 
-        input_tokens = create_tokens + read_tokens
-        if not input_tokens:
+        total_tokens = input_tokens + create_tokens + read_tokens + output_tokens
+        if not total_tokens:
             continue
 
-        current_token_usage = input_tokens
+        current_token_usage = total_tokens
 
     model = doc["model"]["display_name"]
     cwd = doc["cwd"]
