@@ -85,6 +85,43 @@ After all tasks complete, dispatch final code-reviewer:
 - Checks all plan requirements met
 - Validates overall architecture
 
+### 7. Report Final Status with Deviations
+
+**CRITICAL:** After completing all tasks and final review, you MUST provide a clear status report highlighting:
+
+**Required in final status:**
+- **Deviations from plan:** Any tasks that were implemented differently than specified
+- **Things that went wrong:** Failures, errors, or unexpected issues encountered
+- **Things skipped:** Any plan items not completed and why
+- **Special handling:** Workarounds, manual interventions, or non-standard approaches used
+- **Assumptions made:** Decisions made where plan was unclear
+- **Impact assessment:** How deviations affect the overall implementation
+
+**Format:**
+```
+## Execution Complete
+
+### Summary
+[Brief overview of what was accomplished]
+
+### Deviations and Issues
+[REQUIRED - if none, explicitly state "No deviations from plan"]
+
+- **Task N:** [What went wrong/differently and why]
+- **Skipped:** [What was skipped and justification]
+- **Special handling:** [Any workarounds or manual fixes]
+
+### Final Review Results
+[Code reviewer assessment]
+
+### Status
+[Ready for merge / Needs attention / Blocked]
+```
+
+**If no deviations:** Explicitly state "No deviations from the plan. All tasks completed as specified."
+
+**Never skip this step.** Transparency about issues builds trust and helps users understand what happened.
+
 
 ## Example Workflow
 
@@ -122,7 +159,22 @@ Fix subagent: Added progress every 100 conversations, committed as ghi789
 [Dispatch wb:code-reviewer for final review]
 Final reviewer: All requirements met, ready to merge
 
-Done!
+[Report final status with deviations]
+
+## Execution Complete
+
+### Summary
+Implemented hook installation and recovery modes. All 13 tests passing.
+
+### Deviations and Issues
+- **Task 2:** Added progress reporting (not in original plan) - reviewer identified as missing during code review, fixed in ghi789
+- **Special handling:** Had to refactor error handling pattern to support both verify and repair modes consistently
+
+### Final Review Results
+Code reviewer: All requirements met, good test coverage, consistent patterns. Ready to merge.
+
+### Status
+Ready for merge
 ```
 
 ## Advantages
@@ -144,10 +196,12 @@ Done!
 - Proceed with unfixed Critical issues
 - Dispatch multiple implementation subagents in parallel (conflicts)
 - Implement without reading plan task
+- **Skip final status report with deviations** - ALWAYS report what went differently
 
 **If subagent fails task:**
 - Dispatch fix subagent with specific instructions
 - Don't try to fix manually (context pollution)
+- Document the failure in final status report
 
 ## Integration
 
