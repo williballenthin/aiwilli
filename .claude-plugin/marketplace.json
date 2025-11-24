@@ -10,22 +10,11 @@
       "name": "wb",
       "description": "core extensions for Claude",
       "source": "./claude/",
-      "version": "0.1.3",
-      "agents": [
-        "./agents/code-reviewer.md",
-        "./agents/task-implementer.md"
-      ],
+      "version": "0.2.0",
       "skills": [
-        "./skills/brainstorming",
-        "./skills/writing-plans",
-        "./skills/executing-plans",
-        "./skills/test-driven-development",
-        "./skills/requesting-code-review",
         "./skills/working-with-git",
-        "./skills/working-with-jj"
-      ],
-      "commands": [
-        "./commands/brainstorm.md"
+        "./skills/working-with-jj",
+        "./skills/working-with-sqlite"
       ]
     }
   ]
