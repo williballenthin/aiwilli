@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tw:*)",
+      "Bash(tw:*)",
+      "Bash(task:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run mypy:*)",
+      "Bash(tw done:*)",
+      "Bash(tw start:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

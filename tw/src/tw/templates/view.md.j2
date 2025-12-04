@@ -1,0 +1,82 @@
+# {{ issue.tw_id }}: {{ issue.title }}
+{% if issue.tw_status.value == 'stopped' %}
+{% set handoff = issue.annotations | selectattr('type.value', 'equalto', 'handoff') | list | last %}
+{% if handoff %}
+
+> **HANDOFF:** {{ handoff.message }}
+{% endif %}
+{% endif %}
+
+{% set props = [issue.tw_type.value, issue.tw_status.value] %}
+{% if issue.tw_parent %}{% set props = props + ['parent: ' + issue.tw_parent] %}{% endif %}
+{% if issue.tw_refs %}{% set props = props + ['refs: ' + issue.tw_refs|join(', ')] %}{% endif %}
+*{{ props | join(' | ') }}*
+
+{% if issue.tw_body %}
+## Body
+
+{{ issue.tw_body }}
+{% endif %}
+{% if issue.annotations %}
+{% set visible_annotations = issue.annotations | rejectattr('type.value', 'in', ['work-begin', 'work-end']) | selectattr('message') | list %}
+{% if visible_annotations %}
+
+## Annotations
+
+{% for annotation in visible_annotations %}
+{% set first_line = annotation.message.split('\n')[0].strip() %}
+{% if first_line %}
+- [{{ annotation.type.value }}] {{ annotation.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}: {{ first_line }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{% if ancestors %}
+## Ancestors
+
+{% for ancestor in ancestors | reverse %}
+### {{ ancestor.tw_id }}: {{ ancestor.title }}
+
+**Type:** {{ ancestor.tw_type.value }} | **Status:** {{ ancestor.tw_status.value }}
+{% if ancestor.tw_body %}
+{% if '---' in ancestor.tw_body %}
+{{ ancestor.tw_body.split('---')[0].strip() }}
+{% else %}
+{{ ancestor.tw_body }}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if siblings %}
+## Siblings
+
+{% for sibling in siblings %}
+{{ sibling|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+
+{% if descendants %}
+## Descendants
+
+{% for descendant in descendants %}
+{{ descendant|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+
+{% if referenced %}
+## Referenced Issues
+
+{% for ref in referenced %}
+{{ ref|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+
+{% if referencing %}
+## Issues Referencing This
+
+{% for ref in referencing %}
+{{ ref|render_tree_line(0) }}
+{% endfor %}
+{% endif %}

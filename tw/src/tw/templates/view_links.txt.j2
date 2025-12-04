@@ -1,0 +1,30 @@
+{% if ancestors %}
+[bold]Ancestors[/bold]
+{% for ancestor in ancestors | reverse %}
+[dim]{{ ancestor.tw_type.value }}:[/dim] {{ ancestor.title }} [dim]({{ ancestor.tw_id }}, {{ ancestor.tw_status.value }})[/dim]
+{% endfor %}
+{% endif %}
+{% if siblings %}
+[bold]Siblings[/bold]
+{% for sibling in siblings %}
+{{ sibling|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+{% if descendants %}
+[bold]Descendants[/bold]
+{% for descendant in descendants %}
+{{ descendant|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+{% if referenced %}
+[bold]Referenced Issues[/bold]
+{% for ref in referenced %}
+{{ ref|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+{% if referencing %}
+[bold]Issues Referencing This[/bold]
+{% for ref in referencing %}
+{{ ref|render_tree_line(0) }}
+{% endfor %}
+{% endif %}

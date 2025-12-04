@@ -446,9 +446,12 @@ Parent hierarchy is **optional**:
 
 ### 5. ID Generation for Orphans
 
-Orphan issues get **hierarchical IDs with reserved parent slots**:
-- Creating an orphan task might yield `PROJ-12-1a`
-- This implicitly reserves `PROJ-12` (epic slot) and `PROJ-12-1` (story slot)
+Orphan issues get **top-level IDs** to keep them concise:
+- Creating an orphan task yields `PROJ-12` (top-level epic format)
+- Creating an orphan story yields `PROJ-12` (top-level epic format)
+  - Children of orphan story get `PROJ-12-1`, `PROJ-12-2` (story-level format)
+- Only when an epic `PROJ-12` exists do descendant tasks get IDs like `PROJ-12-1a`
+- This implicitly reserves `PROJ-12` (epic slot)
 - Future epics skip past reserved IDs
 
 ### 6. Reserved Slots Are Permanent

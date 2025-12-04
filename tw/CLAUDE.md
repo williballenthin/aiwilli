@@ -1,0 +1,2 @@
+- this project uses the `tw` issue tracker. when you need to interact with issues, make sure you've first done `tw onboard` to learn about it.
+- do not read implementation plans unless specifically instructed

@@ -1,0 +1,52 @@
+# {{ parent.tw_id }}: {{ parent.title }}
+
+**Type:** {{ parent.tw_type.value }}
+**Status:** {{ parent.tw_status.value }}
+
+{% if parent.tw_body %}
+## Description
+
+{{ parent.tw_body }}
+{% endif %}
+
+{% if children %}
+## Children
+
+| ID | Type | Status | Title |
+|---|---|---|---|
+{% for child in children %}
+| {{ child.tw_id }} | {{ child.tw_type.value }} | {{ child.tw_status.value }} | {{ child.title }} |
+{% endfor %}
+
+{% set all_lessons = [] %}
+{% set all_deviations = [] %}
+{% for child in children %}
+  {% if child.annotations %}
+    {% for ann in child.annotations %}
+      {% if ann.type.value == "lesson" %}
+        {% set _ = all_lessons.append((child.tw_id, ann.message)) %}
+      {% elif ann.type.value == "deviation" %}
+        {% set _ = all_deviations.append((child.tw_id, ann.message)) %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+
+{% if all_lessons %}
+## Lessons
+
+{% for tw_id, lesson in all_lessons %}
+- **{{ tw_id }}**: {{ lesson }}
+{% endfor %}
+{% endif %}
+
+{% if all_deviations %}
+## Deviations
+
+{% for tw_id, deviation in all_deviations %}
+- **{{ tw_id }}**: {{ deviation }}
+{% endfor %}
+{% endif %}
+{% else %}
+*No children*
+{% endif %}

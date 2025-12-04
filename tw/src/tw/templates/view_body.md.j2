@@ -1,0 +1,31 @@
+# {{ issue.tw_id }}: {{ issue.title }}
+{% if issue.tw_status.value == 'stopped' %}
+{% set handoff = issue.annotations | selectattr('type.value', 'equalto', 'handoff') | list | last %}
+{% if handoff %}
+
+> **HANDOFF:** {{ handoff.message }}
+{% endif %}
+{% endif %}
+
+{% set props = [issue.tw_type.value, issue.tw_status.value] %}
+{% if issue.tw_parent %}{% set props = props + ['parent: ' + issue.tw_parent] %}{% endif %}
+{% if issue.tw_refs %}{% set props = props + ['refs: ' + issue.tw_refs|join(', ')] %}{% endif %}
+*{{ props | join(' | ') }}*
+
+{% if issue.tw_body %}
+{{ issue.tw_body }}
+{% endif %}
+{% if issue.annotations %}
+{% set visible_annotations = issue.annotations | rejectattr('type.value', 'in', ['work-begin', 'work-end']) | selectattr('message') | list %}
+{% if visible_annotations %}
+
+## Annotations
+
+{% for annotation in visible_annotations %}
+{% set first_line = annotation.message.split('\n')[0].strip() %}
+{% if first_line %}
+- [{{ annotation.type.value }}] {{ annotation.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}: {{ first_line }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}

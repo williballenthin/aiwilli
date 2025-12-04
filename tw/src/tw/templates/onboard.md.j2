@@ -1,0 +1,447 @@
+# tw - TaskWarrior-backed Issue Tracker
+
+`tw` is a lightweight issue tracker for AI-driven software development. It uses TaskWarrior as a backend and provides a hierarchical structure (epics → stories → tasks) optimized for AI agents and human collaboration.
+
+## Which Persona Are You?
+
+Before using `tw`, identify your role based on what you've been asked to do:
+
+### Planner
+You are a **Planner** if you've been asked to:
+- Design or architect a feature
+- Break down work into implementable pieces
+- Create epics, stories, and tasks
+- Organize or restructure existing work
+
+**Your job:** Create the roadmap. Define what needs to be done and capture enough detail that a coder agent can execute each task independently.
+
+### Coder
+You are a **Coder** if you've been asked to:
+- Implement a specific task
+- Fix a bug
+- Work on an issue someone pointed you to
+
+**Your job:** Execute the work. Read the issue, do the implementation, document what you learned. Don't restructure the plan.
+
+---
+
+Most agents are **Coders** - you're handed a task and asked to implement it.
+You're a **Planner** only when explicitly asked to design or break down work.
+
+Keep your persona in mind as you read the sections below. The guidance differs significantly between roles.
+
+## Quick Start
+
+```bash
+# Create an epic (high-level goal)
+tw new epic --title "User Authentication System"
+
+# Create a story under the epic
+tw new story --parent PROJ-1 --title "Login Page Implementation"
+
+# Create tasks under the story
+tw new task --parent PROJ-1-1 --title "Design login form UI"
+tw new task --parent PROJ-1-1 --title "Implement authentication logic"
+
+# Start working on a task
+tw start PROJ-1-1a
+
+# View full context for a task (includes ancestors and siblings)
+tw view PROJ-1-1a
+
+# Record progress annotations
+tw record PROJ-1-1a lesson -m "OAuth library requires async handlers"
+tw record PROJ-1-1a deviation -m "Changed from JWT to session-based auth"
+tw record PROJ-1-1a commit -m "abc123 - Implement login endpoint"
+
+# Complete or pause work
+tw done PROJ-1-1a
+tw handoff PROJ-1-1a --status "Half done" --completed "- [x] UI form\n- [x] Form validation" --remaining "- [ ] Backend validation\n- [ ] Error handling"
+
+# Handle blockers
+tw blocked PROJ-1-1b --reason "Waiting for API credentials"
+tw unblock PROJ-1-1b --message "Credentials received"
+
+# View project structure
+tw tree
+
+# Capture discovered work
+tw new bug --title "Login broken on empty password" --body "Discovered while working on PROJ-1-1a. In src/auth/validator.py:42..."
+tw new idea --title "Add password strength meter" --body "Discovered while working on PROJ-1-1a..."
+```
+
+## Backlog Commands
+
+Quick capture for discovered work:
+
+```bash
+# Create backlog items (bugs/ideas)
+tw new bug --title "Login broken" --body "Crashes on empty password"
+tw new idea --title "Password strength meter"
+
+# Groom backlog (open editor with all backlog items)
+tw groom
+
+# View backlog in tree
+tw tree  # Shows hierarchy then backlog section
+```
+
+Backlog items:
+- Use top-level IDs (same namespace as epics)
+- Have simplified status: new → done
+- Cannot have parents or children
+- Groom to convert to epic/story/task
+
+## Available Commands
+
+### Issue Management
+- `tw new <epic|story|task|bug|idea> --title "..." [--parent ID] [--body "..."]` - Create new issue
+- `tw view <id>` - View issue with full context (ancestors, siblings, descendants)
+- `tw edit <id> [--title "..."] [--body "..."]` - Edit issue (for humans and planners; coders should use annotations)
+- `tw delete <id>` - Delete issue (fails if it has children)
+- `tw tree` - Show hierarchical tree of all issues
+- `tw digest <id>` - Show summary of parent with all children
+- `tw capture` - Create multiple issues from indented DSL
+
+### Status Transitions
+- `tw start <id>` - Begin work (new/stopped → in_progress)
+- `tw done <id> [--message "..."]` - Complete work (in_progress → done)
+- `tw blocked <id> --reason "..."` - Mark as blocked (in_progress → blocked)
+- `tw unblock <id> [--message "..."]` - Resume from blocked (blocked → in_progress)
+- `tw handoff <id> --status "..." --completed "..." --remaining "..."` - Hand off to next agent (in_progress → stopped)
+
+### Annotations
+- `tw record <id> <lesson|deviation|commit> -m "..."` - Record structured annotation (preferred)
+- `tw comment <id> -m "..."` - Add general comment (avoid; use structured annotations)
+
+### Monitoring
+- `tw watch tree` - Watch full tree with auto-refresh every 60s
+- `tw watch tree <id>` - Watch specific issue and descendants
+- `tw watch tree -n <seconds>` - Custom refresh interval
+
+The watch command monitors your TaskWarrior data directory for changes and automatically
+refreshes the display. Uses file system notifications for instant updates, with periodic
+polling as backup. Press Ctrl+C to exit.
+
+Examples:
+```bash
+tw watch tree              # Watch full tree, refresh every 60s
+tw watch tree TW-30        # Watch specific issue and descendants
+tw watch tree -n 10        # Custom refresh interval
+```
+
+## For Planner Agents
+
+You've been asked to design work and create the issue structure. Follow these principles:
+
+### Put Details Directly in Issues
+
+**Do NOT** create issues that link to external documents:
+```
+❌ Bad: "See docs/plans/auth-design.md for implementation details"
+❌ Bad: "Follow the plan in DESIGN.md"
+```
+
+**DO** put all relevant context directly in the issue body:
+```
+✓ Good: Full implementation steps in the task body
+✓ Good: Acceptance criteria listed in the issue
+✓ Good: Key files and patterns mentioned inline
+```
+
+**Why:** Coder agents use `tw view` to get focused context. External links either get ignored (losing critical info) or flood the agent with unrelated details from a large document.
+
+### Top-Down Elaboration
+
+Each level adds specificity:
+
+- **Epic body:** Vision, goals, success criteria, scope boundaries
+- **Story body:** Concrete requirements, user-facing behavior, constraints
+- **Task body:** Implementation guidance, files to modify, acceptance criteria
+
+### Self-Contained Tasks
+
+A coder agent should be able to execute a task using ONLY:
+- The task's own body and annotations
+- Context from `tw view` (ancestor summaries, sibling awareness)
+
+If a task requires reading other documents to understand what to do, add that information to the task body instead.
+
+### Commands You'll Use
+
+- `tw capture` - Create hierarchy structure from indented DSL
+- `tw new epic|story|task` - Create individual issues
+- `tw edit <id>` - Add/refine body content
+- `tw tree` - Review the structure you've created
+
+## For Coder Agents
+
+You've been given a task to implement. Follow these principles:
+
+### Don't Edit Issues — Annotate Instead
+
+The issue body is the **planner's specification**. Don't modify it.
+
+```
+❌ Bad: `tw edit TW-5-2a --body "updated approach..."`
+❌ Bad: Rewriting the task description
+```
+
+**DO** add annotations to document your work:
+```
+✓ Good: `tw record TW-5-2a lesson -m "OAuth requires async handlers"`
+✓ Good: `tw record TW-5-2a deviation -m "Used Redis instead of in-memory cache"`
+✓ Good: `tw record TW-5-2a commit -m "abc123 - implement login endpoint"`
+```
+
+**Why:** Annotations preserve history. Editing overwrites it. Future agents (and humans) need to see both the original plan AND what actually happened.
+
+### Record Commits
+
+After each git commit, link it to the task:
+
+```bash
+git commit -m "Implement login form validation"
+tw record TW-5-2a commit -m "abc1234 - Implement login form validation"
+```
+
+This creates an audit trail connecting code changes to tasks.
+
+### Use Structured Annotations
+
+Prefer specific annotation types over generic comments:
+
+| Instead of... | Use... |
+|---------------|--------|
+| `tw comment -m "learned that X"` | `tw record lesson -m "X"` |
+| `tw comment -m "changed approach to Y"` | `tw record deviation -m "Y"` |
+| `tw comment -m "committed abc123"` | `tw record commit -m "abc123 - description"` |
+
+**Avoid `tw comment`** unless the information truly doesn't fit any category. Structured annotations are searchable and help future agents learn.
+
+### Discovered Work → Backlog
+
+When you find something unexpected (bug, missing feature, technical debt):
+
+1. **Record a deviation** on your current task explaining what you found
+2. **Capture it as a bug or idea** so it doesn't get lost:
+
+```bash
+tw record TW-5-2a deviation -m "Found: password validation missing for empty strings"
+tw new bug --title "Login accepts empty password" --body "Discovered while working on TW-5-2a. In src/auth/validator.py:87, validate_password() doesn't check for empty strings..."
+```
+
+**Don't** create epics, stories, or tasks. That's the planner's job.
+**Don't** try to fix unrelated issues. Stay focused on your assigned task.
+
+### Standard Workflow
+
+1. `tw view <id>` — Read the full context before starting
+2. `tw start <id>` — Mark as in-progress
+3. Implement the changes
+4. `tw record` — Document lessons, deviations, commits as you go
+5. `git commit` then `tw record commit` — Link each commit
+6. `tw done <id>` — When complete
+
+If pausing before completion: `tw handoff <id> --status "..." --completed "..." --remaining "..."`
+
+### Commands You'll Use
+
+- `tw view <id>` - Get task context (always do this first)
+- `tw start <id>` / `tw done <id>` - Lifecycle
+- `tw record <id> lesson|deviation|commit -m "..."` - Document your work (preferred)
+- `tw comment <id> -m "..."` - Generic comment (avoid if possible)
+- `tw new bug|idea --title "..." --body "..."` - Capture discovered work
+- `tw handoff <id>` - If pausing before completion
+- `tw blocked <id>` / `tw unblock <id>` - If you need human input
+
+### Working Through a Tree of Issues
+
+When assigned a parent issue (epic or story) with multiple children, work through them systematically:
+
+**Default order:** Depth-first by ascending ID
+```
+TW-5-1a → TW-5-1b → TW-5-1c → TW-5-2a → TW-5-2b
+```
+
+**Check for non-standard order:** The parent issue's body may specify a different execution order. Always read the parent context via `tw view` before starting - if it lists children in a specific sequence or uses checkbox lists to imply order, follow that instead.
+
+**For each task:**
+1. `tw start <id>` — **Required.** Marks the task in-progress and creates an audit trail.
+2. Implement the task
+3. `tw done <id>` — **Required.** Marks completion. Don't skip this.
+
+**Important:** Every task must be explicitly started and completed. Don't batch multiple tasks or skip the lifecycle commands - the audit trail is essential for handoffs and debugging.
+
+## Backlog (Bugs & Ideas)
+
+The backlog is a holding area for discovered work that hasn't been groomed into the epic/story/task hierarchy yet.
+
+### Backlog Types
+
+- **bug** - Something broken that needs fixing
+- **idea** - Enhancement, improvement, or new capability
+
+These are **not** part of the hierarchy. They're unstructured captures waiting for a human to review and organize.
+
+### Creating Backlog Items
+
+When capturing discovered work, **include concrete references** so the issue is actionable later:
+
+```bash
+tw new bug --title "Login fails with special characters" \
+  --body "Discovered while working on TW-5-2a.
+
+**Location:** src/auth/validator.py:142 in validate_username()
+
+Found that usernames with @ symbol cause a 500 error. The regex pattern
+on line 142 doesn't account for email-style usernames.
+---
+Stack trace shows SQL injection protection triggering incorrectly.
+See also: src/auth/tests/test_validator.py (no test case for @ symbol)"
+```
+
+**Required context for backlog items:**
+- **Source task** - Which issue you were working on when you found this
+- **File path(s)** - Where in the code the problem/opportunity exists
+- **Line number or function** - Specific location to revisit
+- **What you observed** - The symptom or opportunity
+
+```
+❌ Bad:  "Login is broken sometimes"
+❌ Bad:  "Found a bug in the auth code"
+✓ Good: "Discovered while working on TW-5-2a. In src/auth/validator.py:142,
+         the validate_username() function rejects @ symbols..."
+```
+
+**Why:** Without specific references, someone must re-search the entire codebase to find what you already found. Capture the location now.
+
+### Backlog Lifecycle
+
+Backlog items have a simplified lifecycle:
+- **new** - Captured, waiting for grooming
+- **done** - Resolved (either groomed into tasks or dismissed)
+
+They don't support `start`, `handoff`, or `blocked` - those are for implementation work, not captured ideas.
+
+### Who Creates Backlog Items?
+
+- **Coders:** Capture bugs/ideas discovered during implementation (with full context)
+- **Humans:** Quick capture of thoughts during review or testing
+- **Planners:** Generally don't - they create structured epics/stories/tasks
+
+### Grooming
+
+Humans run `tw groom` to review backlog items and convert them into proper epics/stories/tasks (or dismiss them). This is a human activity, not an agent workflow.
+
+## Status Values
+
+Issues progress through these states:
+- **new** - Just created, not yet started
+- **in_progress** - Actively being worked on
+- **stopped** - Paused via handoff, ready to resume
+- **blocked** - Cannot proceed without external action
+- **done** - Completed
+
+## Annotation Types
+
+Use structured annotations to track important information. **Record annotations frequently** - they teach future agents about the codebase and document your decision-making process.
+
+Preferred annotation types (use these liberally):
+- **lesson** - Key learnings discovered during implementation (e.g., "OAuth library requires async handlers", "Database indexes significantly improved query performance")
+- **deviation** - Changes from original plan or design (e.g., "Changed from JWT to session-based auth due to complexity", "Used Redis instead of in-memory cache for multi-instance support")
+- **commit** - VCS commit references (e.g., "abc123 - Add feature")
+
+Avoid when possible:
+- **comment** - General observations (use as last resort; prefer specific types above)
+
+Special system annotations (added automatically):
+- **work-begin** - Added by `tw start`
+- **work-end** - Added by `tw done`
+- **handoff** - Added by `tw handoff`
+- **blocked** - Added by `tw blocked`
+- **unblocked** - Added by `tw unblock`
+
+## Issue Hierarchy
+
+Three-level structure:
+- **Epic** - High-level goals (e.g., PROJ-1)
+- **Story** - Specific features under an epic (e.g., PROJ-1-1)
+- **Task** - Smallest units of work under a story (e.g., PROJ-1-1a)
+
+Orphans allowed - tasks and stories can exist without parents.
+
+## Body Structure
+
+Issue bodies use a separator (`---`) to distinguish content:
+
+```
+Brief summary goes here (repeatable).
+---
+Detailed implementation notes go here (non-repeatable).
+```
+
+**Repeatable content** (before `---`) is included when viewing related issues.
+**Non-repeatable content** (after `---`) only appears in the issue's own view.
+
+**Important**: When creating or updating issues, the body/message/reason/completed/remaining fields should be substantial, multiline blocks with detailed information. Brief one-liners are discouraged - provide context, rationale, and specifics.
+
+## Best Practices
+
+### For All Agents
+
+1. **`tw view` before starting** - Always read the full context before beginning work
+2. **Annotate frequently** - Don't wait until the end; record lessons and deviations as you go
+3. **Substantial content** - Bodies, annotations, and handoff messages should be detailed, not one-liners
+4. **Reference other issues** - Mention related issue IDs (e.g., TW-5-2a) in your text; they're auto-linked
+
+### For Planners
+
+1. **Self-contained issues** - Put all implementation details in the issue body, not external files
+2. **Top-down detail** - Epics describe vision; stories describe behavior; tasks describe implementation
+3. **Don't over-specify** - Provide enough detail for autonomous execution, but allow flexibility
+4. **Use the hierarchy** - Group related work under epics and stories for context
+
+### For Coders
+
+1. **Don't edit, annotate** - The planner's spec is sacred; document what happened via annotations
+2. **Commit → Record** - After every git commit, run `tw record commit` to link it
+3. **Stay focused** - Work on your assigned task; capture tangents as bugs/ideas
+4. **Include locations** - When capturing bugs/ideas, specify file paths and line numbers
+5. **Handoff cleanly** - Use `tw handoff` with detailed status, not just stopping mid-task
+
+### Annotation Discipline
+
+```
+✓ tw record <id> lesson -m "..."      # What you learned
+✓ tw record <id> deviation -m "..."   # What changed from the plan
+✓ tw record <id> commit -m "..."      # Git commit reference
+✗ tw comment <id> -m "..."            # Avoid unless nothing else fits
+```
+
+### Context Window Management
+
+When approaching your context limit, use `tw handoff` before compaction:
+
+```bash
+tw handoff TW-5-2a \
+  --status "Implementing validation, 60% complete" \
+  --completed "- [x] Form layout\n- [x] Client-side validation\n- [x] Error display" \
+  --remaining "- [ ] Server-side validation\n- [ ] Rate limiting\n- [ ] Integration tests"
+```
+
+The next agent will see this prominently when running `tw view TW-5-2a`.
+
+## Configuration
+
+Configuration is typically already set up by the human user. If needed, environment variables or CLI flags can be used:
+- `TW_PROJECT_NAME` / `PROJECT_NAME` - Project identifier
+- `TW_PROJECT_PREFIX` / `PROJECT_PREFIX` - Issue ID prefix
+
+## Output Modes
+
+All commands support `--json` for machine-readable output. Human-readable is default.
+
+## References
+
+Issues can reference other issues using their IDs (e.g., PROJ-1, PROJ-1-1a). References are automatically extracted and stored. Use `tw view` to see referenced issues.
