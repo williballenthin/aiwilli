@@ -67,7 +67,20 @@ def handle_sync() -> None:
 
 - Cache size increased to 256MB (`PRAGMA cache_size = -262144`)
 
+## Error Handling
+
+- Continue on errors (malformed files, missing data)
+- Report anomalies at end (count + list of problematic files)
+- Use empty string for missing `project_dir`
+- Wrap bulk operations in explicit transactions
+
+## Transaction Boundaries
+
+1. Per-file: `index_messages()` uses `BEGIN IMMEDIATE` + commit (existing)
+2. Bulk FTS sync: wrapped in transaction
+3. Vacuum: runs after all commits complete
+
 ## Exit Codes
 
-- 0: success
-- 1: error (with message to stderr)
+- 0: success (even if some files had issues)
+- 1: fatal error (DB inaccessible, etc.)

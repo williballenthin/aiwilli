@@ -22,7 +22,7 @@
         "./commands/careful-mode.md"
       ],
       "hooks": [
-        "./hooks/index-transcript"
+        "./hooks/hooks.json"
       ]
     }
   ]
