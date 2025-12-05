@@ -20,6 +20,9 @@
       ],
       "commands": [
         "./commands/careful-mode.md"
+      ],
+      "hooks": [
+        "./hooks/index-transcript"
       ]
     }
   ]
