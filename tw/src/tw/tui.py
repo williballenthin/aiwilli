@@ -1,1165 +1,1064 @@
-"""TUI application using Textual."""
+"""Modern TUI for tw issue tracker using Textual best practices."""
 
 import logging
 import os
 import subprocess
-import tempfile
 import threading
-import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any
 
+from rich.segment import Segment
+from rich.style import Style as RichStyle
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, VerticalScroll
+from textual.color import Color, Gradient
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
+from textual.css.styles import RulesMap
 from textual.events import Click
+from textual.geometry import Offset
 from textual.message import Message
+from textual.reactive import reactive, var
+from textual.strip import Strip
+from textual.style import Style
 from textual.timer import Timer
+from textual.visual import RenderOptions, Visual
 from textual.widget import Widget
 from textual.widgets import Footer, Input, Markdown, OptionList, Static
 from textual.widgets.option_list import Option
-from watchdog.observers import Observer as WatchdogObserver
+from watchdog.observers import Observer
+from watchdog.observers.api import BaseObserver
 
 from tw.backend import TaskWarriorBackend
 from tw.config import get_prefix, get_project
-from tw.models import Issue, IssueType
-from tw.render import generate_edit_template, parse_edited_content
+from tw.models import AnnotationType, Issue, IssueStatus, IssueType, is_backlog_type
+from tw.render import (
+    generate_edit_template,
+    parse_edited_content,
+    render_view_body,
+    render_view_links,
+    status_timestamp,
+)
 from tw.service import IssueService
 from tw.watch import WatchHandler, get_taskwarrior_data_dir
 
 logger = logging.getLogger(__name__)
 
+THROBBER_COLORS = [
+    "#881177", "#aa3355", "#cc6666", "#ee9944",
+    "#eedd00", "#99dd55", "#44dd88", "#22ccbb",
+]
+
+
+class ThrobberVisual(Visual):
+    """Animated gradient bar visual for loading indicator."""
+
+    gradient = Gradient.from_colors(*[Color.parse(c) for c in THROBBER_COLORS])
+
+    def render_strips(
+        self, width: int, height: int | None, style: Style, options: RenderOptions
+    ) -> list[Strip]:
+        time = monotonic()
+        gradient = self.gradient
+        background = style.rich_style.bgcolor
+        strips = [
+            Strip(
+                [
+                    Segment(
+                        "━",
+                        RichStyle.from_color(
+                            gradient.get_rich_color((offset / width - time) % 1.0),
+                            background,
+                        ),
+                    )
+                    for offset in range(width)
+                ],
+                width,
+            )
+        ]
+        return strips
+
+    def get_optimal_width(self, rules: RulesMap, container_width: int) -> int:
+        return container_width
+
+    def get_height(self, rules: RulesMap, width: int) -> int:
+        return 1
+
+
+class Throbber(Widget):
+    """Animated loading indicator widget."""
+
+    DEFAULT_CSS = """
+    Throbber {
+        height: 1;
+        width: 1fr;
+        dock: top;
+        layer: float;
+        visibility: hidden;
+        &.-busy {
+            visibility: visible;
+        }
+    }
+    """
+
+    def on_mount(self) -> None:
+        self.auto_refresh = 1 / 15
+
+    def render(self) -> ThrobberVisual:
+        return ThrobberVisual()
+
+
+class Flash(Static):
+    """Transient status message widget with auto-dismiss."""
+
+    DEFAULT_CSS = """
+    Flash {
+        height: 1;
+        width: 1fr;
+        text-align: center;
+        visibility: hidden;
+        layer: float;
+        dock: top;
+        margin-top: 1;
+
+        &.-visible {
+            visibility: visible;
+        }
+        &.-success {
+            background: $success 15%;
+            color: $text;
+        }
+        &.-warning {
+            background: $warning 15%;
+            color: $text;
+        }
+        &.-error {
+            background: $error 15%;
+            color: $text;
+        }
+    }
+    """
+
+    flash_timer: Timer | None = None
+
+    def flash(
+        self,
+        message: str,
+        style: str = "success",
+        duration: float = 2.5,
+    ) -> None:
+        if self.flash_timer is not None:
+            self.flash_timer.stop()
+        self.remove_class("-visible", "-success", "-warning", "-error")
+        self.update(message)
+        self.add_class("-visible", f"-{style}")
+
+        def hide() -> None:
+            self.remove_class("-visible")
+
+        self.flash_timer = self.set_timer(duration, hide)
+
+
+class Cursor(Static):
+    """Animated cursor indicator that follows the selected issue."""
+
+    DEFAULT_CSS = """
+    Cursor {
+        width: 2;
+        height: 1;
+        color: $primary;
+        &.-blink {
+            color: $primary 50%;
+        }
+    }
+    """
+
+    follow_widget: var[Widget | None] = var(None)
+    blink: var[bool] = var(True)
+    _blink_timer: Timer | None = None
+    _follow_timer: Timer | None = None
+
+    def on_mount(self) -> None:
+        self.display = False
+        self._blink_timer = self.set_interval(0.5, self._toggle_blink, pause=True)
+        self._follow_timer = self.set_interval(0.1, self._update_follow)
+
+    def _toggle_blink(self) -> None:
+        self.blink = not self.blink
+        self.set_class(self.blink, "-blink")
+
+    def _update_follow(self) -> None:
+        if self.follow_widget and self.follow_widget.is_attached:
+            self.styles.height = max(1, self.follow_widget.outer_size.height)
+            follow_y = self.follow_widget.virtual_region.y
+            self.offset = Offset(0, follow_y)
+
+    def follow(self, widget: Widget | None) -> None:
+        self.follow_widget = widget
+        self.blink = False
+        self.set_class(False, "-blink")
+        if widget is None:
+            self.display = False
+            if self._blink_timer:
+                self._blink_timer.pause()
+        else:
+            self.display = True
+            if self._blink_timer:
+                self._blink_timer.resume()
+            self._update_follow()
+
+    def render(self) -> str:
+        return "▐"
+
 
 @dataclass
-class TreeNode:
-    """A node in the tree representing an issue."""
+class IssueNode:
+    """Represents an issue in the tree with its display properties."""
 
     issue: Issue
     depth: int
 
-    @property
-    def tw_id(self) -> str:
-        """Get the issue ID."""
-        return self.issue.tw_id
 
-    def render_line(self, is_selected: bool) -> str:
-        """Render this node as a line for display.
-
-        Args:
-            is_selected: Whether this node is currently selected.
-
-        Returns:
-            Styled line of text for display.
-        """
-        indent = "  " * self.depth
-        issue = self.issue
-
-        if issue.tw_status.value == "done":
-            status_str = f"[dim]({issue.tw_id}, done)[/dim]"
-            title_part = f"[dim]{issue.title}[/dim]"
-            type_part = f"[dim]{issue.tw_type.value}:[/dim]"
-        elif issue.tw_status.value == "in_progress":
-            status_str = (
-                f"[dim]([/dim][dim]{issue.tw_id}[/dim]"
-                f"[dim], [/dim][yellow]in_progress[/yellow]"
-                f"[dim])[/dim]"
-            )
-            title_part = f"{issue.title}"
-            type_part = f"[dim]{issue.tw_type.value}:[/dim]"
-        elif issue.tw_status.value in ("blocked", "stopped"):
-            status_str = (
-                f"[dim]([/dim][dim]{issue.tw_id}[/dim]"
-                f"[dim], [/dim][red]{issue.tw_status.value}[/red]"
-                f"[dim])[/dim]"
-            )
-            title_part = f"{issue.title}"
-            type_part = f"[dim]{issue.tw_type.value}:[/dim]"
-        else:
-            status_str = f"[dim]({issue.tw_id})[/dim]"
-            title_part = f"{issue.title}"
-            type_part = f"[dim]{issue.tw_type.value}:[/dim]"
-
-        line = f"{indent}{type_part} {title_part} {status_str}"
-
-        if is_selected:
-            line = f"[reverse]{line}[/reverse]"
-
-        return line
-
-
-class TreePane(Container, can_focus=True):
-    """Widget for displaying issue tree with navigation."""
+class IssueRow(Static):
+    """Single row in the issue tree."""
 
     DEFAULT_CSS = """
-    TreePane {
-        height: 60%;
-        border: solid $primary;
+    IssueRow {
+        width: 1fr;
+        height: 1;
+        padding: 0 1;
+        &:hover {
+            background: $surface;
+        }
+        &.-selected {
+            background: $primary 20%;
+        }
+        &.-done {
+            color: $text-muted;
+        }
     }
+    """
 
-    TreePane VerticalScroll {
+    def __init__(self, node: IssueNode, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.node = node
+
+    def render(self) -> Content:
+        issue = self.node.issue
+        depth = self.node.depth
+        indent = "  " * depth
+
+        type_style = "dim"
+        title_style = ""
+        status_style = ""
+
+        if issue.tw_status == IssueStatus.DONE:
+            title_style = "dim"
+            status_style = "dim"
+        elif issue.tw_status == IssueStatus.IN_PROGRESS:
+            status_style = "yellow"
+        elif issue.tw_status in (IssueStatus.BLOCKED, IssueStatus.STOPPED):
+            status_style = "red"
+
+        ts = status_timestamp(issue)
+        ts_part = f" ({ts})" if ts and issue.tw_status != IssueStatus.NEW else ""
+
+        if issue.tw_status == IssueStatus.NEW:
+            status_part = ""
+        else:
+            status_part = f", {issue.tw_status.value}{ts_part}"
+
+        parts = [
+            (f"{indent}", ""),
+            (f"{issue.tw_type.value}", type_style),
+            (": ", "dim"),
+            (issue.title, title_style),
+            (" (", "dim"),
+            (issue.tw_id, "cyan"),
+            (status_part, status_style),
+            (")", "dim"),
+        ]
+
+        return Content.assemble(*[(text, style) for text, style in parts if text])
+
+
+class IssueTree(VerticalScroll):
+    """Scrollable tree view of issues with keyboard navigation."""
+
+    DEFAULT_CSS = """
+    IssueTree {
+        height: 1fr;
+        border: solid $primary;
+        border-title-color: $primary;
         scrollbar-gutter: stable;
     }
-
-    TreePane #tree_content {
-        width: 100%;
-    }
     """
 
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+    ]
+
+    highlighted: reactive[int | None] = reactive(None)
+    nodes: var[list[IssueNode]] = var(list)
+
+    @dataclass
     class SelectionChanged(Message):
-        """Posted when selection changes."""
+        """Posted when the selected issue changes."""
 
-        def __init__(self, selected_id: str | None) -> None:
-            super().__init__()
-            self.selected_id = selected_id
+        tree: "IssueTree"
+        issue: Issue | None
 
-    def __init__(self, service: IssueService) -> None:
-        """Initialize TreePane.
-
-        Args:
-            service: IssueService instance for fetching data.
-        """
-        super().__init__()
-        self.service = service
-        self.nodes: list[TreeNode] = []
-        self.selected_index: int = 0
-        self._load_tree()
+        @property
+        def control(self) -> "IssueTree":
+            return self.tree
 
     def compose(self) -> ComposeResult:
-        """Compose the scrollable tree content."""
-        with VerticalScroll():
-            yield Static("", id="tree_content")
+        with Horizontal(id="tree-container"):
+            yield Cursor(id="tree-cursor")
+            yield Vertical(id="tree-rows")
 
     def on_mount(self) -> None:
-        """Update content after mount."""
-        self._update_content()
+        self.border_title = "Issues"
 
-    def _load_tree(self) -> None:
-        """Load the issue tree from service."""
-        try:
-            hierarchy, backlog = self.service.get_issue_tree_with_backlog()
-            self.nodes = self._build_nodes(hierarchy) + self._build_backlog_nodes(backlog)
-            if self.nodes:
-                self.selected_index = 0
-            else:
-                self.selected_index = -1
-        except Exception as e:
-            logger.error(f"Failed to load tree: {e}")
-            self.nodes = []
-            self.selected_index = -1
+    def watch_nodes(self, nodes: list[IssueNode]) -> None:
+        container = self.query_one("#tree-rows", Vertical)
+        container.remove_children()
+        for i, node in enumerate(nodes):
+            row = IssueRow(node, id=f"row-{i}")
+            container.mount(row)
+        if self.highlighted is not None and self.highlighted >= len(nodes):
+            self.highlighted = len(nodes) - 1 if nodes else None
+        self._update_selection_classes()
+        self._sync_cursor()
 
-    def _build_nodes(self, issues: list[Issue]) -> list[TreeNode]:
-        """Build TreeNode list from hierarchy issues.
+    def watch_highlighted(self, old: int | None, new: int | None) -> None:
+        self._update_selection_classes()
+        self._sync_cursor()
+        issue = self.nodes[new].issue if new is not None and new < len(self.nodes) else None
+        self.post_message(self.SelectionChanged(self, issue))
 
-        Args:
-            issues: Flat list of issues with parent relationships.
+    def _update_selection_classes(self) -> None:
+        for i, row in enumerate(self.query(IssueRow)):
+            row.set_class(i == self.highlighted, "-selected")
+            row.set_class(row.node.issue.tw_status == IssueStatus.DONE, "-done")
 
-        Returns:
-            List of TreeNode objects with proper depth.
-        """
-        nodes = []
-        issue_map = {issue.tw_id: issue for issue in issues}
-
-        def get_depth(issue: Issue) -> int:
-            """Compute the depth of an issue in the tree."""
-            depth = 0
-            current = issue
-            while current.tw_parent:
-                depth += 1
-                parent_issue = issue_map.get(current.tw_parent)
-                if not parent_issue:
-                    break
-                current = parent_issue
-            return depth
-
-        for issue in issues:
-            depth = get_depth(issue)
-            nodes.append(TreeNode(issue=issue, depth=depth))
-
-        return nodes
-
-    def _build_backlog_nodes(self, backlog: list[Issue]) -> list[TreeNode]:
-        """Build TreeNode list from backlog issues.
-
-        Args:
-            backlog: List of backlog issues (bugs/ideas).
-
-        Returns:
-            List of TreeNode objects for backlog (all at depth 0).
-        """
-        nodes = []
-        for issue in backlog:
-            nodes.append(TreeNode(issue=issue, depth=0))
-        return nodes
-
-    def _render_tree(self) -> str:
-        """Render the tree with selection highlight."""
-        if not self.nodes:
-            return "[dim]No issues loaded[/dim]"
-
-        lines = []
-        for i, node in enumerate(self.nodes):
-            is_selected = i == self.selected_index
-            lines.append(node.render_line(is_selected))
-
-        return "\n".join(lines)
-
-    def _update_content(self) -> None:
-        """Update the static content widget."""
-        try:
-            static = self.query_one("#tree_content", Static)
-            static.update(self._render_tree())
-        except Exception:
-            pass
-
-    def action_move_down(self) -> None:
-        """Move selection down."""
-        if self.nodes and self.selected_index < len(self.nodes) - 1:
-            self.selected_index += 1
-        if self.nodes:
-            self._emit_selection_changed()
-            self._update_content()
-            self._scroll_to_selection()
-
-    def action_move_up(self) -> None:
-        """Move selection up."""
-        if self.nodes and self.selected_index > 0:
-            self.selected_index -= 1
-            self._emit_selection_changed()
-            self._update_content()
-            self._scroll_to_selection()
-
-    def on_click(self, event: Click) -> None:
-        """Handle mouse click to select a row."""
-        if not self.nodes:
-            return
-        try:
-            scroll = self.query_one(VerticalScroll)
-            # Convert screen coordinates to position within scroll viewport
-            scroll_y_on_screen = scroll.region.y
-            click_in_scroll = event.screen_y - scroll_y_on_screen
-            if click_in_scroll < 0:
-                return
-            click_y = click_in_scroll + int(scroll.scroll_y)
-            if 0 <= click_y < len(self.nodes):
-                self.selected_index = click_y
-                self._emit_selection_changed()
-                self._update_content()
-        except Exception:
-            pass
-
-    def _scroll_to_selection(self) -> None:
-        """Scroll to keep the selected line visible."""
-        if self.selected_index < 0 or not self.nodes:
-            return
-        try:
-            scroll = self.query_one(VerticalScroll)
-            scroll.scroll_to(y=self.selected_index, animate=False)
-        except Exception:
-            pass
-
-    def _emit_selection_changed(self) -> None:
-        """Emit SelectionChanged event for current selection."""
-        if self.nodes and 0 <= self.selected_index < len(self.nodes):
-            selected_id = self.nodes[self.selected_index].tw_id
-            self.post_message(self.SelectionChanged(selected_id))
+    def _sync_cursor(self) -> None:
+        cursor = self.query_one("#tree-cursor", Cursor)
+        if self.highlighted is not None and self.highlighted < len(self.nodes):
+            try:
+                row = self.query_one(f"#row-{self.highlighted}", IssueRow)
+                cursor.follow(row)
+                self.scroll_to_widget(row, animate=False)
+            except Exception:
+                cursor.follow(None)
         else:
-            self.post_message(self.SelectionChanged(None))
+            cursor.follow(None)
 
-    def get_selected_issue_id(self) -> str | None:
-        """Get the currently selected issue ID.
+    def action_cursor_down(self) -> None:
+        if not self.nodes:
+            return
+        if self.highlighted is None:
+            self.highlighted = 0
+        elif self.highlighted < len(self.nodes) - 1:
+            self.highlighted += 1
 
-        Returns:
-            The selected issue's tw_id or None if nothing selected.
-        """
-        if self.nodes and 0 <= self.selected_index < len(self.nodes):
-            return self.nodes[self.selected_index].tw_id
+    def action_cursor_up(self) -> None:
+        if not self.nodes:
+            return
+        if self.highlighted is None:
+            self.highlighted = len(self.nodes) - 1
+        elif self.highlighted > 0:
+            self.highlighted -= 1
+
+    @on(Click)
+    def on_click(self, event: Click) -> None:
+        if event.widget is None:
+            return
+        for ancestor in event.widget.ancestors_with_self:
+            if isinstance(ancestor, IssueRow):
+                try:
+                    idx = int(ancestor.id.split("-")[1]) if ancestor.id else -1
+                    if 0 <= idx < len(self.nodes):
+                        self.highlighted = idx
+                except (ValueError, IndexError):
+                    pass
+                break
+
+    def get_selected_issue(self) -> Issue | None:
+        if self.highlighted is not None and self.highlighted < len(self.nodes):
+            return self.nodes[self.highlighted].issue
         return None
 
-    def refresh_tree(self) -> None:
-        """Refresh the tree data and content."""
-        selected_id = self.get_selected_issue_id()
-        self._load_tree()
-        if selected_id:
-            for i, node in enumerate(self.nodes):
-                if node.tw_id == selected_id:
-                    self.selected_index = i
-                    break
-            else:
-                if self.nodes:
-                    self.selected_index = 0
-        self._emit_selection_changed()
-        self._update_content()
+    def select_issue_by_id(self, tw_id: str) -> bool:
+        for i, node in enumerate(self.nodes):
+            if node.issue.tw_id == tw_id:
+                self.highlighted = i
+                return True
+        return False
 
 
-class DetailPane(Container):
-    """Widget for displaying issue detail view with full context."""
+class IssueDetail(VerticalScroll):
+    """Detail pane showing selected issue context."""
 
     DEFAULT_CSS = """
-    DetailPane {
-        height: 40%;
+    IssueDetail {
+        height: 1fr;
         border: solid $accent;
-        overflow-y: auto;
-    }
-
-    DetailPane Markdown {
+        border-title-color: $accent;
         padding: 0 1;
-    }
 
-    DetailPane #detail_links {
-        padding: 0 1;
+        #detail-body {
+            height: auto;
+        }
+        #detail-links {
+            height: auto;
+            margin-top: 1;
+        }
     }
     """
 
-    def __init__(self, service: IssueService | None) -> None:
-        """Initialize DetailPane.
+    IssueContext = tuple[
+        Issue, list[Issue], list[Issue], list[Issue], list[Issue], list[Issue]
+    ]
 
-        Args:
-            service: IssueService instance for fetching data.
-        """
-        super().__init__()
-        self.service = service
-        self.selected_id: str | None = None
-        self._content: str = ""
+    issue: var[Issue | None] = var(None)
+    context: var[IssueContext | None] = var(None)
 
     def compose(self) -> ComposeResult:
-        """Compose the Markdown and Static widgets."""
-        yield Markdown("", id="detail_markdown")
-        yield Static("", id="detail_links")
+        yield Markdown(id="detail-body")
+        yield Static(id="detail-links")
 
-    def update_detail(self, issue_id: str | None) -> None:
-        """Update detail pane with issue view data.
+    def on_mount(self) -> None:
+        self.border_title = "Details"
 
-        Args:
-            issue_id: The ID of the issue to display, or None to clear.
-        """
-        self.selected_id = issue_id
-        if not issue_id or not self.service:
-            self._content = ""
-            self._update_content("", "")
-            return
+    def watch_issue(self, issue: Issue | None) -> None:
+        body_widget = self.query_one("#detail-body", Markdown)
+        if issue is None:
+            body_widget.update("")
+        else:
+            body_md = render_view_body(issue)
+            body_widget.update(body_md)
 
-        try:
-            from tw.render import render_view_body, render_view_links
-
-            issue, ancestors, siblings, descendants, referenced, referencing = (
-                self.service.get_issue_with_context(issue_id)
-            )
-            body_content = render_view_body(issue)
-            links_content = render_view_links(
+    def watch_context(self, context: IssueContext | None) -> None:
+        links_widget = self.query_one("#detail-links", Static)
+        if context is None:
+            links_widget.update("")
+        else:
+            _, ancestors, siblings, descendants, referenced, referencing = context
+            links_markup = render_view_links(
                 ancestors=ancestors,
                 siblings=siblings,
                 descendants=descendants,
                 referenced=referenced,
                 referencing=referencing,
             )
-            self._content = body_content + links_content
-        except Exception as e:
-            logger.error(f"Failed to load detail for {issue_id}: {e}")
-            self._content = f"Error: {e}"
-            self._update_content(f"Error: {e}", "")
-            return
-
-        self._update_content(body_content, links_content)
-
-    def _update_content(self, body: str, links: str) -> None:
-        """Update the Markdown and Static widget contents."""
-        try:
-            md = self.query_one("#detail_markdown", Markdown)
-            md.update(body or "*No issue selected*")
-        except Exception:
-            pass
-        try:
-            static = self.query_one("#detail_links", Static)
-            static.update(links)
-        except Exception:
-            pass
+            links_widget.update(links_markup)
 
 
-class InputDialog(Static):
-    """Modal input dialog for creating new issues."""
+class InputDialog(Widget):
+    """Bottom-docked input dialog for titles and comments."""
 
     DEFAULT_CSS = """
     InputDialog {
-        width: 100%;
-        height: auto;
         dock: bottom;
-    }
-
-    InputDialog Input {
+        layer: float;
+        overlay: screen;
+        height: auto;
         width: 100%;
-        border: none;
-        background: $panel;
+        background: $surface;
+        border-top: solid $primary;
+        padding: 1;
+        display: none;
+
+        &.-visible {
+            display: block;
+        }
+
+        #input-label {
+            margin-bottom: 1;
+        }
+        #input-field {
+            width: 100%;
+        }
     }
     """
 
-    def __init__(self, title: str, callback: Any) -> None:
-        """Initialize InputDialog.
+    BINDINGS = [
+        Binding("escape", "dismiss", "Cancel", show=False),
+    ]
 
-        Args:
-            title: Prompt title to display.
-            callback: Function to call with input value on submit.
-        """
-        super().__init__()
-        self.title_text = title
-        self.callback = callback
-        self.input_widget: Input | None = None
+    is_visible: var[bool] = var(False)
+    prompt: var[str] = var("")
+    callback: var[Callable[[str], None] | None] = var(None)
+
+    @dataclass
+    class Submitted(Message):
+        """Posted when input is submitted."""
+
+        dialog: "InputDialog"
+        value: str
+
+        @property
+        def control(self) -> "InputDialog":
+            return self.dialog
 
     def compose(self) -> ComposeResult:
-        """Compose the input widget."""
-        self.input_widget = Input(id="issue_input", placeholder=self.title_text)
-        yield self.input_widget
+        yield Static("", id="input-label")
+        yield Input(id="input-field")
 
-    def on_mount(self) -> None:
-        """Focus the input widget when mounted."""
-        if self.input_widget:
-            self.input_widget.focus()
+    def watch_is_visible(self, is_visible: bool) -> None:
+        self.set_class(is_visible, "-visible")
+        if is_visible:
+            inp = self.query_one("#input-field", Input)
+            inp.value = ""
+            inp.focus()
 
+    def watch_prompt(self, prompt: str) -> None:
+        self.query_one("#input-label", Static).update(prompt)
+
+    def show(self, prompt: str, callback: Callable[[str], None] | None = None) -> None:
+        self.prompt = prompt
+        self.callback = callback
+        self.is_visible = True
+
+    def action_dismiss(self) -> None:
+        self.is_visible = False
+
+    @on(Input.Submitted)
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle input submission."""
         event.stop()
-        if self.input_widget:
-            self.callback(self.input_widget.value)
-        self._remove_dialog()
-
-    def action_close_dialog(self) -> None:
-        """Close the dialog on escape."""
-        self._remove_dialog()
-
-    def _remove_dialog(self) -> None:
-        """Remove the dialog from the app."""
-        try:
-            self.remove()
-        except Exception:
-            pass
+        value = event.value.strip()
+        if value:
+            self.post_message(self.Submitted(self, value))
+            if self.callback is not None:
+                self.callback(value)
+        self.is_visible = False
 
 
-class PickerDialog(Static):
-    """Modal picker dialog for selecting from a list with filtering."""
+class PickerDialog(Widget):
+    """Bottom-docked picker dialog with filter and option list."""
 
     DEFAULT_CSS = """
     PickerDialog {
-        width: 100%;
-        height: 20;
-        border: heavy $primary;
-        background: $panel;
-        padding: 0 2;
         dock: bottom;
-    }
-
-    PickerDialog .picker-title {
+        layer: float;
+        overlay: screen;
+        height: 20;
         width: 100%;
-        text-align: center;
-        margin-bottom: 0;
-        text-style: bold;
-    }
+        background: $surface;
+        border: heavy $primary;
+        padding: 1;
+        display: none;
 
-    PickerDialog Input {
-        width: 100%;
-        margin-bottom: 0;
-    }
+        &.-visible {
+            display: block;
+        }
 
-    PickerDialog OptionList {
-        width: 100%;
-        height: 1fr;
+        #picker-title {
+            text-align: center;
+            text-style: bold;
+            margin-bottom: 1;
+        }
+        #picker-filter {
+            width: 100%;
+            margin-bottom: 1;
+        }
+        #picker-options {
+            height: 1fr;
+        }
     }
     """
 
-    def __init__(self, title: str, options: list[tuple[str, str]], callback: Any) -> None:
-        """Initialize PickerDialog.
+    BINDINGS = [
+        Binding("escape", "dismiss", "Cancel", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+    ]
 
-        Args:
-            title: Dialog title to display.
-            options: List of (id, display_text) tuples for options.
-            callback: Function to call with selected id on submit.
-        """
-        super().__init__()
-        self.title_text = title
-        self.options = options
-        self.filtered_options = options[:]
-        self.callback = callback
-        self.input_widget: Input | None = None
-        self.option_list: OptionList | None = None
+    is_visible: var[bool] = var(False)
+    title: var[str] = var("")
+    options: var[list[tuple[str, str]]] = var(list)
+    callback: var[Callable[[str], None] | None] = var(None)
+    _all_options: list[tuple[str, str]] = []
 
-    def render(self) -> str:
-        """Render the dialog title."""
-        return f"[bold]{self.title_text}[/bold]"
+    @dataclass
+    class Selected(Message):
+        """Posted when an option is selected."""
+
+        dialog: "PickerDialog"
+        option_id: str
+        option_text: str
+
+        @property
+        def control(self) -> "PickerDialog":
+            return self.dialog
 
     def compose(self) -> ComposeResult:
-        """Compose the input and option list widgets."""
-        self.input_widget = Input(id="picker_input", placeholder="Type to filter...")
-        yield self.input_widget
-        self.option_list = OptionList()
-        yield self.option_list
+        yield Static("", id="picker-title")
+        yield Input(id="picker-filter", placeholder="Filter...")
+        yield OptionList(id="picker-options")
 
-    def on_mount(self) -> None:
-        """Focus the input widget when mounted and populate options."""
-        if self.input_widget:
-            self.input_widget.focus()
-        self._update_option_list()
+    def watch_is_visible(self, is_visible: bool) -> None:
+        self.set_class(is_visible, "-visible")
+        if is_visible:
+            inp = self.query_one("#picker-filter", Input)
+            inp.value = ""
+            inp.focus()
+            self._update_options("")
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Filter options as user types."""
+    def watch_title(self, title: str) -> None:
+        self.query_one("#picker-title", Static).update(title)
+
+    def watch_options(self, options: list[tuple[str, str]]) -> None:
+        self._all_options = options
+        self._update_options("")
+
+    def _update_options(self, filter_text: str) -> None:
+        opt_list = self.query_one("#picker-options", OptionList)
+        opt_list.clear_options()
+        filter_lower = filter_text.lower()
+        for opt_id, opt_text in self._all_options:
+            if filter_lower in opt_id.lower() or filter_lower in opt_text.lower():
+                opt_list.add_option(Option(f"{opt_id}: {opt_text}", id=opt_id))
+
+    def show(
+        self,
+        title: str,
+        options: list[tuple[str, str]],
+        callback: Callable[[str], None] | None = None,
+    ) -> None:
+        self.title = title
+        self.options = options
+        self.callback = callback
+        self.is_visible = True
+
+    def action_dismiss(self) -> None:
+        self.is_visible = False
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#picker-options", OptionList).action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#picker-options", OptionList).action_cursor_down()
+
+    @on(Input.Changed, "#picker-filter")
+    def on_filter_changed(self, event: Input.Changed) -> None:
         event.stop()
-        self._filter_and_update(event.value)
+        self._update_options(event.value)
 
-    def _filter_and_update(self, query: str) -> None:
-        """Filter options based on query and update list.
-
-        Args:
-            query: The filter query string.
-        """
-        query_lower = query.lower()
-        self.filtered_options = [
-            (opt_id, display)
-            for opt_id, display in self.options
-            if query_lower in opt_id.lower() or query_lower in display.lower()
-        ]
-        self._update_option_list()
-
-    def _update_option_list(self) -> None:
-        """Update the option list with filtered options."""
-        if not self.option_list:
-            return
-
-        self.option_list.clear_options()
-        for opt_id, display in self.filtered_options:
-            self.option_list.add_option(Option(display, opt_id))
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Handle option selection."""
+    @on(Input.Submitted, "#picker-filter")
+    def on_filter_submitted(self, event: Input.Submitted) -> None:
         event.stop()
-        self.callback(event.option.id)
-        self._remove_dialog()
+        opt_list = self.query_one("#picker-options", OptionList)
+        if opt_list.highlighted is not None:
+            opt_list.action_select()
 
-    def action_close_picker(self) -> None:
-        """Close the picker on escape."""
-        self._remove_dialog()
+    @on(OptionList.OptionSelected)
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            opt_text = ""
+            for oid, otext in self._all_options:
+                if oid == event.option_id:
+                    opt_text = otext
+                    break
+            self.post_message(self.Selected(self, event.option_id, opt_text))
+            if self.callback is not None:
+                self.callback(event.option_id)
+        self.is_visible = False
 
-    def _remove_dialog(self) -> None:
-        """Remove the dialog from the app."""
-        try:
-            self.remove()
-        except Exception:
-            pass
 
+class TwApp(App[None]):
+    """Modern TUI for tw issue tracker."""
 
-class TwTuiApp(App[None]):
-    """Main TUI application for tw issue tracker."""
+    CSS = """
+    TwApp {
+        layers: base float;
+    }
+
+    #main-container {
+        height: 1fr;
+        layer: base;
+    }
+
+    #tree-pane {
+        height: 60%;
+    }
+
+    #detail-pane {
+        height: 40%;
+    }
+    """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("j", "tree_move_down", "Down", show=False),
-        Binding("k", "tree_move_up", "Up", show=False),
-        Binding("down", "tree_move_down", "Down", show=False),
-        Binding("up", "tree_move_up", "Up", show=False),
         Binding("s", "start", "Start"),
         Binding("d", "done", "Done"),
         Binding("e", "edit", "Edit"),
-        Binding("n", "new_child", "New"),
-        Binding("N", "new_epic", "Epic"),
-        Binding("b", "new_bug", "Bug"),
-        Binding("i", "new_idea", "Idea"),
-        Binding("p", "promote_issue", "Promote"),
+        Binding("n", "new_child", "New Child"),
+        Binding("shift+n", "new_epic", "New Epic"),
+        Binding("b", "new_bug", "New Bug"),
+        Binding("i", "new_idea", "New Idea"),
+        Binding("p", "promote", "Promote"),
         Binding("c", "comment", "Comment"),
         Binding("g", "groom", "Groom"),
         Binding("escape", "close_dialogs", "Close", show=False),
     ]
 
-    CSS = """
-    Screen {
-        layout: vertical;
-    }
-
-    #main_container {
-        height: 1fr;
-        overflow: hidden;
-    }
-    """
+    busy_count: reactive[int] = reactive(0)
+    _service: IssueService
+    _observer: BaseObserver | None = None
+    _watch_handler: WatchHandler | None = None
+    _refresh_event: threading.Event | None = None
+    _last_action_time: float = 0.0
+    _refresh_timer: Timer | None = None
 
     def __init__(self) -> None:
-        """Initialize the app."""
         super().__init__()
         backend = TaskWarriorBackend()
-        self.service: IssueService | None = None
-        try:
-            self.service = IssueService(
-                backend=backend,
-                project=get_project(),
-                prefix=get_prefix(),
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize service: {e}")
-        self._input_dialog: InputDialog | None = None
-        self._picker_dialog: PickerDialog | None = None
-        self._file_watch_event = threading.Event()
-        self._observer: WatchdogObserver | None = None  # type: ignore[valid-type]
-        self._watch_handler: WatchHandler | None = None
-        self.refresh_pending = False
-        self.last_keypress_time = time.time()
-        self._refresh_timer: Timer | None = None
+        self._service = IssueService(backend, get_project(), get_prefix())
 
     def compose(self) -> ComposeResult:
-        """Compose the layout with TreePane, DetailPane, and Footer."""
-        with Container(id="main_container"):
-            if self.service:
-                yield TreePane(service=self.service)
-            else:
-                yield Static("[red]Failed to initialize service[/red]")
-            if self.service:
-                yield DetailPane(service=self.service)
-            else:
-                yield DetailPane(service=None)
+        yield Throbber(id="throbber")
+        yield Flash(id="flash")
+        with Vertical(id="main-container"):
+            yield IssueTree(id="tree-pane")
+            yield IssueDetail(id="detail-pane")
+        yield InputDialog(id="input-dialog")
+        yield PickerDialog(id="picker-dialog")
         yield Footer()
 
     def on_mount(self) -> None:
-        """Called when the app is mounted; initialize detail pane and file watching."""
-        try:
-            tree_pane = self.query_one(TreePane)
-            detail_pane = self.query_one(DetailPane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if selected_id:
-                detail_pane.update_detail(selected_id)
-        except Exception:
-            pass
-
+        self._load_tree()
         self._setup_file_watching()
-        self._start_refresh_timer()
+        self._refresh_timer = self.set_interval(0.5, self._check_refresh)
 
-    def _setup_file_watching(self) -> None:
-        """Set up file watching on TaskWarrior data directory."""
-        try:
-            data_dir = get_taskwarrior_data_dir()
-            self._watch_handler = WatchHandler(self._file_watch_event)
-            self._observer = WatchdogObserver()
-            self._observer.schedule(self._watch_handler, str(data_dir), recursive=False)
-            self._observer.start()
-            logger.debug(f"File watching started on {data_dir}")
-        except Exception as e:
-            logger.warning(f"File watching setup failed: {e}")
-
-    def _start_refresh_timer(self) -> None:
-        """Start the periodic refresh timer (every 500ms)."""
-        self._refresh_timer = self.set_timer(0.5, self._check_and_refresh, pause=False)
-
-    def _check_and_refresh(self) -> None:
-        """Check if refresh should happen based on file changes and idle time."""
-        now = time.time()
-        idle_time = now - self.last_keypress_time
-
-        if self._file_watch_event.is_set() and idle_time > 2.0:
-            self.refresh_pending = True
-            self._file_watch_event.clear()
-
-        if self.refresh_pending and idle_time > 2.0:
-            self._do_refresh()
-            self.refresh_pending = False
-
-    def _do_refresh(self) -> None:
-        """Perform the actual tree refresh while preserving selection."""
-        self._refresh_tree()
-
-    def _refresh_tree(self) -> None:
-        """Refresh the tree pane and detail pane."""
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            tree_pane._load_tree()
-            if selected_id:
-                for i, node in enumerate(tree_pane.nodes):
-                    if node.tw_id == selected_id:
-                        tree_pane.selected_index = i
-                        break
-                else:
-                    if tree_pane.nodes:
-                        tree_pane.selected_index = 0
-            tree_pane._emit_selection_changed()
-            tree_pane._update_content()
-            tree_pane._scroll_to_selection()
-        except Exception as e:
-            logger.error(f"Failed to refresh tree: {e}")
-
-    def _on_keypress(self) -> None:
-        """Update last keypress time to detect idle."""
-        self.last_keypress_time = time.time()
-
-    def action_tree_move_down(self) -> None:
-        """Move tree selection down."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            tree_pane.action_move_down()
-        except Exception:
-            pass
-
-    def action_tree_move_up(self) -> None:
-        """Move tree selection up."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            tree_pane.action_move_up()
-        except Exception:
-            pass
-
-    def on_tree_pane_selection_changed(self, message: TreePane.SelectionChanged) -> None:
-        """Handle selection change from tree pane."""
-        try:
-            detail_pane = self.query_one(DetailPane)
-            detail_pane.update_detail(message.selected_id)
-        except Exception:
-            pass
-
-    def action_start(self) -> None:
-        """Start the selected issue."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if not selected_id:
-                self.show_status_message("No issue selected", is_error=True)
-                return
-
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
-
-            try:
-                self.service.start_issue(selected_id)
-                self.show_status_message(f"Started {selected_id}")
-                self._refresh_tree()
-            except Exception as e:
-                self.show_status_message(f"Failed to start: {e}", is_error=True)
-        except Exception:
-            pass
-
-    def action_done(self) -> None:
-        """Mark the selected issue as done."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if not selected_id:
-                self.show_status_message("No issue selected", is_error=True)
-                return
-
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
-
-            try:
-                self.service.done_issue(selected_id)
-                self.show_status_message(f"Marked {selected_id} as done")
-                self._refresh_tree()
-            except Exception as e:
-                self.show_status_message(f"Failed to mark done: {e}", is_error=True)
-        except Exception:
-            pass
-
-    def action_edit(self) -> None:
-        """Edit the selected issue in external editor."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if not selected_id:
-                self.show_status_message("No issue selected", is_error=True)
-                return
-
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
-
-            try:
-                issue = self.service.get_issue(selected_id)
-                editor = os.environ.get("EDITOR", "vi")
-                template = generate_edit_template(issue.title, issue.tw_body)
-
-                with tempfile.NamedTemporaryFile(mode="w+", suffix=".md", delete=False) as tmp:
-                    tmp.write(template)
-                    tmp_path = tmp.name
-
-                try:
-                    with self.suspend():
-                        subprocess.run([editor, tmp_path], check=True)
-
-                    with open(tmp_path) as f:
-                        content = f.read()
-
-                    new_title, new_body = parse_edited_content(content)
-                    self.service.update_issue(selected_id, title=new_title, body=new_body)
-                    self.show_status_message(f"Updated {selected_id}")
-                    self._refresh_tree()
-                finally:
-                    os.unlink(tmp_path)
-            except Exception as e:
-                self.show_status_message(f"Failed to edit: {e}", is_error=True)
-        except Exception:
-            pass
-
-    def action_comment(self) -> None:
-        """Add a comment to the selected issue (c)."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if not selected_id:
-                self.show_status_message("No issue selected", is_error=True)
-                return
-
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
-
-            service = self.service
-
-            def add_comment(text: str) -> None:
-                if not text.strip():
-                    return
-
-                try:
-                    from tw.models import AnnotationType
-
-                    service.record_annotation(selected_id, AnnotationType.COMMENT, text.strip())
-                    self.show_status_message(f"Added comment to {selected_id}")
-                    self._refresh_tree()
-                except Exception as e:
-                    self.show_status_message(f"Failed to add comment: {e}", is_error=True)
-
-            self._show_input_dialog("Comment...", add_comment)
-        except Exception:
-            pass
-
-    def action_groom(self) -> None:
-        """Groom backlog items via external editor (g)."""
-        self._on_keypress()
-        try:
-            try:
-                with self.suspend():
-                    subprocess.run(["tw", "groom"], check=True)
-
-                self.show_status_message("Groomed backlog")
-                self._refresh_tree()
-            except Exception as e:
-                self.show_status_message(f"Failed to groom: {e}", is_error=True)
-        except Exception:
-            pass
-
-    def show_status_message(self, text: str, is_error: bool = False) -> None:
-        """Log a status message.
-
-        Args:
-            text: Message text to log.
-            is_error: If True, log as error; if False, log as info.
-        """
-        if is_error:
-            logger.error(text)
-        else:
-            logger.info(text)
-
-    def _cleanup(self) -> None:
-        """Clean up resources on app exit."""
+    def on_unmount(self) -> None:
+        self._cleanup_file_watching()
         if self._refresh_timer:
             self._refresh_timer.stop()
-        if self._observer:
-            try:
-                if self._watch_handler:
-                    self._watch_handler.cleanup()
-                self._observer.stop()  # type: ignore[attr-defined]
-                self._observer.join(timeout=1.0)  # type: ignore[attr-defined]
-            except Exception as e:
-                logger.warning(f"Error during observer cleanup: {e}")
 
-    async def action_quit(self) -> None:
-        """Handle quit action with cleanup."""
-        self._cleanup()
-        self.exit()
-
-    def _show_input_dialog(self, title: str, callback: Any) -> None:
-        """Show an input dialog for creating new issues.
-
-        Args:
-            title: Prompt title to display.
-            callback: Function to call with input value on submit.
-        """
+    def _setup_file_watching(self) -> None:
         try:
-            if self._input_dialog:
-                self._input_dialog.remove()
-        except Exception:
-            pass
+            data_dir = get_taskwarrior_data_dir()
+            self._refresh_event = threading.Event()
+            self._watch_handler = WatchHandler(self._refresh_event)
+            self._observer = Observer()
+            self._observer.schedule(self._watch_handler, str(data_dir), recursive=False)
+            self._observer.start()
+        except Exception as e:
+            logger.warning(f"File watching unavailable: {e}")
 
-        self._input_dialog = InputDialog(title, callback)
-        self.mount(self._input_dialog)
+    def _cleanup_file_watching(self) -> None:
+        if self._watch_handler:
+            self._watch_handler.cleanup()
+        if self._observer:
+            self._observer.stop()
+            self._observer.join(timeout=1)
+
+    def _check_refresh(self) -> None:
+        if self._refresh_event and self._refresh_event.is_set():
+            idle_time = monotonic() - self._last_action_time
+            if idle_time > 2.0:
+                self._refresh_event.clear()
+                self._load_tree(preserve_selection=True)
+
+    def _record_action(self) -> None:
+        self._last_action_time = monotonic()
+
+    def watch_busy_count(self, count: int) -> None:
+        self.query_one("#throbber", Throbber).set_class(count > 0, "-busy")
+
+    def flash(self, message: str, style: str = "success") -> None:
+        self.query_one("#flash", Flash).flash(message, style)
+
+    @work(exclusive=True)
+    async def _load_tree(self, preserve_selection: bool = False) -> None:
+        self.busy_count += 1
+        try:
+            tree = self.query_one("#tree-pane", IssueTree)
+            selected_id = None
+            if preserve_selection:
+                issue = tree.get_selected_issue()
+                selected_id = issue.tw_id if issue else None
+
+            hierarchy, backlog = self._service.get_issue_tree_with_backlog()
+            issue_map = {i.tw_id: i for i in hierarchy + backlog}
+
+            def compute_depth(issue: Issue) -> int:
+                depth = 0
+                current = issue
+                while current.tw_parent:
+                    depth += 1
+                    parent = issue_map.get(current.tw_parent)
+                    if not parent:
+                        break
+                    current = parent
+                return depth
+
+            nodes = [IssueNode(issue=i, depth=compute_depth(i)) for i in hierarchy]
+            nodes += [IssueNode(issue=i, depth=0) for i in backlog]
+
+            tree.nodes = nodes
+
+            if selected_id:
+                tree.select_issue_by_id(selected_id)
+            elif tree.highlighted is None and nodes:
+                tree.highlighted = 0
+
+        finally:
+            self.busy_count -= 1
+
+    @on(IssueTree.SelectionChanged)
+    async def on_selection_changed(self, event: IssueTree.SelectionChanged) -> None:
+        event.stop()
+        detail = self.query_one("#detail-pane", IssueDetail)
+        if event.issue is None:
+            detail.issue = None
+            detail.context = None
+        else:
+            detail.issue = event.issue
+            try:
+                context = self._service.get_issue_with_context(event.issue.tw_id)
+                detail.context = context
+            except KeyError:
+                detail.context = None
 
     def action_close_dialogs(self) -> None:
-        """Close all dialogs on escape."""
-        if self._input_dialog:
-            try:
-                self._input_dialog.remove()
-                self._input_dialog = None
-            except Exception:
-                pass
-        if self._picker_dialog:
-            try:
-                self._picker_dialog.remove()
-                self._picker_dialog = None
-            except Exception:
-                pass
+        self.query_one("#input-dialog", InputDialog).is_visible = False
+        self.query_one("#picker-dialog", PickerDialog).is_visible = False
+
+    def action_start(self) -> None:
+        self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
+        issue = tree.get_selected_issue()
+        if issue is None:
+            return
+        if is_backlog_type(issue.tw_type):
+            self.flash("Cannot start backlog items", "warning")
+            return
+        try:
+            self._service.start_issue(issue.tw_id)
+            self.flash(f"Started {issue.tw_id}")
+            self._load_tree(preserve_selection=True)
+        except ValueError as e:
+            self.flash(str(e), "error")
+
+    def action_done(self) -> None:
+        self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
+        issue = tree.get_selected_issue()
+        if issue is None:
+            return
+        try:
+            self._service.done_issue(issue.tw_id)
+            self.flash(f"Completed {issue.tw_id}")
+            self._load_tree(preserve_selection=True)
+        except ValueError as e:
+            self.flash(str(e), "error")
+
+    def action_edit(self) -> None:
+        self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
+        issue = tree.get_selected_issue()
+        if issue is None:
+            return
+
+        editor = os.environ.get("EDITOR", "vi")
+        template = generate_edit_template(issue.title, issue.tw_body)
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write(template)
+            temp_path = f.name
+
+        try:
+            with self.suspend():
+                subprocess.run([editor, temp_path], check=True)
+
+            with open(temp_path) as f:
+                content = f.read()
+
+            new_title, new_body = parse_edited_content(content)
+            self._service.update_issue(issue.tw_id, title=new_title, body=new_body)
+            self.flash(f"Updated {issue.tw_id}")
+            self._load_tree(preserve_selection=True)
+        except (ValueError, subprocess.CalledProcessError) as e:
+            self.flash(str(e), "error")
+        finally:
+            import os as os_module
+            os_module.unlink(temp_path)
 
     def action_new_child(self) -> None:
-        """Create a new child issue (n)."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if not selected_id:
-                self.show_status_message("No issue selected", is_error=True)
-                return
+        self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
+        issue = tree.get_selected_issue()
+        if issue is None:
+            self.flash("Select an issue first", "warning")
+            return
+        if is_backlog_type(issue.tw_type):
+            self.flash("Cannot add children to backlog items", "warning")
+            return
 
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
+        child_type_map = {
+            IssueType.EPIC: IssueType.STORY,
+            IssueType.STORY: IssueType.TASK,
+            IssueType.TASK: IssueType.TASK,
+        }
+        child_type = child_type_map.get(issue.tw_type, IssueType.TASK)
 
+        def create_child(title: str) -> None:
             try:
-                parent_issue = self.service.get_issue(selected_id)
-                service = self.service
+                new_id = self._service.create_issue(
+                    child_type, title, parent_id=issue.tw_id
+                )
+                self.flash(f"Created {new_id}")
+                self._load_tree(preserve_selection=False)
+                self.call_after_refresh(
+                    lambda: self.query_one("#tree-pane", IssueTree).select_issue_by_id(new_id)
+                )
+            except ValueError as e:
+                self.flash(str(e), "error")
 
-                def create_child(title: str) -> None:
-                    """Create the child issue with the provided title."""
-                    if not title.strip():
-                        self.show_status_message("Title cannot be empty", is_error=True)
-                        return
-
-                    try:
-                        child_type = self._infer_child_type(parent_issue.tw_type)
-                        new_id = service.create_issue(
-                            issue_type=child_type,
-                            title=title.strip(),
-                            parent_id=selected_id,
-                        )
-                        self.show_status_message(f"Created {new_id}")
-                        self._refresh_tree()
-                    except Exception as e:
-                        self.show_status_message(f"Failed to create child: {e}", is_error=True)
-
-                self._show_input_dialog("Enter child issue title:", create_child)
-            except Exception as e:
-                self.show_status_message(f"Failed to get parent issue: {e}", is_error=True)
-        except Exception:
-            pass
+        dialog = self.query_one("#input-dialog", InputDialog)
+        dialog.show(f"New {child_type.value} under {issue.tw_id}:", create_child)
 
     def action_new_epic(self) -> None:
-        """Create a new top-level epic (N)."""
-        self._on_keypress()
-        try:
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
+        self._record_action()
 
-            service = self.service
+        def create_epic(title: str) -> None:
+            try:
+                new_id = self._service.create_issue(IssueType.EPIC, title)
+                self.flash(f"Created {new_id}")
+                self._load_tree(preserve_selection=False)
+                self.call_after_refresh(
+                    lambda: self.query_one("#tree-pane", IssueTree).select_issue_by_id(new_id)
+                )
+            except ValueError as e:
+                self.flash(str(e), "error")
 
-            def create_epic(title: str) -> None:
-                """Create the epic with the provided title."""
-                if not title.strip():
-                    self.show_status_message("Title cannot be empty", is_error=True)
-                    return
-
-                try:
-                    new_id = service.create_issue(
-                        issue_type=IssueType.EPIC,
-                        title=title.strip(),
-                    )
-                    self.show_status_message(f"Created {new_id}")
-                    self._refresh_tree()
-                except Exception as e:
-                    self.show_status_message(f"Failed to create epic: {e}", is_error=True)
-
-            self._show_input_dialog("Enter epic title:", create_epic)
-        except Exception:
-            pass
+        dialog = self.query_one("#input-dialog", InputDialog)
+        dialog.show("New epic title:", create_epic)
 
     def action_new_bug(self) -> None:
-        """Create a new bug in backlog (b)."""
-        self._on_keypress()
-        try:
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
+        self._record_action()
 
-            service = self.service
+        def create_bug(title: str) -> None:
+            try:
+                new_id = self._service.create_issue(IssueType.BUG, title)
+                self.flash(f"Created {new_id}")
+                self._load_tree(preserve_selection=False)
+                self.call_after_refresh(
+                    lambda: self.query_one("#tree-pane", IssueTree).select_issue_by_id(new_id)
+                )
+            except ValueError as e:
+                self.flash(str(e), "error")
 
-            def create_bug(title: str) -> None:
-                """Create the bug with the provided title."""
-                if not title.strip():
-                    self.show_status_message("Title cannot be empty", is_error=True)
-                    return
-
-                try:
-                    new_id = service.create_issue(
-                        issue_type=IssueType.BUG,
-                        title=title.strip(),
-                    )
-                    self.show_status_message(f"Created {new_id}")
-                    self._refresh_tree()
-                except Exception as e:
-                    self.show_status_message(f"Failed to create bug: {e}", is_error=True)
-
-            self._show_input_dialog("Enter bug title:", create_bug)
-        except Exception:
-            pass
+        dialog = self.query_one("#input-dialog", InputDialog)
+        dialog.show("New bug title:", create_bug)
 
     def action_new_idea(self) -> None:
-        """Create a new idea in backlog (i)."""
-        self._on_keypress()
-        try:
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
+        self._record_action()
 
-            service = self.service
-
-            def create_idea(title: str) -> None:
-                """Create the idea with the provided title."""
-                if not title.strip():
-                    self.show_status_message("Title cannot be empty", is_error=True)
-                    return
-
-                try:
-                    new_id = service.create_issue(
-                        issue_type=IssueType.IDEA,
-                        title=title.strip(),
-                    )
-                    self.show_status_message(f"Created {new_id}")
-                    self._refresh_tree()
-                except Exception as e:
-                    self.show_status_message(f"Failed to create idea: {e}", is_error=True)
-
-            self._show_input_dialog("Enter idea title:", create_idea)
-        except Exception:
-            pass
-
-    def action_promote_issue(self) -> None:
-        """Promote a backlog item to a child issue (p)."""
-        self._on_keypress()
-        try:
-            tree_pane = self.query_one(TreePane)
-            selected_id = tree_pane.get_selected_issue_id()
-            if not selected_id:
-                self.show_status_message("No issue selected", is_error=True)
-                return
-
-            if not self.service:
-                self.show_status_message("Service not initialized", is_error=True)
-                return
-
+        def create_idea(title: str) -> None:
             try:
-                selected_issue = self.service.get_issue(selected_id)
-                from tw.models import is_backlog_type
+                new_id = self._service.create_issue(IssueType.IDEA, title)
+                self.flash(f"Created {new_id}")
+                self._load_tree(preserve_selection=False)
+                self.call_after_refresh(
+                    lambda: self.query_one("#tree-pane", IssueTree).select_issue_by_id(new_id)
+                )
+            except ValueError as e:
+                self.flash(str(e), "error")
 
-                if not is_backlog_type(selected_issue.tw_type):
-                    msg = (
-                        f"Cannot promote {selected_issue.tw_type.value}: "
-                        "only backlog items (bug/idea) can be promoted"
-                    )
-                    self.show_status_message(msg, is_error=True)
-                    return
+        dialog = self.query_one("#input-dialog", InputDialog)
+        dialog.show("New idea title:", create_idea)
 
-                hierarchy, _ = self.service.get_issue_tree_with_backlog()
-                epics_and_stories = [
-                    issue
-                    for issue in hierarchy
-                    if issue.tw_type in (IssueType.EPIC, IssueType.STORY)
-                ]
+    def action_promote(self) -> None:
+        self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
+        issue = tree.get_selected_issue()
+        if issue is None:
+            return
+        if not is_backlog_type(issue.tw_type):
+            self.flash("Can only promote bugs and ideas", "warning")
+            return
 
-                if not epics_and_stories:
-                    self.show_status_message(
-                        "No epics or stories available as parents", is_error=True
-                    )
-                    return
+        hierarchy, _ = self._service.get_issue_tree_with_backlog()
+        parents = [
+            (i.tw_id, i.title)
+            for i in hierarchy
+            if i.tw_type in (IssueType.EPIC, IssueType.STORY)
+        ]
 
-                options = [
-                    (issue.tw_id, f"{issue.tw_id}: {issue.title}") for issue in epics_and_stories
-                ]
-                service = self.service
+        if not parents:
+            self.flash("No epics or stories to promote to", "warning")
+            return
 
-                def promote_to_parent(parent_id: str) -> None:
-                    """Promote the backlog item under the selected parent."""
-                    try:
-                        parent_issue = service.get_issue(parent_id)
-                        child_type = self._infer_promoted_type(parent_issue.tw_type)
+        def do_promote(parent_id: str) -> None:
+            try:
+                parent = self._service.get_issue(parent_id)
+                new_type = IssueType.STORY if parent.tw_type == IssueType.EPIC else IssueType.TASK
+                new_id = self._service.create_issue(
+                    new_type,
+                    issue.title,
+                    parent_id=parent_id,
+                    body=issue.tw_body,
+                )
+                self._service.done_issue(issue.tw_id, force=True)
+                self.flash(f"Promoted to {new_id}")
+                self._load_tree(preserve_selection=False)
+                self.call_after_refresh(
+                    lambda: self.query_one("#tree-pane", IssueTree).select_issue_by_id(new_id)
+                )
+            except ValueError as e:
+                self.flash(str(e), "error")
 
-                        new_id = service.create_issue(
-                            issue_type=child_type,
-                            title=selected_issue.title,
-                            parent_id=parent_id,
-                            body=selected_issue.tw_body,
-                        )
+        picker = self.query_one("#picker-dialog", PickerDialog)
+        picker.show(f"Promote {issue.tw_id} to:", parents, do_promote)
 
-                        service.done_issue(selected_id)
-                        self.show_status_message(
-                            f"Promoted {selected_id} to {new_id} under {parent_id}"
-                        )
-                        self._refresh_tree()
-                    except Exception as e:
-                        self.show_status_message(f"Failed to promote: {e}", is_error=True)
+    def action_comment(self) -> None:
+        self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
+        issue = tree.get_selected_issue()
+        if issue is None:
+            return
 
-                self._show_picker_dialog("Select parent epic or story:", options, promote_to_parent)
-            except Exception as e:
-                self.show_status_message(f"Failed to promote: {e}", is_error=True)
-        except Exception:
-            pass
+        def add_comment(comment: str) -> None:
+            try:
+                self._service.record_annotation(
+                    issue.tw_id, AnnotationType.COMMENT, comment
+                )
+                self.flash(f"Added comment to {issue.tw_id}")
+                self._load_tree(preserve_selection=True)
+            except ValueError as e:
+                self.flash(str(e), "error")
 
-    def _infer_child_type(self, parent_type: IssueType) -> IssueType:
-        """Infer the child issue type based on parent type.
+        dialog = self.query_one("#input-dialog", InputDialog)
+        dialog.show(f"Comment on {issue.tw_id}:", add_comment)
 
-        Args:
-            parent_type: The parent issue's type.
-
-        Returns:
-            The appropriate child issue type.
-        """
-        if parent_type == IssueType.EPIC:
-            return IssueType.STORY
-        else:
-            return IssueType.TASK
-
-    def _infer_promoted_type(self, parent_type: IssueType) -> IssueType:
-        """Infer the promoted issue type based on parent type.
-
-        Args:
-            parent_type: The parent issue's type.
-
-        Returns:
-            The appropriate issue type for a promoted backlog item.
-        """
-        if parent_type == IssueType.EPIC:
-            return IssueType.STORY
-        else:
-            return IssueType.TASK
-
-    def _show_picker_dialog(
-        self, title: str, options: list[tuple[str, str]], callback: Any
-    ) -> None:
-        """Show a picker dialog for selecting from options.
-
-        Args:
-            title: Dialog title to display.
-            options: List of (id, display_text) tuples for options.
-            callback: Function to call with selected id on submit.
-        """
+    def action_groom(self) -> None:
+        self._record_action()
         try:
-            if self._picker_dialog:
-                self._picker_dialog.remove()
-        except Exception:
-            pass
+            with self.suspend():
+                subprocess.run(["tw", "groom"], check=True)
+            self.flash("Grooming complete")
+            self._load_tree(preserve_selection=True)
+        except subprocess.CalledProcessError as e:
+            self.flash(f"Groom failed: {e}", "error")
 
-        self._picker_dialog = PickerDialog(title, options, callback)
-        self.mount(self._picker_dialog)
 
-
-def main() -> None:
-    """Entry point for the TUI application."""
-    app = TwTuiApp()
+def run_tui() -> None:
+    """Run the TUI application."""
+    app = TwApp()
     app.run()
 
 
 if __name__ == "__main__":
-    main()
+    run_tui()

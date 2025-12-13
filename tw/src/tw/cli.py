@@ -28,7 +28,7 @@ from tw.render import (
     render_view,
 )
 from tw.service import IssueService
-from tw.tui import TwTuiApp
+from tw.tui import TwApp, run_tui
 
 logger = logging.getLogger(__name__)
 
@@ -890,8 +890,7 @@ def groom(ctx: click.Context) -> None:
 def tui(ctx: click.Context) -> None:
     """Launch the interactive TUI for tw issue tracker."""
     try:
-        app = TwTuiApp()
-        app.run()
+        run_tui()
     except Exception as e:
         click.echo(f"error: {e}", err=True)
         ctx.exit(1)
