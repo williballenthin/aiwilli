@@ -1,6 +1,6 @@
-# tw - TaskWarrior-backed Issue Tracker
+# tw - Issue Tracker
 
-`tw` is a lightweight issue tracker for AI-driven software development. It uses TaskWarrior as a backend and provides a hierarchical structure (epics → stories → tasks) optimized for AI agents and human collaboration.
+`tw` is a lightweight issue tracker for AI-driven software development. It provides a hierarchical structure (epics → stories → tasks) optimized for AI agents and human collaboration.
 
 ## Which Persona Are You?
 
@@ -23,10 +23,19 @@ You are a **Coder** if you've been asked to:
 
 **Your job:** Execute the work. Read the issue, do the implementation, document what you learned. Don't restructure the plan.
 
+### Orchestrator
+You are an **Orchestrator** if you're:
+- Delegating tasks to subagents
+- Coordinating work across multiple implementation agents
+- Using subagent-driven-development to execute a plan
+
+**Your job:** Prepare context for each subagent, dispatch them, review their work, accumulate learnings, and manage handoffs between tasks.
+
 ---
 
 Most agents are **Coders** - you're handed a task and asked to implement it.
 You're a **Planner** only when explicitly asked to design or break down work.
+You're an **Orchestrator** when using subagent-driven-development or similar coordination patterns.
 
 Keep your persona in mind as you read the sections below. The guidance differs significantly between roles.
 
@@ -62,9 +71,6 @@ tw handoff PROJ-1-1a --status "Half done" --completed "- [x] UI form\n- [x] Form
 tw blocked PROJ-1-1b --reason "Waiting for API credentials"
 tw unblock PROJ-1-1b --message "Credentials received"
 
-# View project structure
-tw tree
-
 # Capture discovered work
 tw new bug --title "Login broken on empty password" --body "Discovered while working on PROJ-1-1a. In src/auth/validator.py:42..."
 tw new idea --title "Add password strength meter" --body "Discovered while working on PROJ-1-1a..."
@@ -82,8 +88,6 @@ tw new idea --title "Password strength meter"
 # Groom backlog (open editor with all backlog items)
 tw groom
 
-# View backlog in tree
-tw tree  # Shows hierarchy then backlog section
 ```
 
 Backlog items:
@@ -97,9 +101,10 @@ Backlog items:
 ### Issue Management
 - `tw new <epic|story|task|bug|idea> --title "..." [--parent ID] [--body "..."]` - Create new issue
 - `tw view <id>` - View issue with full context (ancestors, siblings, descendants)
+- `tw brief <id>` - Get coder briefing with context + protocol (use for subagent dispatch)
 - `tw edit <id> [--title "..."] [--body "..."]` - Edit issue (for humans and planners; coders should use annotations)
 - `tw delete <id>` - Delete issue (fails if it has children)
-- `tw tree` - Show hierarchical tree of all issues
+- `tw tree` - Show hierarchical tree of all issues (for humans; agents should use `tw view`)
 - `tw digest <id>` - Show summary of parent with all children
 - `tw capture` - Create multiple issues from indented DSL
 
@@ -119,7 +124,7 @@ Backlog items:
 - `tw watch tree <id>` - Watch specific issue and descendants
 - `tw watch tree -n <seconds>` - Custom refresh interval
 
-The watch command monitors your TaskWarrior data directory for changes and automatically
+The watch command monitors your data for changes and automatically
 refreshes the display. Uses file system notifications for instant updates, with periodic
 polling as backup. Press Ctrl+C to exit.
 
@@ -172,7 +177,104 @@ If a task requires reading other documents to understand what to do, add that in
 - `tw capture` - Create hierarchy structure from indented DSL
 - `tw new epic|story|task` - Create individual issues
 - `tw edit <id>` - Add/refine body content
-- `tw tree` - Review the structure you've created
+- `tw digest <id>` - Review the structure you've created (shows parent with all children)
+
+## For Orchestrator Agents
+
+You're coordinating subagents to implement a plan. Your job is simple: **dispatch subagents with `tw brief`**.
+
+### The Brief Command
+
+`tw brief <id>` outputs everything a coder subagent needs in one document:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  tw brief TASK-1c                                                │
+├─────────────────────────────────────────────────────────────────┤
+│  Lessons from Siblings (shown first!)                            │
+│  ├─ TASK-1a: [lesson] Connection pooling deferred                │
+│  └─ TASK-1b: [deviation] Used JSONB instead of JSON              │
+│                                                                  │
+│  Task body (from planner)                                        │
+│  ├─ Files to modify                                              │
+│  ├─ Patterns to follow                                           │
+│  └─ Acceptance criteria                                          │
+│                                                                  │
+│  Parent context (epic/story bodies)                              │
+│                                                                  │
+│  Protocol (tw commands with task ID pre-filled)                  │
+│  Workflow (step-by-step checklist)                               │
+│  Rules (don't edit, record lessons, etc.)                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The subagent doesn't need `tw onboard`** - `tw brief` includes the protocol.
+
+### Your Simple Protocol
+
+**1. Dispatch subagent with one command:**
+```
+Run `tw brief TASK-1c` to get your assignment.
+```
+
+**2. After subagent completes:**
+- Review their code
+- Verify they recorded lessons
+- Move to next task
+
+That's it. The brief tells the subagent:
+- What to implement (task body, parent context)
+- What siblings learned (lessons, deviations)
+- How to use tw (protocol, workflow, rules)
+
+### What Makes This Work
+
+1. **Planners write detailed task bodies** - files, patterns, criteria
+2. **Coders record lessons before completion** - mandatory, not optional
+3. **tw brief shows everything** - context + protocol in one document
+
+If a subagent doesn't have enough context, it's either:
+- The planner didn't write a detailed enough task body
+- Previous coders didn't record their lessons
+
+### Commands You'll Use
+
+- `tw brief <id>` - Get subagent briefing (context + protocol)
+- `tw digest <id>` - See status of all children under a story
+- `tw tree` - Quick overview of all work
+- `tw view <id>` - Spot-check context (without protocol section)
+
+### Common Mistakes
+
+**❌ Assembling context manually:**
+```
+"Implement TASK-1c. Previous task learned X. The pattern is Y..."
+```
+
+**✓ Let tw provide everything:**
+```
+"Run `tw brief TASK-1c` to get your assignment."
+```
+
+**❌ Multiple commands:**
+```
+"Run `tw onboard` then `tw view TASK-1c`..."
+```
+
+**✓ Single command:**
+```
+"Run `tw brief TASK-1c`."
+```
+
+**❌ Detailed prompts with everything:**
+```
+"Context: ... Previous work: ... Patterns: ... Protocol: ..."
+```
+
+**✓ Trust tw brief:**
+```
+"Run `tw brief TASK-1c` to get your assignment."
+```
 
 ## For Coder Agents
 
@@ -219,6 +321,17 @@ Prefer specific annotation types over generic comments:
 
 **Avoid `tw comment`** unless the information truly doesn't fit any category. Structured annotations are searchable and help future agents learn.
 
+### Q&A with Users
+
+When you need to ask the user questions about an issue (clarifications, design decisions, requirements), capture their answers as comments:
+
+```bash
+tw comment TW-5-2a -m "Q: Should we support OAuth or just username/password?
+A: Start with username/password, OAuth in v2"
+```
+
+**Why:** User answers are important context that future agents need. Recording them as comments creates a permanent record attached to the issue.
+
 ### Discovered Work → Backlog
 
 When you find something unexpected (bug, missing feature, technical debt):
@@ -236,14 +349,38 @@ tw new bug --title "Login accepts empty password" --body "Discovered while worki
 
 ### Standard Workflow
 
-1. `tw view <id>` — Read the full context before starting
+1. `tw view <id>` — Read the full context before starting (includes lessons from siblings!)
 2. `tw start <id>` — Mark as in-progress
 3. Implement the changes
 4. `tw record` — Document lessons, deviations, commits as you go
 5. `git commit` then `tw record commit` — Link each commit
-6. `tw done <id>` — When complete
+6. **Before completing:** Record what you learned (see below)
+7. `tw done <id>` — When complete
 
 If pausing before completion: `tw handoff <id> --status "..." --completed "..." --remaining "..."`
+
+### Before Completing Any Task — Record What You Learned
+
+**This is mandatory.** Before running `tw done`, ask yourself:
+
+1. **What patterns did I establish?** Record as lesson.
+2. **What did I change from the plan?** Record as deviation.
+3. **What surprised me?** Record as lesson.
+4. **What should the next task know?** Record as lesson.
+
+```bash
+# Examples of good lessons
+tw record TW-5-2a lesson -m "OAuth callback must be async - see auth/callback.py:42"
+tw record TW-5-2a lesson -m "Use COALESCE for nullable TEXT columns that get split()"
+tw record TW-5-2a deviation -m "Used session auth instead of JWT - simpler for our use case"
+```
+
+**Why this matters:** The next subagent working on a sibling task will see your lessons in `tw view`. If you don't record them, they'll repeat your mistakes or miss your discoveries.
+
+**If you learned nothing:** That's fine, but rare. At minimum, record which files you modified:
+```bash
+tw record TW-5-2a lesson -m "Implementation in src/auth/login.py:50-120"
+```
 
 ### Commands You'll Use
 
@@ -355,6 +492,26 @@ Preferred annotation types (use these liberally):
 Avoid when possible:
 - **comment** - General observations (use as last resort; prefer specific types above)
 
+### Annotation Format
+
+When writing annotations, follow this format:
+- **First line:** Short summary (50 characters or less) - displayed in compact UIs
+- **Remaining lines:** Detailed explanation, context, or additional information
+
+Example of a well-formatted multi-line annotation:
+```bash
+tw record TW-5-2a lesson -m "OAuth requires async request handlers
+
+The library documentation was unclear, but after debugging found that all
+OAuth callback handlers must be async functions. Sync handlers cause the
+request to hang indefinitely. See lib/oauth/client.py for implementation."
+```
+
+Single-line annotations are fine when the information is brief:
+```bash
+tw record TW-5-2a lesson -m "OAuth requires async handlers"
+```
+
 Special system annotations (added automatically):
 - **work-begin** - Added by `tw start`
 - **work-end** - Added by `tw done`
@@ -434,9 +591,12 @@ The next agent will see this prominently when running `tw view TW-5-2a`.
 
 ## Configuration
 
-Configuration is typically already set up by the human user. If needed, environment variables or CLI flags can be used:
-- `TW_PROJECT_NAME` / `PROJECT_NAME` - Project identifier
-- `TW_PROJECT_PREFIX` / `PROJECT_PREFIX` - Issue ID prefix
+Configuration is typically already set up by the human user. Required environment variables:
+- `TW_DB_PATH` - Path to SQLite database file (e.g., `/path/to/project/.tw.db`)
+- `TW_PREFIX` - Issue ID prefix (e.g., `TW`, `PROJ`)
+
+Legacy (still supported):
+- `TW_PROJECT_PREFIX` - Fallback for `TW_PREFIX`
 
 ## Output Modes
 

@@ -1,12 +1,12 @@
 """Jinja template rendering for human-readable output."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
-from tw.models import AnnotationType, Issue
+from tw.models import Annotation, AnnotationType, Issue
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), trim_blocks=True, lstrip_blocks=True)
@@ -21,9 +21,9 @@ def relative_time(dt: datetime) -> str:
     Returns:
         A human-readable relative time string like "3 hours ago" or "2 days ago"
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
 
     delta = now - dt
     seconds = delta.total_seconds()
@@ -91,11 +91,11 @@ def get_status_timestamp(issue: Issue) -> datetime | None:
     if not issue.annotations:
         return None
 
-    if issue.tw_status.value == "blocked":
+    if issue.status.value == "blocked":
         for ann in issue.annotations:
             if ann.type == AnnotationType.BLOCKED:
                 return ann.timestamp
-    elif issue.tw_status.value in ("in_progress", "stopped"):
+    elif issue.status.value in ("in_progress", "stopped"):
         for ann in issue.annotations:
             if ann.type == AnnotationType.WORK_BEGIN:
                 return ann.timestamp
@@ -116,30 +116,52 @@ def render_issue_tree_line(issue: Issue, depth: int = 0) -> str:
     indent = "  " * depth
     ts = status_timestamp(issue)
 
-    if issue.tw_status.value == 'done':
-        line = f"{indent}[gray69]{issue.tw_type.value}[/gray69][gray69]:[/gray69] [gray69]{issue.title}[/gray69] [gray69]([/gray69][blue]{issue.tw_id}[/blue][gray69], done)[/gray69]"
-    elif issue.tw_status.value == 'in_progress':
+    if issue.status.value == 'done':
+        line = (
+            f"{indent}[gray69]{issue.type.value}[/gray69][gray69]:[/gray69] "
+            f"[gray69]{issue.title}[/gray69] [gray69]([/gray69]"
+            f"[blue]{issue.id}[/blue][gray69], done)[/gray69]"
+        )
+    elif issue.status.value == 'in_progress':
         ts_part = f" ({ts})" if ts else ""
-        line = f"{indent}[gray69]{issue.tw_type.value}[/gray69][gray69]:[/gray69] [default]{issue.title}[/default] [gray69]([/gray69][blue]{issue.tw_id}[/blue][gray69], [/gray69][yellow]in_progress[/yellow]{ts_part}[gray69])[/gray69]"
-    elif issue.tw_status.value in ('blocked', 'stopped'):
+        line = (
+            f"{indent}[gray69]{issue.type.value}[/gray69][gray69]:[/gray69] "
+            f"[default]{issue.title}[/default] [gray69]([/gray69]"
+            f"[blue]{issue.id}[/blue][gray69], [/gray69]"
+            f"[yellow]in_progress[/yellow]{ts_part}[gray69])[/gray69]"
+        )
+    elif issue.status.value in ('blocked', 'stopped'):
         ts_part = f" ({ts})" if ts else ""
-        line = f"{indent}[gray69]{issue.tw_type.value}[/gray69][gray69]:[/gray69] [default]{issue.title}[/default] [gray69]([/gray69][blue]{issue.tw_id}[/blue][gray69], [/gray69][red]{issue.tw_status.value}[/red]{ts_part}[gray69])[/gray69]"
+        line = (
+            f"{indent}[gray69]{issue.type.value}[/gray69][gray69]:[/gray69] "
+            f"[default]{issue.title}[/default] [gray69]([/gray69]"
+            f"[blue]{issue.id}[/blue][gray69], [/gray69]"
+            f"[red]{issue.status.value}[/red]{ts_part}[gray69])[/gray69]"
+        )
     else:
-        line = f"{indent}[gray69]{issue.tw_type.value}[/gray69][gray69]:[/gray69] [default]{issue.title}[/default] [gray69]([/gray69][blue]{issue.tw_id}[/blue][gray69])[/gray69]"
+        line = (
+            f"{indent}[gray69]{issue.type.value}[/gray69][gray69]:[/gray69] "
+            f"[default]{issue.title}[/default] [gray69]([/gray69]"
+            f"[blue]{issue.id}[/blue][gray69])[/gray69]"
+        )
 
     result = [line]
 
-    if issue.tw_body:
-        repeatable_body = issue.tw_body.split('---')[0].strip() if '---' in issue.tw_body else issue.tw_body.strip()
+    if issue.body:
+        if '---' in issue.body:
+            repeatable_body = issue.body.split('---')[0].strip()
+        else:
+            repeatable_body = issue.body.strip()
         if repeatable_body:
             for body_line in repeatable_body.splitlines():
                 result.append(f"[dim]{indent}  {body_line}[/dim]")
 
-    if issue.tw_type.value == 'task' and issue.annotations:
+    if issue.type.value == 'task' and issue.annotations:
         for ann in issue.annotations:
             if ann.type.value not in ('work-begin', 'work-end'):
                 first_line = ann.message.split('\n')[0]
-                result.append(f"[dim]{indent}  {ann.type.value}: {relative_time(ann.timestamp)}, {first_line}[/dim]")
+                ann_info = f"{ann.type.value}: {relative_time(ann.timestamp)}, {first_line}"
+                result.append(f"[dim]{indent}  {ann_info}[/dim]")
 
     return "\n".join(result)
 
@@ -162,6 +184,64 @@ def render_issue_list_as_tree(issues: list[Issue]) -> str:
 _env.filters["render_tree_line"] = lambda issue, depth=0: render_issue_tree_line(issue, depth)
 
 
+def _format_status(status: str) -> tuple[str, str]:
+    """Return display name and color for a status.
+
+    Args:
+        status: The raw status value
+
+    Returns:
+        Tuple of (display_name, color)
+    """
+    if status == "in_progress":
+        return ("open", "green")
+    elif status == "done":
+        return ("done", "gray69")
+    elif status == "blocked":
+        return ("blocked", "red")
+    elif status == "stopped":
+        return ("stopped", "red")
+    else:
+        return (status, "default")
+
+
+def _render_issue_link_short(issue: Issue, prefix: str) -> str:
+    """Render a short issue link line for the compact view.
+
+    Format: prefix:  status | type | title (ID)
+
+    Args:
+        issue: The issue to render
+        prefix: The relationship prefix (parent, child, sibling, refs)
+
+    Returns:
+        Rich markup formatted line
+    """
+    display_status, color = _format_status(issue.status.value)
+    ts = status_timestamp(issue)
+    ts_part = f", {ts}" if ts else ""
+
+    return (
+        f"[gray69]{prefix}:[/gray69]  [{color}]{display_status}[/{color}] "
+        f"[gray69]|[/gray69] [gray69]{issue.type.value}[/gray69] [gray69]|[/gray69] "
+        f"[default]{issue.title}[/default] [gray69]([/gray69]"
+        f"[blue]{issue.id}[/blue]{ts_part}[gray69])[/gray69]"
+    )
+
+
+def _render_annotation_short(ann: Annotation) -> str:
+    """Render a short annotation line (first line only).
+
+    Args:
+        ann: The annotation to render
+
+    Returns:
+        Rich markup formatted line
+    """
+    first_line = ann.message.split('\n')[0].strip()
+    return f"[gray69]{ann.type.value}:[/gray69] [default]{first_line}[/default]"
+
+
 def render_view(
     issue: Issue,
     ancestors: list[Issue] | None = None,
@@ -170,28 +250,110 @@ def render_view(
     referenced: list[Issue] | None = None,
     referencing: list[Issue] | None = None,
 ) -> str:
-    """Render a single issue with full context as markdown.
+    """Render a single issue with short links but no full context using Rich markup.
 
     Args:
         issue: The issue to render
-        ancestors: List of ancestor issues (parent to root)
-        siblings: List of sibling issues
-        descendants: List of descendant issues
-        referenced: Issues referenced by this issue
-        referencing: Issues that reference this issue
+        ancestors: List of ancestor issues (parent to root) - only short links shown
+        siblings: List of sibling issues - only short links shown
+        descendants: List of descendant issues - only short links shown
+        referenced: Issues referenced by this issue - only short links shown
+        referencing: Issues that reference this issue - only short links shown
 
     Returns:
-        Markdown formatted issue view with context
+        Rich markup formatted issue view with short links to related issues
     """
-    template = _env.get_template("view.md.j2")
-    return template.render(
-        issue=issue,
-        ancestors=ancestors or [],
-        siblings=siblings or [],
-        descendants=descendants or [],
-        referenced=referenced or [],
-        referencing=referencing or [],
-    )
+    ancestors = ancestors or []
+    siblings = siblings or []
+    descendants = descendants or []
+    referenced = referenced or []
+    referencing = referencing or []
+
+    lines: list[str] = []
+
+    # Title (yellow)
+    lines.append(f"[yellow]{issue.title}[/yellow]")
+
+    # Properties line (grey, but color status)
+    display_status, status_color = _format_status(issue.status.value)
+    ts = status_timestamp(issue)
+    ts_part = f" | {ts}" if ts else ""
+    props = f"| {issue.type.value} | {issue.id}{ts_part}"
+    lines.append(f"[{status_color}]{display_status}[/{status_color}] [gray69]{props}[/gray69]")
+
+    # Handoff message if stopped
+    if issue.status.value == 'stopped' and issue.annotations:
+        for ann in reversed(issue.annotations):
+            if ann.type == AnnotationType.HANDOFF:
+                lines.append("")
+                lines.append(f"[bold red]HANDOFF:[/bold red] {ann.message}")
+                break
+
+    # Repeatable body (default text color)
+    if issue.body:
+        if '---' in issue.body:
+            repeatable_body = issue.body.split('---')[0].strip()
+        else:
+            repeatable_body = issue.body.strip()
+        if repeatable_body:
+            lines.append("")
+            lines.append(repeatable_body)
+
+    # Short issue links section (table aligned) - no repeatable body
+    link_lines: list[str] = []
+    if ancestors:
+        parent = ancestors[0]
+        link_lines.append(_render_issue_link_short(parent, "parent"))
+    for child in descendants:
+        link_lines.append(_render_issue_link_short(child, "child"))
+    for sib in siblings:
+        link_lines.append(_render_issue_link_short(sib, "sibling"))
+    for ref in referenced:
+        link_lines.append(_render_issue_link_short(ref, "refs"))
+    for ref in referencing:
+        link_lines.append(_render_issue_link_short(ref, "ref-by"))
+
+    if link_lines:
+        lines.append("")
+        lines.extend(link_lines)
+
+    # Short annotations (first line only, excluding work-begin/work-end)
+    if issue.annotations:
+        visible_anns = [
+            ann for ann in issue.annotations
+            if ann.type.value not in ('work-begin', 'work-end') and ann.message.strip()
+        ]
+        if visible_anns:
+            lines.append("")
+            for ann in visible_anns:
+                lines.append(_render_annotation_short(ann))
+
+    # Non-repeatable body
+    if issue.body and '---' in issue.body:
+        parts = issue.body.split('---', 1)
+        if len(parts) > 1 and parts[1].strip():
+            lines.append("")
+            lines.append("[gray69]---[/gray69]")
+            lines.append("")
+            lines.append(parts[1].strip())
+
+    # Full annotations
+    if issue.annotations:
+        visible_anns = [
+            ann for ann in issue.annotations
+            if ann.type.value not in ('work-begin', 'work-end') and ann.message.strip()
+        ]
+        multiline_anns = [ann for ann in visible_anns if '\n' in ann.message]
+        if multiline_anns:
+            lines.append("")
+            lines.append("[gray69]---[/gray69]")
+            for ann in multiline_anns:
+                ts_str = relative_time(ann.timestamp)
+                lines.append("")
+                lines.append(f"[gray69]{ann.type.value}:[/gray69] [gray69]({ts_str})[/gray69]")
+                lines.append(ann.message)
+
+    return "\n".join(lines)
 
 
 def render_view_body(issue: Issue) -> str:
@@ -203,8 +365,51 @@ def render_view_body(issue: Issue) -> str:
     Returns:
         Markdown formatted issue body with header and annotations
     """
-    template = _env.get_template("view_body.md.j2")
-    return template.render(issue=issue)
+    lines: list[str] = []
+
+    lines.append(f"# {issue.title}")
+
+    display_status, _ = _format_status(issue.status.value)
+    ts = status_timestamp(issue)
+    ts_part = f" | {ts}" if ts else ""
+    lines.append(f"*{display_status} | {issue.type.value} | {issue.id}{ts_part}*")
+
+    if issue.status.value == 'stopped' and issue.annotations:
+        for ann in reversed(issue.annotations):
+            if ann.type == AnnotationType.HANDOFF:
+                lines.append("")
+                lines.append(f"> **HANDOFF:** {ann.message}")
+                break
+
+    if issue.body:
+        if '---' in issue.body:
+            repeatable_body = issue.body.split('---')[0].strip()
+        else:
+            repeatable_body = issue.body.strip()
+        if repeatable_body:
+            lines.append("")
+            lines.append(repeatable_body)
+
+    if issue.annotations:
+        visible_anns = [
+            ann for ann in issue.annotations
+            if ann.type.value not in ('work-begin', 'work-end') and ann.message.strip()
+        ]
+        if visible_anns:
+            lines.append("")
+            for ann in visible_anns:
+                first_line = ann.message.split('\n')[0].strip()
+                lines.append(f"- **{ann.type.value}:** {first_line}")
+
+    if issue.body and '---' in issue.body:
+        parts = issue.body.split('---', 1)
+        if len(parts) > 1 and parts[1].strip():
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            lines.append(parts[1].strip())
+
+    return "\n".join(lines)
 
 
 def render_view_links(
@@ -226,14 +431,27 @@ def render_view_links(
     Returns:
         Rich markup formatted linked issues
     """
-    template = _env.get_template("view_links.txt.j2")
-    return template.render(
-        ancestors=ancestors or [],
-        siblings=siblings or [],
-        descendants=descendants or [],
-        referenced=referenced or [],
-        referencing=referencing or [],
-    )
+    ancestors = ancestors or []
+    siblings = siblings or []
+    descendants = descendants or []
+    referenced = referenced or []
+    referencing = referencing or []
+
+    lines: list[str] = []
+
+    if ancestors:
+        parent = ancestors[0]
+        lines.append(_render_issue_link_short(parent, "parent"))
+    for child in descendants:
+        lines.append(_render_issue_link_short(child, "child"))
+    for sib in siblings:
+        lines.append(_render_issue_link_short(sib, "sibling"))
+    for ref in referenced:
+        lines.append(_render_issue_link_short(ref, "refs"))
+    for ref in referencing:
+        lines.append(_render_issue_link_short(ref, "ref-by"))
+
+    return "\n".join(lines)
 
 
 def render_tree(issues: list[Issue]) -> str:
@@ -245,15 +463,15 @@ def render_tree(issues: list[Issue]) -> str:
     Returns:
         Tree-formatted text output
     """
-    issue_map = {issue.tw_id: issue for issue in issues}
+    issue_map = {issue.id: issue for issue in issues}
 
     def compute_depth(issue: Issue) -> int:
         """Compute the depth of an issue in the tree."""
         depth = 0
         current = issue
-        while current.tw_parent:
+        while current.parent:
             depth += 1
-            parent_issue = issue_map.get(current.tw_parent)
+            parent_issue = issue_map.get(current.parent)
             if not parent_issue:
                 break
             current = parent_issue
@@ -275,15 +493,15 @@ def render_tree_with_backlog(hierarchy: list[Issue], backlog: list[Issue]) -> st
     Returns:
         Tree-formatted text output with backlog section
     """
-    issue_map = {issue.tw_id: issue for issue in hierarchy}
+    issue_map = {issue.id: issue for issue in hierarchy}
 
     def compute_depth(issue: Issue) -> int:
         """Compute the depth of an issue in the tree."""
         depth = 0
         current = issue
-        while current.tw_parent:
+        while current.parent:
             depth += 1
-            parent_issue = issue_map.get(current.tw_parent)
+            parent_issue = issue_map.get(current.parent)
             if not parent_issue:
                 break
             current = parent_issue
@@ -332,14 +550,14 @@ def render_groom_content(issues: list[Issue]) -> str:
 
     for issue in issues:
         # Comment with ID
-        lines.append(f"# {issue.tw_id} ({issue.tw_type.value})")
+        lines.append(f"# {issue.id} ({issue.type.value})")
 
         # Entry line
-        lines.append(f"- {issue.tw_type.value}: {issue.title}")
+        lines.append(f"- {issue.type.value}: {issue.title}")
 
         # Body lines (indented)
-        if issue.tw_body:
-            for body_line in issue.tw_body.splitlines():
+        if issue.body:
+            for body_line in issue.body.splitlines():
                 lines.append(f"    {body_line}")
 
         lines.append("")  # Blank line between entries
@@ -377,7 +595,8 @@ def parse_groom_result(
         List of GroomAction objects describing what to do
     """
     import re
-    from tw.cli import parse_capture_dsl
+
+    from tw.cli import CaptureEntry, parse_capture_dsl
 
     actions: list[GroomAction] = []
     seen_ids: set[str] = set()
@@ -385,7 +604,7 @@ def parse_groom_result(
     # Track which ID each entry is associated with
     lines = content.splitlines()
     current_id: str | None = None
-    entries_by_id: dict[str | None, list] = {}
+    entries_by_id: dict[str | None, list[CaptureEntry]] = {}
 
     i = 0
     while i < len(lines):
@@ -416,7 +635,8 @@ def parse_groom_result(
                 i += 1
                 while i < len(lines):
                     next_line = lines[i]
-                    if next_line.startswith("#") or re.match(r'^\s*-\s*(epic|story|task|bug|idea):', next_line):
+                    issue_pattern = r'^\s*-\s*(epic|story|task|bug|idea):'
+                    if next_line.startswith("#") or re.match(issue_pattern, next_line):
                         break
                     i += 1
                 current_id = None
@@ -472,6 +692,238 @@ def render_onboard() -> str:
     """
     template = _env.get_template("onboard.md.j2")
     return template.render()
+
+
+def render_brief(
+    issue: Issue,
+    ancestors: list[Issue] | None = None,
+    siblings: list[Issue] | None = None,
+    descendants: list[Issue] | None = None,
+    referenced: list[Issue] | None = None,
+    referencing: list[Issue] | None = None,
+) -> str:
+    """Render a focused coder briefing for a subagent.
+
+    This provides everything a coder subagent needs in one document:
+    - Task context (title, status, body)
+    - Lessons from completed siblings
+    - Ancestor context
+    - Protocol (essential commands)
+    - Workflow checklist
+
+    Args:
+        issue: The issue to brief on
+        ancestors: List of ancestor issues (parent to root)
+        siblings: List of sibling issues
+        descendants: List of descendant issues
+        referenced: Issues referenced by this issue
+        referencing: Issues that reference this issue
+
+    Returns:
+        Plain markdown formatted coder briefing
+    """
+    ancestors = ancestors or []
+    siblings = siblings or []
+    descendants = descendants or []
+    referenced = referenced or []
+    referencing = referencing or []
+
+    lines: list[str] = []
+    issue_id = issue.id
+
+    lines.append(f"# Coder Brief: {issue_id}")
+    lines.append(f"type: {issue.type.value} | status: {issue.status.value}")
+    lines.append("")
+
+    if issue.status.value == "blocked":
+        blocked_reason = ""
+        if issue.annotations:
+            for ann in reversed(issue.annotations):
+                if ann.type == AnnotationType.BLOCKED:
+                    blocked_reason = ann.message.split('\n')[0]
+                    break
+        lines.append("⚠️ **WARNING: This task is BLOCKED**")
+        if blocked_reason:
+            lines.append(f"Reason: {blocked_reason}")
+        lines.append(f"Consider: `tw unblock {issue_id}` before proceeding")
+        lines.append("")
+
+    if issue.status.value == "stopped":
+        lines.append("⚠️ **This task was handed off. Read the handoff note below.**")
+        lines.append("")
+
+    if issue.status.value == "done":
+        lines.append("⚠️ **This task is already marked DONE.**")
+        lines.append("")
+
+    completed_siblings = [s for s in siblings if s.status.value == 'done']
+    sibling_lessons: list[tuple[Issue, list[Annotation]]] = []
+    for sib in completed_siblings:
+        if sib.annotations:
+            lessons = [
+                ann for ann in sib.annotations
+                if ann.type.value in ('lesson', 'deviation') and ann.message.strip()
+            ]
+            if lessons:
+                sibling_lessons.append((sib, lessons))
+
+    if sibling_lessons:
+        lines.append("")
+        lines.append("## Lessons from Completed Siblings")
+        lines.append("")
+        lines.append("**Read these first.** Previous tasks recorded these learnings:")
+        for sib, lessons in sibling_lessons:
+            truncated_title = sib.title[:50] + "..." if len(sib.title) > 50 else sib.title
+            lines.append("")
+            lines.append(f"**{sib.id}** ({truncated_title}):")
+            for lesson in lessons:
+                first_line = lesson.message.split('\n')[0]
+                lines.append(f"- [{lesson.type.value}] {first_line}")
+
+    lines.append("")
+    lines.append("## Your Task")
+    lines.append("")
+    lines.append(f"**{issue.title}**")
+    if issue.body:
+        lines.append("")
+        lines.append(issue.body)
+        lines.append("")
+
+    if issue.status.value == 'stopped' and issue.annotations:
+        for ann in reversed(issue.annotations):
+            if ann.type == AnnotationType.HANDOFF:
+                lines.append("")
+                lines.append(f"> **HANDOFF:** {ann.message}")
+                break
+
+    def render_related_issue(issue: Issue, has_repeatable_body: bool = True) -> list[str]:
+        lines = []
+        truncated_title = issue.title[:60] + "..." if len(issue.title) > 60 else issue.title
+        status_mark = "✓" if issue.status.value == "done" else "○"
+        lines.append(f"- {status_mark} **{issue.id}** [{issue.status.value}] {truncated_title}")
+        if has_repeatable_body:
+            rep_body = issue.get_repeatable_body()
+            if rep_body:
+                for body_line in rep_body.splitlines():
+                    lines.append(f"> {body_line}")
+                non_rep_body = issue.get_nonrepeatable_body()
+                if non_rep_body:
+                    lines.append(f"  (and {len(non_rep_body.splitlines())} more lines)")
+                lines.append("")
+        return lines
+
+    if ancestors:
+        lines.append("")
+        lines.append("## Parent Context")
+        lines.append("")
+        for ancestor in ancestors:
+            lines.extend(render_related_issue(ancestor))
+
+    if descendants:
+        lines.append("")
+        lines.append("## Subtasks")
+        lines.append("")
+        for desc in descendants:
+            lines.extend(render_related_issue(desc))
+
+    if siblings:
+        lines.append("")
+        lines.append("## Sibling Tasks")
+        lines.append("")
+        for sib in siblings:
+            lines.extend(render_related_issue(sib, has_repeatable_body=False))
+
+    if referencing:
+        lines.append("")
+        lines.append("## Referencing Tasks")
+        lines.append("")
+        for ref in referencing:
+            lines.extend(render_related_issue(ref, has_repeatable_body=False))
+
+    if referenced:
+        lines.append("")
+        lines.append("## Referenced Tasks")
+        lines.append("")
+        for ref in referenced:
+            lines.extend(render_related_issue(ref))
+
+    lines.append("")
+    lines.append("## Workflow")
+    lines.append("")
+    lines.append(f"1. `tw start {issue_id}`")
+    lines.append("2. (optional) `tw view OTHER-123` to inspect other issue for more details")
+    lines.append("3. Implement the task")
+    lines.append(f"4. After each commit: `tw record {issue_id} commit -m \"hash - description\"`")
+    lines.append("5. **BEFORE completing**:")
+    lines.append(f"   - Patterns established? → `tw record {issue_id} lesson -m \"...\"`")
+    lines.append(f"   - Changed from plan? → `tw record {issue_id} deviation -m \"...\"`")
+    lines.append(f"   - Surprises? → `tw record {issue_id} lesson -m \"...\"`")
+    lines.append(f"6. `tw done {issue_id}`")
+    lines.append("")
+    lines.append(
+        "**If you need to hand off before completion** "
+        "(approaching context limits or pausing work):"
+    )
+    lines.append("")
+    lines.append(
+        f"`tw handoff {issue_id} --status \"...\" --completed \"...\" --remaining \"...\"`"
+    )
+    lines.append("")
+    lines.append(
+        "Provide detailed multiline blocks for status, completed work, and remaining work."
+    )
+    lines.append(
+        "The next agent will see this prominently when they run `tw view` or `tw brief`."
+    )
+    lines.append("")
+    lines.append("Lessons should be useful when doing other work, not a summary of this commit.")
+    lines.append("When recording annotations/commits, the first line (50 chars) is the summary.")
+    lines.append("")
+    lines.append(
+        "**Note:** This brief contains everything you need for typical coding tasks. "
+        "Only reference"
+    )
+    lines.append(
+        "`tw onboard` if you need details on: other annotation types, status transitions, "
+        "body structure,"
+    )
+    lines.append(
+        "backlog grooming, or configuration. "
+        "(Warning: `tw onboard` is 700+ lines and may bloat context.)"
+    )
+
+    lines.append("")
+    lines.append("## Discovered Work")
+    lines.append("")
+    lines.append("If you find bugs or ideas unrelated to your task:")
+    lines.append("")
+    lines.append("```bash")
+    lines.append(
+        f"tw new bug --title \"...\" --body \"Discovered while working on {issue_id}. "
+        "In file:line...\""
+    )
+    lines.append("tw new idea --title \"...\" --body \"...\"")
+    lines.append("```")
+    lines.append("")
+    lines.append("**Do NOT fix unrelated issues.** Stay focused on your assigned task.")
+
+    lines.append("")
+    lines.append("## Rules")
+    lines.append("")
+    lines.append("- **Don't edit issues** — annotate instead (preserves history)")
+    lines.append("- **Record lessons before done** — mandatory, not optional")
+    lines.append("- **Use structured annotations** — lesson/deviation/commit, not generic comments")
+
+    lines.append("")
+    lines.append("## Reminder: Your Task")
+    lines.append("")
+    lines.append(f"**{issue.title}**")
+    if issue.body:
+        lines.append("")
+        lines.append(issue.body)
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def generate_edit_template(title: str, body: str | None) -> str:

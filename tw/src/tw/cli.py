@@ -7,20 +7,23 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from typing import Any
 
 import click
 import questionary
+from questionary import Style
 from rich.console import Console
 from rich.logging import RichHandler
 
 from tw import watch as watch_module
-from tw.backend import TaskWarriorBackend
-from tw.config import get_prefix, get_project
-from tw.models import AnnotationType, Issue, IssueType
+from tw.backend import SqliteBackend
+from tw.config import ConfigError, get_db_path, get_prefix
+from tw.models import AnnotationType, Issue, IssueStatus, IssueType
 from tw.render import (
     generate_edit_template,
     parse_edited_content,
     parse_groom_result,
+    render_brief,
     render_digest,
     render_groom_content,
     render_onboard,
@@ -28,17 +31,35 @@ from tw.render import (
     render_view,
 )
 from tw.service import IssueService
-from tw.tui import TwApp, run_tui
+from tw.tui import run_tui
 
 logger = logging.getLogger(__name__)
 
+PROMPT_STYLE = Style([
+    ("highlighted", "fg:white bg:blue bold"),
+    ("pointer", "fg:cyan bold"),
+    ("completion-menu", "bg:#333333 fg:#ffffff"),
+    ("completion-menu.completion", "bg:#333333 fg:#ffffff"),
+    ("completion-menu.completion.current", "bg:#0066cc fg:#ffffff bold"),
+])
+
 
 def get_service(ctx: click.Context) -> IssueService:
-    """Get configured IssueService from context."""
-    backend = TaskWarriorBackend()
+    """Get configured IssueService from context.
+
+    Raises:
+        ConfigError: If required configuration is missing.
+    """
+    if "db_path" not in ctx.obj or "prefix" not in ctx.obj:
+        try:
+            ctx.obj["db_path"] = get_db_path()
+            ctx.obj["prefix"] = get_prefix()
+        except ConfigError as e:
+            raise click.ClickException(str(e))
+
+    backend = SqliteBackend(ctx.obj["db_path"])
     return IssueService(
         backend=backend,
-        project=ctx.obj["project"],
         prefix=ctx.obj["prefix"],
     )
 
@@ -171,8 +192,6 @@ def parse_capture_dsl(content: str) -> list[CaptureEntry]:
     default="auto",
     help="Control color output",
 )
-@click.option("--project-name", envvar="TW_PROJECT_NAME", default=None)
-@click.option("--project-prefix", envvar="TW_PROJECT_PREFIX", default=None)
 @click.version_option(version="0.1.0")
 @click.pass_context
 def main(
@@ -181,10 +200,8 @@ def main(
     quiet: bool,
     json_output: bool,
     color: str,
-    project_name: str | None,
-    project_prefix: str | None,
 ) -> None:
-    """tw - TaskWarrior-backed issue tracker for AI agents."""
+    """tw - SQLite-backed issue tracker for AI agents."""
     ctx.ensure_object(dict)
 
     # Create consoles based on color flag
@@ -203,14 +220,12 @@ def main(
     if verbose:
         logging.basicConfig(level=logging.DEBUG, handlers=handlers, force=True)
         logging.getLogger("markdown_it").setLevel(logging.INFO)
-    elif quiet:
+    elif quiet or json_output:
         logging.basicConfig(level=logging.ERROR, handlers=handlers, force=True)
     else:
         logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
 
     ctx.obj["json"] = json_output
-    ctx.obj["project"] = project_name or get_project()
-    ctx.obj["prefix"] = project_prefix or get_prefix()
     ctx.obj["stdout"] = stdout_console
     ctx.obj["stderr"] = stderr_console
 
@@ -449,47 +464,64 @@ def record(ctx: click.Context, tw_id: str, record_type: str, message: str) -> No
 @click.argument("tw_id")
 @click.pass_context
 def view(ctx: click.Context, tw_id: str) -> None:
-    """View an issue with all context."""
+    """View an issue without related context."""
     try:
         service = get_service(ctx)
-        issue, ancestors, siblings, descendants, referenced, referencing = service.get_issue_with_context(tw_id)
+        result = service.get_issue_with_context(tw_id)
+        issue, ancestors, siblings, descendants, referenced, referencing = result
 
         console: Console = ctx.obj["stdout"]
         if ctx.obj["json"]:
-            def issue_to_dict(i: Issue) -> dict:
-                return {
-                    "uuid": i.uuid,
-                    "tw_id": i.tw_id,
-                    "tw_type": i.tw_type.value,
-                    "title": i.title,
-                    "tw_status": i.tw_status.value,
-                    "project": i.project,
-                    "tw_parent": i.tw_parent,
-                    "tw_body": i.tw_body,
-                    "tw_refs": i.tw_refs,
-                    "annotations": [
-                        {
-                            "type": ann.type.value,
-                            "timestamp": ann.timestamp.isoformat(),
-                            "message": ann.message,
-                        }
-                        for ann in (i.annotations or [])
-                    ],
-                }
-
             output = {
-                "issue": issue_to_dict(issue),
-                "ancestors": [issue_to_dict(i) for i in ancestors],
-                "siblings": [issue_to_dict(i) for i in siblings],
-                "descendants": [issue_to_dict(i) for i in descendants],
-                "referenced": [issue_to_dict(i) for i in referenced],
-                "referencing": [issue_to_dict(i) for i in referencing],
+                "tw_id": issue.id,
+                "tw_type": issue.type.value,
+                "title": issue.title,
+                "tw_status": issue.status.value,
+                "tw_parent": issue.parent,
+                "tw_body": issue.body,
+                "tw_refs": issue.refs,
+                "created_at": issue.created_at.isoformat(),
+                "updated_at": issue.updated_at.isoformat(),
+                "annotations": [
+                    {
+                        "type": ann.type.value,
+                        "timestamp": ann.timestamp.isoformat(),
+                        "message": ann.message,
+                    }
+                    for ann in (issue.annotations or [])
+                ],
             }
             # Use click.echo for JSON to avoid Rich's word-wrapping
             click.echo(json.dumps(output, indent=2))
         else:
-            console.print(render_view(issue, ancestors, siblings, descendants, referenced, referencing))
+            rendered = render_view(
+                issue, ancestors, siblings, descendants, referenced, referencing
+            )
+            console.print(rendered)
 
+    except Exception as e:
+        click.echo(f"error: {e}", err=True)
+        ctx.exit(1)
+
+
+@main.command()
+@click.argument("tw_id")
+@click.pass_context
+def brief(ctx: click.Context, tw_id: str) -> None:
+    """Output a focused coder briefing for a subagent.
+
+    Provides everything a coder subagent needs in one document:
+    task context, sibling lessons, ancestor context, protocol, and workflow.
+
+    Use this when dispatching subagents to implement tasks.
+    """
+    try:
+        service = get_service(ctx)
+        result = service.get_issue_with_context(tw_id)
+        issue, ancestors, siblings, descendants, referenced, referencing = result
+        click.echo(render_brief(
+            issue, ancestors, siblings, descendants, referenced, referencing
+        ))
     except Exception as e:
         click.echo(f"error: {e}", err=True)
         ctx.exit(1)
@@ -518,8 +550,8 @@ def edit(
 
             choices = [
                 questionary.Choice(
-                    title=f"{issue.tw_id}: {issue.title}",
-                    value=issue.tw_id,
+                    title=f"{issue.id}: {issue.title}",
+                    value=issue.id,
                 )
                 for issue in issues
             ]
@@ -527,6 +559,7 @@ def edit(
             selected = questionary.select(
                 "Select an issue to edit:",
                 choices=choices,
+                style=PROMPT_STYLE,
             ).ask()
 
             if selected is None:
@@ -539,7 +572,7 @@ def edit(
 
             editor = os.environ.get("EDITOR", "nano")
 
-            template = generate_edit_template(issue.title, issue.tw_body)
+            template = generate_edit_template(issue.title, issue.body)
 
             with tempfile.NamedTemporaryFile(
                 mode="w+", suffix=".md", delete=False
@@ -590,17 +623,17 @@ def tree(ctx: click.Context, tw_id: str | None) -> None:
 
         console: Console = ctx.obj["stdout"]
         if ctx.obj["json"]:
-            def issue_to_dict(issue: Issue) -> dict:
+            def issue_to_dict(issue: Issue) -> dict[str, Any]:
                 return {
-                    "uuid": issue.uuid,
-                    "tw_id": issue.tw_id,
-                    "tw_type": issue.tw_type.value,
+                    "tw_id": issue.id,
+                    "tw_type": issue.type.value,
                     "title": issue.title,
-                    "tw_status": issue.tw_status.value,
-                    "project": issue.project,
-                    "tw_parent": issue.tw_parent,
-                    "tw_body": issue.tw_body,
-                    "tw_refs": issue.tw_refs,
+                    "tw_status": issue.status.value,
+                    "tw_parent": issue.parent,
+                    "tw_body": issue.body,
+                    "tw_refs": issue.refs,
+                    "created_at": issue.created_at.isoformat(),
+                    "updated_at": issue.updated_at.isoformat(),
                     "annotations": [
                         {
                             "type": ann.type.value,
@@ -656,7 +689,7 @@ def watch(ctx: click.Context, subcommand: str, tw_id: str | None, interval: int)
     try:
         service = get_service(ctx)
         console: Console = ctx.obj["stdout"]
-        watch_module.watch_tree(service, tw_id, interval, console)
+        watch_module.watch_tree(service, tw_id, interval, console, ctx.obj["db_path"])
     except RuntimeError as e:
         click.echo(f"error: {e}", err=True)
         ctx.exit(1)
@@ -677,15 +710,15 @@ def digest(ctx: click.Context, tw_id: str) -> None:
         console: Console = ctx.obj["stdout"]
         if ctx.obj["json"]:
             parent_dict = {
-                "uuid": parent.uuid,
-                "tw_id": parent.tw_id,
-                "tw_type": parent.tw_type.value,
+                "tw_id": parent.id,
+                "tw_type": parent.type.value,
                 "title": parent.title,
-                "tw_status": parent.tw_status.value,
-                "project": parent.project,
-                "tw_parent": parent.tw_parent,
-                "tw_body": parent.tw_body,
-                "tw_refs": parent.tw_refs,
+                "tw_status": parent.status.value,
+                "tw_parent": parent.parent,
+                "tw_body": parent.body,
+                "tw_refs": parent.refs,
+                "created_at": parent.created_at.isoformat(),
+                "updated_at": parent.updated_at.isoformat(),
                 "annotations": [
                     {
                         "type": ann.type.value,
@@ -697,15 +730,15 @@ def digest(ctx: click.Context, tw_id: str) -> None:
             }
             children_list = [
                 {
-                    "uuid": child.uuid,
-                    "tw_id": child.tw_id,
-                    "tw_type": child.tw_type.value,
+                    "tw_id": child.id,
+                    "tw_type": child.type.value,
                     "title": child.title,
-                    "tw_status": child.tw_status.value,
-                    "project": child.project,
-                    "tw_parent": child.tw_parent,
-                    "tw_body": child.tw_body,
-                    "tw_refs": child.tw_refs,
+                    "tw_status": child.status.value,
+                    "tw_parent": child.parent,
+                    "tw_body": child.body,
+                    "tw_refs": child.refs,
+                    "created_at": child.created_at.isoformat(),
+                    "updated_at": child.updated_at.isoformat(),
                     "annotations": [
                         {
                             "type": ann.type.value,
@@ -825,7 +858,7 @@ def groom(ctx: click.Context) -> None:
             console.print("No backlog items to groom")
             return
 
-        original_ids = [i.tw_id for i in backlog]
+        original_ids = [i.id for i in backlog]
         content = render_groom_content(backlog)
 
         # Open editor
@@ -856,9 +889,12 @@ def groom(ctx: click.Context) -> None:
 
         for action in actions:
             if action.action == "resolve":
-                service.done_issue(action.original_id)
-                summary["resolved"] += 1
+                if action.original_id:
+                    service.done_issue(action.original_id)
+                    summary["resolved"] += 1
             elif action.action == "create":
+                if not action.title or not action.issue_type:
+                    continue
                 parent_id = title_to_id.get(action.parent_title) if action.parent_title else None
                 tw_id = service.create_issue(
                     issue_type=IssueType(action.issue_type),
@@ -891,6 +927,81 @@ def tui(ctx: click.Context) -> None:
     """Launch the interactive TUI for tw issue tracker."""
     try:
         run_tui()
+    except Exception as e:
+        click.echo(f"error: {e}", err=True)
+        ctx.exit(1)
+
+
+@main.command("claude")
+@click.argument("tw_id", required=False, default=None)
+@click.option("--opus", is_flag=True, help="Use Claude Opus model")
+@click.option("--sonnet", is_flag=True, help="Use Claude Sonnet model")
+@click.option("--haiku", is_flag=True, help="Use Claude Haiku model")
+@click.pass_context
+def claude_cmd(
+    ctx: click.Context, tw_id: str | None, opus: bool, sonnet: bool, haiku: bool
+) -> None:
+    """Launch Claude with an issue brief as the initial prompt.
+
+    If no issue ID is provided, shows an interactive selection of actionable issues.
+    """
+    try:
+        service = get_service(ctx)
+
+        if tw_id is None:
+            issues = service.get_issue_tree()
+            actionable = [i for i in issues if i.status != IssueStatus.DONE]
+
+            if not actionable:
+                click.echo("No actionable issues", err=True)
+                ctx.exit(1)
+
+            choices = [f"{issue.id}: {issue.title}" for issue in actionable]
+
+            selected = questionary.autocomplete(
+                "Select an issue:",
+                choices=choices,
+                style=PROMPT_STYLE,
+            ).ask()
+
+            if selected is None:
+                ctx.exit(0)
+
+            tw_id = selected.split(":")[0]
+
+        model = None
+        if sum([opus, sonnet, haiku]) > 1:
+            click.echo("error: only one model flag can be specified", err=True)
+            ctx.exit(1)
+        elif opus:
+            model = "opus"
+        elif sonnet:
+            model = "sonnet"
+        elif haiku:
+            model = "haiku"
+        else:
+            model_choice = questionary.select(
+                "Select model:",
+                choices=[
+                    questionary.Choice("Opus", value="opus"),
+                    questionary.Choice("Sonnet", value="sonnet"),
+                    questionary.Choice("Haiku", value="haiku"),
+                ],
+                style=PROMPT_STYLE,
+            ).ask()
+
+            if model_choice is None:
+                ctx.exit(0)
+
+            model = model_choice
+
+        issue, ancestors, siblings, descendants, referenced, referencing = (
+            service.get_issue_with_context(tw_id)
+        )
+        brief_output = render_brief(
+            issue, ancestors, siblings, descendants, referenced, referencing
+        )
+        subprocess.run(["claude", "--dangerously-skip-permissions", "--model", model, brief_output])
     except Exception as e:
         click.echo(f"error: {e}", err=True)
         ctx.exit(1)

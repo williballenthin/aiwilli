@@ -1,174 +1,215 @@
-"""Tests for TaskWarrior backend."""
+"""Tests for SQLite backend."""
 
-import json
-import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from tw.backend import TaskWarriorBackend
-from tw.models import Annotation, Issue, IssueStatus, IssueType
+from tw.backend import SqliteBackend
+from tw.models import Issue, IssueStatus, IssueType
 
 
-class TestTaskWarriorBackend:
-    def test_parse_export_json(self, temp_dir: Path) -> None:
-        """Parse TaskWarrior export JSON into Issue objects."""
-        export_data = [
-            {
-                "uuid": "abc-123",
-                "description": "User Authentication",
-                "project": "myproject",
-                "status": "pending",
-                "tw_type": "epic",
-                "tw_id": "PROJ-1",
-                "tw_status": "new",
-            },
-            {
-                "uuid": "def-456",
-                "description": "Login Flow",
-                "project": "myproject",
-                "status": "pending",
-                "tw_type": "story",
-                "tw_id": "PROJ-1-1",
-                "tw_parent": "PROJ-1",
-                "tw_status": "in_progress",
-                "tw_body": "Handle login\n---\nDetails",
-            },
-        ]
+@pytest.fixture
+def backend(temp_dir: Path) -> SqliteBackend:
+    """Provide a fresh SqliteBackend for testing."""
+    db_path = temp_dir / "test.db"
+    return SqliteBackend(db_path)
 
-        backend = TaskWarriorBackend()
-        issues = backend.parse_export(json.dumps(export_data))
 
-        assert len(issues) == 2
-        assert issues[0].tw_id == "PROJ-1"
-        assert issues[0].tw_type == IssueType.EPIC
-        assert issues[0].tw_status == IssueStatus.NEW
-        assert issues[1].tw_parent == "PROJ-1"
-        assert issues[1].tw_body == "Handle login\n---\nDetails"
+class TestBackendRefs:
+    def test_refs_stored_in_join_table(self, backend: SqliteBackend) -> None:
+        """Refs should be stored in issue_refs table, not as comma-separated."""
+        now = datetime.now(UTC)
 
-    def test_parse_export_with_annotations(self) -> None:
-        export_data = [
-            {
-                "uuid": "abc-123",
-                "description": "Task",
-                "project": "myproject",
-                "status": "pending",
-                "tw_type": "task",
-                "tw_id": "PROJ-1-1a",
-                "tw_status": "in_progress",
-                "annotations": [
-                    {
-                        "entry": "20240115T103000Z",
-                        "description": "[lesson] Important lesson",
-                    }
-                ],
-            }
-        ]
-
-        backend = TaskWarriorBackend()
-        issues = backend.parse_export(json.dumps(export_data))
-
-        assert len(issues[0].annotations) == 1
-        assert issues[0].annotations[0].message == "Important lesson"
-
-    def test_build_import_json(self) -> None:
-        """Build JSON for TaskWarrior import."""
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
-            title="User Auth",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_body="Summary\n---\nDetails",
+        target = Issue(
+            id="TEST-1",
+            type=IssueType.EPIC,
+            title="Target",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
         )
+        backend.save_issue(target)
 
-        backend = TaskWarriorBackend()
-        result = json.loads(backend.build_import_json(issue))
+        source = Issue(
+            id="TEST-2",
+            type=IssueType.EPIC,
+            title="Source",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            refs=["TEST-1"],
+        )
+        backend.save_issue(source)
 
-        assert result["uuid"] == "abc-123"
-        assert result["description"] == "User Auth"
-        assert result["tw_type"] == "epic"
-        assert result["tw_id"] == "PROJ-1"
-        assert result["tw_status"] == "new"
-        assert result["tw_body"] == "Summary\n---\nDetails"
+        retrieved = backend.get_issue("TEST-2")
+        assert retrieved is not None
+        assert retrieved.refs == ["TEST-1"]
+
+    def test_refs_reverse_lookup(self, backend: SqliteBackend) -> None:
+        """Should be able to find issues that reference a given issue."""
+        now = datetime.now(UTC)
+
+        target = Issue(
+            id="TEST-1",
+            type=IssueType.EPIC,
+            title="Target",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+        )
+        backend.save_issue(target)
+
+        source1 = Issue(
+            id="TEST-2",
+            type=IssueType.EPIC,
+            title="Source 1",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            refs=["TEST-1"],
+        )
+        backend.save_issue(source1)
+
+        source2 = Issue(
+            id="TEST-3",
+            type=IssueType.EPIC,
+            title="Source 2",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            refs=["TEST-1"],
+        )
+        backend.save_issue(source2)
+
+        referencing = backend.get_issues_referencing("TEST-1")
+        assert set(referencing) == {"TEST-2", "TEST-3"}
+
+    def test_delete_issue_sets_ref_to_null(self, backend: SqliteBackend) -> None:
+        """Deleting a referenced issue should set refs to NULL, not delete the row."""
+        now = datetime.now(UTC)
+
+        target = Issue(
+            id="TEST-1",
+            type=IssueType.EPIC,
+            title="Target",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+        )
+        backend.save_issue(target)
+
+        source = Issue(
+            id="TEST-2",
+            type=IssueType.EPIC,
+            title="Source",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            refs=["TEST-1"],
+        )
+        backend.save_issue(source)
+
+        backend.delete_issue("TEST-1")
+
+        retrieved = backend.get_issue("TEST-2")
+        assert retrieved is not None
+        assert retrieved.refs == []
+
+    def test_refs_to_nonexistent_issue_skipped(self, backend: SqliteBackend) -> None:
+        """Refs to non-existent issues should be silently skipped."""
+        now = datetime.now(UTC)
+
+        source = Issue(
+            id="TEST-1",
+            type=IssueType.EPIC,
+            title="Source",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            refs=["TEST-999"],
+        )
+        backend.save_issue(source)
+
+        retrieved = backend.get_issue("TEST-1")
+        assert retrieved is not None
+        assert retrieved.refs == []
 
 
-@pytest.mark.skipif(shutil.which("task") is None, reason="TaskWarrior not installed")
-class TestTaskWarriorBackendIntegration:
-    def test_export_project(self, taskwarrior_env: dict[str, str]) -> None:
-        """Export issues for a project."""
-        backend = TaskWarriorBackend(env=taskwarrior_env)
-
-        # Initially empty
-        issues = backend.export_project("testproj")
-        assert issues == []
-
-    def test_import_and_export(self, taskwarrior_env: dict[str, str]) -> None:
-        """Import an issue and export it back."""
-        backend = TaskWarriorBackend(env=taskwarrior_env)
+class TestBackendBasics:
+    def test_save_and_retrieve_issue(self, backend: SqliteBackend) -> None:
+        """Basic save and retrieve should work without project parameter."""
+        now = datetime.now(UTC)
 
         issue = Issue(
-            uuid="11111111-1111-1111-1111-111111111111",
-            tw_id="TEST-1",
-            tw_type=IssueType.EPIC,
+            id="TEST-1",
+            type=IssueType.EPIC,
             title="Test Epic",
-            tw_status=IssueStatus.NEW,
-            project="testproj",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
         )
+        backend.save_issue(issue)
 
-        backend.import_issue(issue)
-        issues = backend.export_project("testproj")
+        retrieved = backend.get_issue("TEST-1")
+        assert retrieved is not None
+        assert retrieved.id == "TEST-1"
+        assert retrieved.title == "Test Epic"
 
-        assert len(issues) == 1
-        assert issues[0].tw_id == "TEST-1"
-        assert issues[0].title == "Test Epic"
-
-    def test_export_all_ids(self, taskwarrior_env: dict[str, str]) -> None:
-        """Get all tw_ids in a project."""
-        backend = TaskWarriorBackend(env=taskwarrior_env)
+    def test_get_all_issues(self, backend: SqliteBackend) -> None:
+        """get_all_issues should return all issues."""
+        now = datetime.now(UTC)
 
         for i in range(3):
             issue = Issue(
-                uuid=backend.generate_uuid(),
-                tw_id=f"TEST-{i+1}",
-                tw_type=IssueType.EPIC,
+                id=f"TEST-{i+1}",
+                type=IssueType.EPIC,
                 title=f"Epic {i+1}",
-                tw_status=IssueStatus.NEW,
-                project="testproj",
+                status=IssueStatus.NEW,
+                created_at=now,
+                updated_at=now,
             )
-            backend.import_issue(issue)
+            backend.save_issue(issue)
 
-        ids = backend.get_all_ids("testproj")
-        assert sorted(ids) == ["TEST-1", "TEST-2", "TEST-3"]
+        issues = backend.get_all_issues()
+        assert len(issues) == 3
 
-    def test_get_all_ids_include_deleted(
-        self, taskwarrior_env: dict[str, str]
-    ) -> None:
-        """include_deleted=True returns IDs of deleted issues."""
-        backend = TaskWarriorBackend(env=taskwarrior_env)
+    def test_get_all_ids(self, backend: SqliteBackend) -> None:
+        """get_all_ids should return all issue IDs."""
+        now = datetime.now(UTC)
 
-        uuids = []
         for i in range(3):
-            uuid = backend.generate_uuid()
-            uuids.append(uuid)
             issue = Issue(
-                uuid=uuid,
-                tw_id=f"TEST-{i+1}",
-                tw_type=IssueType.EPIC,
+                id=f"TEST-{i+1}",
+                type=IssueType.EPIC,
                 title=f"Epic {i+1}",
-                tw_status=IssueStatus.NEW,
-                project="testproj",
+                status=IssueStatus.NEW,
+                created_at=now,
+                updated_at=now,
             )
-            backend.import_issue(issue)
+            backend.save_issue(issue)
 
-        # Delete TEST-3
-        backend.delete_issue(uuids[2])
+        ids = backend.get_all_ids()
+        assert set(ids) == {"TEST-1", "TEST-2", "TEST-3"}
 
-        # Without include_deleted: excludes deleted
-        ids = backend.get_all_ids("testproj")
-        assert sorted(ids) == ["TEST-1", "TEST-2"]
+    def test_delete_issue(self, backend: SqliteBackend) -> None:
+        """delete_issue should remove the issue."""
+        now = datetime.now(UTC)
 
-        # With include_deleted: includes deleted
-        ids_with_deleted = backend.get_all_ids("testproj", include_deleted=True)
-        assert sorted(ids_with_deleted) == ["TEST-1", "TEST-2", "TEST-3"]
+        issue = Issue(
+            id="TEST-1",
+            type=IssueType.EPIC,
+            title="Test Epic",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+        )
+        backend.save_issue(issue)
+        backend.delete_issue("TEST-1")
+
+        assert backend.get_issue("TEST-1") is None
+
+    def test_delete_nonexistent_issue_raises(self, backend: SqliteBackend) -> None:
+        """delete_issue should raise KeyError for non-existent issue."""
+        with pytest.raises(KeyError, match="not found"):
+            backend.delete_issue("TEST-999")

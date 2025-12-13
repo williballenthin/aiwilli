@@ -1,12 +1,12 @@
 {% for issue, depth in issues_with_depth %}
 {% set indent = '  ' * depth %}
 {% set ts = issue|status_timestamp %}
-{% if issue.tw_status.value == 'done' %}{{ indent }}[gray69]{{ issue.tw_type.value }}[/gray69][gray69]:[/gray69] [gray69]{{ issue.title }}[/gray69] [gray69]([/gray69][blue]{{ issue.tw_id }}[/blue][gray69], done)[/gray69]
-{% elif issue.tw_status.value == 'in_progress' %}{{ indent }}[gray69]{{ issue.tw_type.value }}[/gray69][gray69]:[/gray69] [default]{{ issue.title }}[/default] [gray69]([/gray69][blue]{{ issue.tw_id }}[/blue][gray69], [/gray69][yellow]in_progress[/yellow]{% if ts %} ({{ ts }}){% endif %}[gray69])[/gray69]
-{% elif issue.tw_status.value == 'blocked' or issue.tw_status.value == 'stopped' %}{{ indent }}[gray69]{{ issue.tw_type.value }}[/gray69][gray69]:[/gray69] [default]{{ issue.title }}[/default] [gray69]([/gray69][blue]{{ issue.tw_id }}[/blue][gray69], [/gray69][red]{{ issue.tw_status.value }}[/red]{% if ts %} ({{ ts }}){% endif %}[gray69])[/gray69]
-{% else %}{{ indent }}[gray69]{{ issue.tw_type.value }}[/gray69][gray69]:[/gray69] [default]{{ issue.title }}[/default] [gray69]([/gray69][blue]{{ issue.tw_id }}[/blue][gray69])[/gray69]
+{% if issue.status.value == 'done' %}{{ indent }}[gray69]{{ issue.type.value }}[/gray69][gray69]:[/gray69] [gray69]{{ issue.title }}[/gray69] [gray69]([/gray69][blue]{{ issue.id }}[/blue][gray69], done)[/gray69]
+{% elif issue.status.value == 'in_progress' %}{{ indent }}[gray69]{{ issue.type.value }}[/gray69][gray69]:[/gray69] [default]{{ issue.title }}[/default] [gray69]([/gray69][blue]{{ issue.id }}[/blue][gray69], [/gray69][yellow]in_progress[/yellow]{% if ts %} ({{ ts }}){% endif %}[gray69])[/gray69]
+{% elif issue.status.value == 'blocked' or issue.status.value == 'stopped' %}{{ indent }}[gray69]{{ issue.type.value }}[/gray69][gray69]:[/gray69] [default]{{ issue.title }}[/default] [gray69]([/gray69][blue]{{ issue.id }}[/blue][gray69], [/gray69][red]{{ issue.status.value }}[/red]{% if ts %} ({{ ts }}){% endif %}[gray69])[/gray69]
+{% else %}{{ indent }}[gray69]{{ issue.type.value }}[/gray69][gray69]:[/gray69] [default]{{ issue.title }}[/default] [gray69]([/gray69][blue]{{ issue.id }}[/blue][gray69])[/gray69]
 {% endif %}
-{% if issue.tw_type.value == 'task' and issue.annotations %}
+{% if issue.type.value == 'task' and issue.annotations %}
 {% for ann in issue.annotations %}
 {% if ann.type.value not in ('work-begin', 'work-end') %}
 [dim]{{ indent }}  {{ ann.type.value }}: {{ ann.timestamp|relative_time }}, {{ ann.message.split('\n')[0] }}[/dim]
@@ -19,6 +19,6 @@
 ───────────────── Backlog ─────────────────
 
 {% for issue, depth in backlog_with_depth %}
-{{ issue.tw_type.value }}: {{ issue.title }} ([blue]{{ issue.tw_id }}[/blue])
+{{ issue.type.value }}: {{ issue.title }} ([blue]{{ issue.id }}[/blue])
 {% endfor %}
 {% endif %}

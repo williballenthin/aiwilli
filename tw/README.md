@@ -1,6 +1,6 @@
-# tw - TaskWarrior-backed Issue Tracker for AI Agents
+# tw - SQLite-backed Issue Tracker for AI Agents
 
-`tw` is a command-line issue tracker optimized for AI agent workflows. It wraps TaskWarrior with a hierarchical issue structure (epics → stories → tasks) and provides specialized commands for agent-friendly handoffs, context preservation, and work tracking.
+`tw` is a command-line issue tracker optimized for AI agent workflows. It uses SQLite for data storage with a hierarchical issue structure (epics → stories → tasks) and provides specialized commands for agent-friendly handoffs, context preservation, and work tracking.
 
 ## Features
 
@@ -16,7 +16,6 @@
 ### Prerequisites
 
 - Python 3.11 or higher
-- [TaskWarrior](https://taskwarrior.org/) 2.6.0 or higher
 
 ### Install from Source
 
@@ -24,25 +23,6 @@
 git clone <repository-url>
 cd tw
 pip install -e ".[dev]"
-```
-
-### Configure TaskWarrior UDAs
-
-Add the following User Defined Attributes to your `~/.taskrc`:
-
-```
-uda.tw_type.type=string
-uda.tw_type.label=Type
-uda.tw_id.type=string
-uda.tw_id.label=TW ID
-uda.tw_parent.type=string
-uda.tw_parent.label=Parent
-uda.tw_body.type=string
-uda.tw_body.label=Body
-uda.tw_refs.type=string
-uda.tw_refs.label=Refs
-uda.tw_status.type=string
-uda.tw_status.label=TW Status
 ```
 
 ## Quick Start
@@ -312,18 +292,16 @@ Annotations are timestamped notes attached to issues. They support typed annotat
 
 ## Environment Variables
 
-### `TW_PROJECT_NAME`
+### `TW_DB_PATH`
 
-The TaskWarrior project name to use for issue storage.
-
-**Default:** `default`
+Path to the SQLite database file for storing issues.
 
 **Example:**
 ```bash
-export TW_PROJECT_NAME="myproject"
+export TW_DB_PATH="$HOME/.tw/issues.db"
 ```
 
-### `TW_PROJECT_PREFIX`
+### `TW_PROJECT_PREFIX` (or `TW_PREFIX`)
 
 The prefix used for generating issue IDs.
 
@@ -334,10 +312,6 @@ The prefix used for generating issue IDs.
 export TW_PROJECT_PREFIX="AUTH"
 # Results in IDs like: AUTH-1, AUTH-1-1, AUTH-1-1a
 ```
-
-### Backward Compatibility
-
-The tool also respects `PROJECT_NAME` and `PROJECT_PREFIX` (without `TW_` prefix) for backward compatibility, but `TW_*` variables take precedence.
 
 ## Global Options
 
@@ -413,8 +387,6 @@ pytest -v
 pytest --no-cov
 ```
 
-**Note:** Some tests require TaskWarrior to be installed. Tests will be skipped if TaskWarrior is not available.
-
 ### Linting and Type Checking
 
 ```bash
@@ -443,7 +415,7 @@ This project follows these conventions:
 ### Components
 
 - **`tw.models`**: Core data models (Issue, Annotation, IssueType, IssueStatus)
-- **`tw.backend`**: TaskWarrior integration layer (export/import via JSON)
+- **`tw.backend`**: SQLite database integration layer
 - **`tw.ids`**: ID parsing, generation, and sorting utilities
 - **`tw.refs`**: Reference extraction from text
 - **`tw.service`**: High-level business logic (IssueService)
@@ -456,9 +428,9 @@ CLI Command
     ↓
 IssueService (business logic)
     ↓
-TaskWarriorBackend (JSON import/export)
+SqliteBackend (database operations)
     ↓
-TaskWarrior (task command subprocess)
+SQLite Database
 ```
 
 ### Issue Hierarchy

@@ -1,12 +1,12 @@
-# {{ parent.tw_id }}: {{ parent.title }}
+# {{ parent.id }}: {{ parent.title }}
 
-**Type:** {{ parent.tw_type.value }}
-**Status:** {{ parent.tw_status.value }}
+**Type:** {{ parent.type.value }}
+**Status:** {{ parent.status.value }}
 
-{% if parent.tw_body %}
+{% if parent.body %}
 ## Description
 
-{{ parent.tw_body }}
+{{ parent.body }}
 {% endif %}
 
 {% if children %}
@@ -15,7 +15,7 @@
 | ID | Type | Status | Title |
 |---|---|---|---|
 {% for child in children %}
-| {{ child.tw_id }} | {{ child.tw_type.value }} | {{ child.tw_status.value }} | {{ child.title }} |
+| {{ child.id }} | {{ child.type.value }} | {{ child.status.value }} | {{ child.title }} |
 {% endfor %}
 
 {% set all_lessons = [] %}
@@ -24,9 +24,9 @@
   {% if child.annotations %}
     {% for ann in child.annotations %}
       {% if ann.type.value == "lesson" %}
-        {% set _ = all_lessons.append((child.tw_id, ann.message)) %}
+        {% set _ = all_lessons.append((child.id, ann.message)) %}
       {% elif ann.type.value == "deviation" %}
-        {% set _ = all_deviations.append((child.tw_id, ann.message)) %}
+        {% set _ = all_deviations.append((child.id, ann.message)) %}
       {% endif %}
     {% endfor %}
   {% endif %}
@@ -35,16 +35,16 @@
 {% if all_lessons %}
 ## Lessons
 
-{% for tw_id, lesson in all_lessons %}
-- **{{ tw_id }}**: {{ lesson }}
+{% for child_id, lesson in all_lessons %}
+- **{{ child_id }}**: {{ lesson }}
 {% endfor %}
 {% endif %}
 
 {% if all_deviations %}
 ## Deviations
 
-{% for tw_id, deviation in all_deviations %}
-- **{{ tw_id }}**: {{ deviation }}
+{% for child_id, deviation in all_deviations %}
+- **{{ child_id }}**: {{ deviation }}
 {% endfor %}
 {% endif %}
 {% else %}

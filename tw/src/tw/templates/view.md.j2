@@ -1,5 +1,5 @@
-# {{ issue.tw_id }}: {{ issue.title }}
-{% if issue.tw_status.value == 'stopped' %}
+# {{ issue.id }}: {{ issue.title }}
+{% if issue.status.value == 'stopped' %}
 {% set handoff = issue.annotations | selectattr('type.value', 'equalto', 'handoff') | list | last %}
 {% if handoff %}
 
@@ -7,15 +7,15 @@
 {% endif %}
 {% endif %}
 
-{% set props = [issue.tw_type.value, issue.tw_status.value] %}
-{% if issue.tw_parent %}{% set props = props + ['parent: ' + issue.tw_parent] %}{% endif %}
-{% if issue.tw_refs %}{% set props = props + ['refs: ' + issue.tw_refs|join(', ')] %}{% endif %}
+{% set props = [issue.type.value, issue.status.value] %}
+{% if issue.parent %}{% set props = props + ['parent: ' + issue.parent] %}{% endif %}
+{% if issue.refs %}{% set props = props + ['refs: ' + issue.refs|join(', ')] %}{% endif %}
 *{{ props | join(' | ') }}*
 
-{% if issue.tw_body %}
+{% if issue.body %}
 ## Body
 
-{{ issue.tw_body }}
+{{ issue.body }}
 {% endif %}
 {% if issue.annotations %}
 {% set visible_annotations = issue.annotations | rejectattr('type.value', 'in', ['work-begin', 'work-end']) | selectattr('message') | list %}
@@ -36,14 +36,14 @@
 ## Ancestors
 
 {% for ancestor in ancestors | reverse %}
-### {{ ancestor.tw_id }}: {{ ancestor.title }}
+### {{ ancestor.id }}: {{ ancestor.title }}
 
-**Type:** {{ ancestor.tw_type.value }} | **Status:** {{ ancestor.tw_status.value }}
-{% if ancestor.tw_body %}
-{% if '---' in ancestor.tw_body %}
-{{ ancestor.tw_body.split('---')[0].strip() }}
+**Type:** {{ ancestor.type.value }} | **Status:** {{ ancestor.status.value }}
+{% if ancestor.body %}
+{% if '---' in ancestor.body %}
+{{ ancestor.body.split('---')[0].strip() }}
 {% else %}
-{{ ancestor.tw_body }}
+{{ ancestor.body }}
 {% endif %}
 {% endif %}
 {% endfor %}
@@ -54,6 +54,29 @@
 
 {% for sibling in siblings %}
 {{ sibling|render_tree_line(0) }}
+{% endfor %}
+{% endif %}
+
+{% set completed_siblings = siblings | selectattr('status.value', 'equalto', 'done') | list %}
+{% set sibling_lessons = [] %}
+{% for sibling in completed_siblings %}
+{% if sibling.annotations %}
+{% set lessons = sibling.annotations | selectattr('type.value', 'in', ['lesson', 'deviation']) | list %}
+{% if lessons %}
+{% set _ = sibling_lessons.append({'sibling': sibling, 'lessons': lessons}) %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if sibling_lessons %}
+
+## Lessons from Siblings
+
+{% for item in sibling_lessons %}
+**{{ item.sibling.id }}** ({{ item.sibling.title | truncate(40) }}):
+{% for lesson in item.lessons %}
+- [{{ lesson.type.value }}] {{ lesson.message.split('\n')[0] }}
+{% endfor %}
+
 {% endfor %}
 {% endif %}
 

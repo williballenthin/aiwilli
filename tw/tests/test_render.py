@@ -1,34 +1,36 @@
 """Tests for Jinja template rendering."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
-from datetime import datetime, timedelta, timezone
 
 from tw.models import Annotation, AnnotationType, Issue, IssueStatus, IssueType
 from tw.render import (
+    generate_edit_template,
+    get_status_timestamp,
+    parse_edited_content,
+    parse_groom_result,
+    relative_time,
+    render_brief,
     render_digest,
     render_groom_content,
-    relative_time,
     render_tree,
     render_view,
-    parse_groom_result,
-    GroomAction,
-    get_status_timestamp,
     status_timestamp,
-    generate_edit_template,
-    parse_edited_content,
 )
 
 
 class TestRelativeTime:
     def test_relative_time_just_now(self) -> None:
         """Test relative time for very recent timestamps."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recent = now - timedelta(seconds=30)
         assert relative_time(recent) == "just now"
 
     def test_relative_time_minutes(self) -> None:
         """Test relative time for minutes ago."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         five_min_ago = now - timedelta(minutes=5)
         assert relative_time(five_min_ago) == "5 minutes ago"
         one_min_ago = now - timedelta(minutes=1)
@@ -36,7 +38,7 @@ class TestRelativeTime:
 
     def test_relative_time_hours(self) -> None:
         """Test relative time for hours ago."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         three_hours_ago = now - timedelta(hours=3)
         assert relative_time(three_hours_ago) == "3 hours ago"
         one_hour_ago = now - timedelta(hours=1)
@@ -44,7 +46,8 @@ class TestRelativeTime:
 
     def test_relative_time_days(self) -> None:
         """Test relative time for days ago."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         two_days_ago = now - timedelta(days=2)
         assert relative_time(two_days_ago) == "2 days ago"
         one_day_ago = now - timedelta(days=1)
@@ -52,7 +55,7 @@ class TestRelativeTime:
 
     def test_relative_time_weeks(self) -> None:
         """Test relative time for weeks ago."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         two_weeks_ago = now - timedelta(weeks=2)
         assert relative_time(two_weeks_ago) == "2 weeks ago"
         one_week_ago = now - timedelta(weeks=1)
@@ -60,7 +63,8 @@ class TestRelativeTime:
 
     def test_relative_time_months(self) -> None:
         """Test relative time for months ago."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         two_months_ago = now - timedelta(days=60)
         assert relative_time(two_months_ago) == "2 months ago"
         one_month_ago = now - timedelta(days=31)
@@ -68,7 +72,7 @@ class TestRelativeTime:
 
     def test_relative_time_years(self) -> None:
         """Test relative time for years ago."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         two_years_ago = now - timedelta(days=730)
         assert relative_time(two_years_ago) == "2 years ago"
         one_year_ago = now - timedelta(days=365)
@@ -78,13 +82,14 @@ class TestRelativeTime:
 class TestRenderView:
     def test_render_view_minimal(self) -> None:
         """Render single issue with minimal fields."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+            id="PROJ-1",
+            type=IssueType.EPIC,
             title="User Authentication",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
+            status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
         assert "PROJ-1" in result
@@ -95,298 +100,337 @@ class TestRenderView:
     def test_render_view_with_parent(self) -> None:
         """Render issue with parent reference."""
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1-1",
+            type=IssueType.STORY,
             title="Login Flow",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.IN_PROGRESS,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
         assert "PROJ-1-1" in result
-        assert "PROJ-1" in result
         assert "Login Flow" in result
+        assert "[green]open[/green]" in result
 
     def test_render_view_with_body(self) -> None:
         """Render issue with body text."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1",
+            type=IssueType.TASK,
             title="Implement OAuth",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_body="Add OAuth 2.0 support\n---\nMore details here",
+            status=IssueStatus.NEW,
+            body="Add OAuth 2.0 support\n---\nMore details here",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
         assert "Implement OAuth" in result
         assert "Add OAuth 2.0 support" in result
 
     def test_render_view_with_refs(self) -> None:
-        """Render issue with references."""
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
-            title="User Authentication",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_refs=["PROJ-2", "PROJ-3"],
+        """Render issue with references shows refs in properties line."""
+        ref1 = Issue(
+            id="PROJ-2",
+            type=IssueType.EPIC,
+            title="Ref Issue 1",
+            status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
-        result = render_view(issue)
+        ref2 = Issue(
+            id="PROJ-3",
+            type=IssueType.EPIC,
+            title="Ref Issue 2",
+            status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        issue = Issue(
+            id="PROJ-1",
+            type=IssueType.EPIC,
+            title="User Authentication",
+            status=IssueStatus.NEW,
+            refs=["PROJ-2", "PROJ-3"],
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        result = render_view(issue, referenced=[ref1, ref2])
         assert "PROJ-2" in result
         assert "PROJ-3" in result
 
     def test_render_view_with_annotations(self) -> None:
         """Render issue with annotations (excluding system annotations)."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1",
+            type=IssueType.TASK,
             title="Implement OAuth",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
+            status=IssueStatus.IN_PROGRESS,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
-                    timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC,
+        ),
                     message="Starting work on OAuth implementation",
                 ),
                 Annotation(
                     type=AnnotationType.COMMIT,
-                    timestamp=datetime(2024, 1, 15, 14, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 14, 0, 0, tzinfo=UTC),
                     message="Added OAuth client configuration",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
-        assert "## Annotations" in result
-        assert "[work-begin]" not in result
-        assert "[commit]" in result
-        assert "2024-01-15 14:00:00" in result
+        assert "work-begin" not in result
+        assert "commit:" in result
         assert "Added OAuth client configuration" in result
 
     def test_render_view_stopped_with_handoff(self) -> None:
         """Render stopped issue with handoff annotation prominently displayed."""
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="User Profile Page",
-            tw_status=IssueStatus.STOPPED,
-            project="myproject",
+            status=IssueStatus.STOPPED,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
-                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC,
+        ),
                     message="Starting profile work",
                 ),
                 Annotation(
                     type=AnnotationType.HANDOFF,
-                    timestamp=datetime(2024, 1, 15, 16, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 16, 0, 0, tzinfo=UTC),
                     message="Need to wait for API endpoint deployment before continuing",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
-        assert "**HANDOFF:**" in result
+        assert "HANDOFF:" in result
         assert "Need to wait for API endpoint deployment before continuing" in result
         lines = result.split("\n")
-        handoff_line = next(i for i, line in enumerate(lines) if "**HANDOFF:**" in line)
+        handoff_line = next(i for i, line in enumerate(lines) if "HANDOFF:" in line)
         props_line = next(i for i, line in enumerate(lines) if "stopped" in line)
-        assert handoff_line < props_line
+        assert handoff_line > props_line
 
     def test_render_view_filters_work_begin_end_annotations(self) -> None:
         """Work-begin and work-end annotations should not appear in rendered view."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1",
+            type=IssueType.TASK,
             title="Task with system annotations",
-            tw_status=IssueStatus.DONE,
-            project="myproject",
+            status=IssueStatus.DONE,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
-                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC,
+        ),
                     message="",
                 ),
                 Annotation(
                     type=AnnotationType.COMMIT,
-                    timestamp=datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
                     message="abc123 - Implemented feature",
                 ),
                 Annotation(
                     type=AnnotationType.WORK_END,
-                    timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC),
                     message="",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
-        assert "[work-begin]" not in result
-        assert "[work-end]" not in result
-        assert "[commit]" in result
+        assert "work-begin" not in result
+        assert "work-end" not in result
+        assert "commit:" in result
         assert "abc123 - Implemented feature" in result
 
     def test_render_view_filters_empty_annotations(self) -> None:
         """Annotations with empty messages should not appear in rendered view."""
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1",
+            type=IssueType.TASK,
             title="Task with empty annotations",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
+            status=IssueStatus.IN_PROGRESS,
             annotations=[
                 Annotation(
                     type=AnnotationType.COMMENT,
-                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC,
+        ),
                     message="",
                 ),
                 Annotation(
                     type=AnnotationType.LESSON,
-                    timestamp=datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
                     message="    ",
                 ),
                 Annotation(
                     type=AnnotationType.DEVIATION,
-                    timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC),
                     message="Changed approach to use Redis",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
-        assert "[comment]" not in result
-        assert "[lesson]" not in result
-        assert "[deviation]" in result
+        assert "comment:" not in result
+        assert "lesson:" not in result
+        assert "deviation:" in result
         assert "Changed approach to use Redis" in result
 
     def test_render_view_no_annotation_section_when_all_filtered(self) -> None:
         """Annotations section should not appear when all annotations are filtered."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1",
+            type=IssueType.TASK,
             title="Task with only system annotations",
-            tw_status=IssueStatus.DONE,
-            project="myproject",
+            status=IssueStatus.DONE,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
-                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC,
+        ),
                     message="",
                 ),
                 Annotation(
                     type=AnnotationType.WORK_END,
-                    timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC),
                     message="",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
-        assert "## Annotations" not in result
+        assert "work-begin" not in result
+        assert "work-end" not in result
 
-    def test_render_view_shows_first_line_of_multiline_annotation(self) -> None:
-        """Only first line of multiline annotation messages should be shown."""
+    def test_render_view_shows_first_line_of_multiline_annotation_in_summary(self) -> None:
+        """Short annotation summary shows only first line, full details in expanded section."""
         issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1",
+            type=IssueType.TASK,
             title="Task with multiline annotation",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
+            status=IssueStatus.IN_PROGRESS,
             annotations=[
                 Annotation(
                     type=AnnotationType.LESSON,
-                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC,
+        ),
                     message="First line is important\nSecond line has details\nThird line has more",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue)
         assert "First line is important" in result
-        assert "Second line has details" not in result
-        assert "Third line has more" not in result
+        lines = result.split("\n")
+        short_ann_found = False
+        for line in lines:
+            if "lesson:" in line and "First line is important" in line:
+                if "Second line" not in line:
+                    short_ann_found = True
+                    break
+        assert short_ann_found, "Short annotation should show only first line"
 
-    def test_render_view_siblings_with_tree_format(self) -> None:
-        """Siblings should be rendered with tree format showing status and type."""
+    def test_render_view_siblings_with_compact_format(self) -> None:
+        """Siblings should be rendered with compact format showing status and type."""
+        from datetime import datetime
         sibling1 = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1-1",
+            type=IssueType.TASK,
             title="Sibling Task 1",
-            tw_status=IssueStatus.DONE,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.DONE,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         sibling2 = Issue(
-            uuid="abc-2",
-            tw_id="PROJ-1-2",
-            tw_type=IssueType.TASK,
+            id="PROJ-1-2",
+            type=IssueType.TASK,
             title="Sibling Task 2",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.IN_PROGRESS,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         issue = Issue(
-            uuid="abc-3",
-            tw_id="PROJ-1-3",
-            tw_type=IssueType.TASK,
+            id="PROJ-1-3",
+            type=IssueType.TASK,
             title="Current Task",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.NEW,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue, siblings=[sibling1, sibling2])
-        assert "## Siblings" in result
+        assert "sibling:" in result
         assert "PROJ-1-1" in result
         assert "PROJ-1-2" in result
         assert "Sibling Task 1" in result
         assert "Sibling Task 2" in result
         assert "done" in result
-        assert "in_progress" in result
+        assert "open" in result
 
-    def test_render_view_siblings_show_repeatable_body(self) -> None:
-        """Siblings should show their repeatable bodies using tree format."""
+    def test_render_view_siblings_show_in_short_links(self) -> None:
+        """Siblings are shown in the short links section."""
         sibling = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1-1",
+            type=IssueType.STORY,
             title="Sibling Story",
-            tw_status=IssueStatus.DONE,
-            project="myproject",
-            tw_parent="PROJ-1",
-            tw_body="This is repeatable context\nWith multiple lines\n---\nThis is non-repeatable detail",
+            status=IssueStatus.DONE,
+            parent="PROJ-1",
+            body=(
+                "This is repeatable context\nWith multiple lines\n---\n"
+                "This is non-repeatable detail"
+            ),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         issue = Issue(
-            uuid="abc-2",
-            tw_id="PROJ-1-2",
-            tw_type=IssueType.STORY,
+            id="PROJ-1-2",
+            type=IssueType.STORY,
             title="Current Story",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.NEW,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue, siblings=[sibling])
-        assert "## Siblings" in result
+        assert "sibling:" in result
         assert "Sibling Story" in result
-        assert "This is repeatable context" in result
-        assert "With multiple lines" in result
         assert "This is non-repeatable detail" not in result
 
-    def test_render_view_siblings_show_annotations(self) -> None:
-        """Siblings should show annotations (excluding work-begin/work-end) using tree format."""
-        now = datetime.now(timezone.utc)
+    def test_render_view_siblings_shown_in_links(self) -> None:
+        """Siblings are shown in the short links section."""
+        from datetime import datetime
+        now = datetime.now(UTC)
         sibling = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1-1",
-            tw_type=IssueType.TASK,
+            id="PROJ-1-1",
+            type=IssueType.TASK,
             title="Sibling Task",
-            tw_status=IssueStatus.DONE,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.DONE,
+            parent="PROJ-1",
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
@@ -404,22 +448,82 @@ class TestRenderView:
                     message="",
                 ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         issue = Issue(
-            uuid="abc-2",
-            tw_id="PROJ-1-2",
-            tw_type=IssueType.TASK,
+            id="PROJ-1-2",
+            type=IssueType.TASK,
             title="Current Task",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.NEW,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_view(issue, siblings=[sibling])
-        assert "## Siblings" in result
-        assert "commit:" in result
-        assert "abc123 - Implemented feature" in result
-        assert "work-begin:" not in result
-        assert "work-end:" not in result
+        assert "sibling:" in result
+        assert "Sibling Task" in result
+
+    def test_render_view_shows_lessons_from_completed_siblings(self) -> None:
+        """render_view should show short links to siblings but not their lessons."""
+        from datetime import datetime
+        now = datetime.now(UTC)
+        completed_sibling = Issue(
+            id="PROJ-1-1",
+            type=IssueType.TASK,
+            title="Completed Sibling Task",
+            status=IssueStatus.DONE,
+            parent="PROJ-1",
+            annotations=[
+                Annotation(
+                    type=AnnotationType.LESSON,
+                    timestamp=now,
+                    message="OAuth requires async handlers",
+                ),
+                Annotation(
+                    type=AnnotationType.DEVIATION,
+                    timestamp=now,
+                    message="Changed from JWT to session-based auth",
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+        in_progress_sibling = Issue(
+            id="PROJ-1-2",
+            type=IssueType.TASK,
+            title="In Progress Sibling",
+            status=IssueStatus.IN_PROGRESS,
+            parent="PROJ-1",
+            annotations=[
+                Annotation(
+                    type=AnnotationType.LESSON,
+                    timestamp=now,
+                    message="This should not appear - not done yet",
+                ),
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+        current_task = Issue(
+            id="PROJ-1-3",
+            type=IssueType.TASK,
+            title="Current Task",
+            status=IssueStatus.NEW,
+            parent="PROJ-1",
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_view(
+            current_task, siblings=[completed_sibling, in_progress_sibling]
+        )
+        assert "Lessons from Siblings" not in result
+        assert "PROJ-1-1" in result
+        assert "PROJ-1-2" in result
+        assert "OAuth requires async handlers" not in result
+        assert "Changed from JWT to session-based auth" not in result
+        assert "This should not appear" not in result
 
 
 class TestRenderTree:
@@ -427,13 +531,13 @@ class TestRenderTree:
         """Render tree with single issue."""
         issues = [
             Issue(
-                uuid="abc-123",
-                tw_id="PROJ-1",
-                tw_type=IssueType.EPIC,
+                id="PROJ-1",
+                type=IssueType.EPIC,
                 title="User Authentication",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-            )
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         ]
         result = render_tree(issues)
         assert "PROJ-1" in result
@@ -441,32 +545,34 @@ class TestRenderTree:
 
     def test_render_tree_multiple(self) -> None:
         """Render tree with multiple issues."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1",
-                tw_type=IssueType.EPIC,
+                id="PROJ-1",
+                type=IssueType.EPIC,
                 title="User Authentication",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-            ),
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
             Issue(
-                uuid="abc-2",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="Login Flow",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
-                tw_parent="PROJ-1",
-            ),
+                status=IssueStatus.IN_PROGRESS,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
             Issue(
-                uuid="abc-3",
-                tw_id="PROJ-2",
-                tw_type=IssueType.EPIC,
+                id="PROJ-2",
+                type=IssueType.EPIC,
                 title="Data Layer",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-            ),
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         assert "PROJ-1" in result
@@ -480,14 +586,15 @@ class TestRenderTree:
         """Orphan story (no parent) should render without indentation."""
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="Orphan Story",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent=None,
-            ),
+                status=IssueStatus.NEW,
+            parent=None,
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -499,16 +606,18 @@ class TestRenderTree:
 
     def test_render_tree_orphan_task_no_indent(self) -> None:
         """Orphan task (no parent) should render without indentation."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1a",
-                tw_type=IssueType.TASK,
+                id="PROJ-1-1a",
+                type=IssueType.TASK,
                 title="Orphan Task",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent=None,
-            ),
+                status=IssueStatus.NEW,
+            parent=None,
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -522,23 +631,25 @@ class TestRenderTree:
         """Task with parent should be indented."""
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="Parent Story",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent=None,
-            ),
+                status=IssueStatus.NEW,
+            parent=None,
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
             Issue(
-                uuid="abc-2",
-                tw_id="PROJ-1-1a",
-                tw_type=IssueType.TASK,
+                id="PROJ-1-1a",
+                type=IssueType.TASK,
                 title="Child Task",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent="PROJ-1-1",
-            ),
+                status=IssueStatus.NEW,
+            parent="PROJ-1-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -550,34 +661,38 @@ class TestRenderTree:
 
     def test_render_tree_full_hierarchy_indentation(self) -> None:
         """Epic → Story → Task should have correct depth-based indentation."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1",
-                tw_type=IssueType.EPIC,
+                id="PROJ-1",
+                type=IssueType.EPIC,
                 title="Epic",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent=None,
-            ),
+                status=IssueStatus.NEW,
+            parent=None,
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
             Issue(
-                uuid="abc-2",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="Story under Epic",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent="PROJ-1",
-            ),
+                status=IssueStatus.NEW,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
             Issue(
-                uuid="abc-3",
-                tw_id="PROJ-1-1a",
-                tw_type=IssueType.TASK,
+                id="PROJ-1-1a",
+                type=IssueType.TASK,
                 title="Task under Story",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-                tw_parent="PROJ-1-1",
-            ),
+                status=IssueStatus.NEW,
+            parent="PROJ-1-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -593,16 +708,16 @@ class TestRenderTree:
         assert lines[2].startswith("    ")
 
     def test_render_tree_task_with_annotations(self) -> None:
-        """Task with annotations should show non-work-begin/work-end annotations with relative time."""
-        now = datetime.now(timezone.utc)
+        """Task with annotations shows non-work-begin/work-end annotations."""
+        now = datetime.now(UTC)
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1a",
-                tw_type=IssueType.TASK,
+                id="PROJ-1-1a",
+                type=IssueType.TASK,
                 title="Task with annotations",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
+                status=IssueStatus.IN_PROGRESS,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
                 annotations=[
                     Annotation(
                         type=AnnotationType.WORK_BEGIN,
@@ -632,20 +747,24 @@ class TestRenderTree:
 
     def test_render_tree_task_annotation_multiline_truncated(self) -> None:
         """Task annotations with multiline messages should show only first line."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1a",
-                tw_type=IssueType.TASK,
+                id="PROJ-1-1a",
+                type=IssueType.TASK,
                 title="Task with multiline annotation",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
+                status=IssueStatus.IN_PROGRESS,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
                 annotations=[
                     Annotation(
                         type=AnnotationType.HANDOFF,
                         timestamp=now - timedelta(hours=1),
-                        message="First line of message\nSecond line should not appear\nThird line also hidden",
+                        message=(
+                            "First line of message\nSecond line should not appear\n"
+                            "Third line also hidden"
+                        ),
                     ),
                 ],
             ),
@@ -660,13 +779,13 @@ class TestRenderTree:
         """Completed (done) issues should have all text colored gray69."""
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1",
-                tw_type=IssueType.EPIC,
+                id="PROJ-1",
+                type=IssueType.EPIC,
                 title="Completed Epic",
-                tw_status=IssueStatus.DONE,
-                project="myproject",
-            ),
+                status=IssueStatus.DONE,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -682,15 +801,16 @@ class TestRenderTree:
 
     def test_render_tree_in_progress_status_in_parens(self) -> None:
         """In progress issues should show status in parentheses with ID."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="In Progress Story",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
-            ),
+                status=IssueStatus.IN_PROGRESS,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -702,13 +822,13 @@ class TestRenderTree:
         """Blocked issues should show status in parentheses with ID in red."""
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-2-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-2-1",
+                type=IssueType.STORY,
                 title="Blocked Story",
-                tw_status=IssueStatus.BLOCKED,
-                project="myproject",
-            ),
+                status=IssueStatus.BLOCKED,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -718,15 +838,16 @@ class TestRenderTree:
 
     def test_render_tree_stopped_status_in_parens(self) -> None:
         """Stopped issues should show status in parentheses with ID in red."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-3-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-3-1",
+                type=IssueType.STORY,
                 title="Stopped Story",
-                tw_status=IssueStatus.STOPPED,
-                project="myproject",
-            ),
+                status=IssueStatus.STOPPED,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -738,13 +859,13 @@ class TestRenderTree:
         """New issues should NOT show status in parentheses, just ID."""
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-4-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-4-1",
+                type=IssueType.STORY,
                 title="New Story",
-                tw_status=IssueStatus.NEW,
-                project="myproject",
-            ),
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         lines = [line for line in result.strip().split("\n") if line.strip()]
@@ -756,22 +877,24 @@ class TestRenderTree:
 
     def test_render_tree_in_progress_with_work_begin_timestamp(self) -> None:
         """In progress issues should show work-begin timestamp next to status."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         work_start = now - timedelta(hours=2)
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="In Progress with Start Time",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
+                status=IssueStatus.IN_PROGRESS,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
                 annotations=[
                     Annotation(
                         type=AnnotationType.WORK_BEGIN,
                         timestamp=work_start,
                         message="",
-                    ),
+
+        ),
                 ],
             ),
         ]
@@ -780,22 +903,23 @@ class TestRenderTree:
 
     def test_render_tree_blocked_with_blocked_timestamp(self) -> None:
         """Blocked issues should show blocked timestamp next to status."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         blocked_time = now - timedelta(hours=1)
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-2-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-2-1",
+                type=IssueType.STORY,
                 title="Blocked Story",
-                tw_status=IssueStatus.BLOCKED,
-                project="myproject",
+                status=IssueStatus.BLOCKED,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
                 annotations=[
                     Annotation(
                         type=AnnotationType.BLOCKED,
                         timestamp=blocked_time,
                         message="Waiting for approval",
-                    ),
+
+        ),
                 ],
             ),
         ]
@@ -804,22 +928,24 @@ class TestRenderTree:
 
     def test_render_tree_stopped_with_work_begin_timestamp(self) -> None:
         """Stopped issues should show work-begin timestamp next to status."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         work_start = now - timedelta(hours=3)
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-3-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-3-1",
+                type=IssueType.STORY,
                 title="Stopped Story",
-                tw_status=IssueStatus.STOPPED,
-                project="myproject",
+                status=IssueStatus.STOPPED,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
                 annotations=[
                     Annotation(
                         type=AnnotationType.WORK_BEGIN,
                         timestamp=work_start,
                         message="",
-                    ),
+
+        ),
                 ],
             ),
         ]
@@ -830,14 +956,15 @@ class TestRenderTree:
         """In progress without work-begin should not show timestamp."""
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="In Progress without Start",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
-                annotations=[],
-            ),
+                status=IssueStatus.IN_PROGRESS,
+            annotations=[],
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_tree(issues)
         # Should have status but no timestamp
@@ -848,18 +975,19 @@ class TestRenderTree:
 
     def test_render_tree_blocked_without_blocked_annotation_no_timestamp(self) -> None:
         """Blocked without blocked annotation should not show timestamp."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="abc-1",
-                tw_id="PROJ-2-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-2-1",
+                type=IssueType.STORY,
                 title="Blocked Story",
-                tw_status=IssueStatus.BLOCKED,
-                project="myproject",
+                status=IssueStatus.BLOCKED,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
                 annotations=[
                     Annotation(
                         type=AnnotationType.COMMENT,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=datetime.now(UTC),
                         message="Some comment",
                     ),
                 ],
@@ -876,157 +1004,168 @@ class TestRenderTree:
 class TestGetStatusTimestamp:
     def test_get_status_timestamp_blocked(self) -> None:
         """For blocked issues, returns BLOCKED annotation timestamp."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         blocked_time = now - timedelta(hours=1)
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="Blocked Story",
-            tw_status=IssueStatus.BLOCKED,
-            project="test",
+            status=IssueStatus.BLOCKED,
             annotations=[
                 Annotation(
                     type=AnnotationType.BLOCKED,
                     timestamp=blocked_time,
                     message="Blocked reason",
-                ),
+
+        ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = get_status_timestamp(issue)
         assert result == blocked_time
 
     def test_get_status_timestamp_in_progress(self) -> None:
         """For in_progress issues, returns WORK_BEGIN annotation timestamp."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         work_start = now - timedelta(hours=2)
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="In Progress Story",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="test",
+            status=IssueStatus.IN_PROGRESS,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
                     timestamp=work_start,
                     message="",
-                ),
+
+        ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = get_status_timestamp(issue)
         assert result == work_start
 
     def test_get_status_timestamp_stopped(self) -> None:
         """For stopped issues, returns WORK_BEGIN annotation timestamp."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         work_start = now - timedelta(hours=3)
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="Stopped Story",
-            tw_status=IssueStatus.STOPPED,
-            project="test",
+            status=IssueStatus.STOPPED,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
                     timestamp=work_start,
                     message="",
-                ),
+
+        ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = get_status_timestamp(issue)
         assert result == work_start
 
     def test_get_status_timestamp_new_returns_none(self) -> None:
         """For new issues, returns None regardless of annotations."""
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+        now = datetime.now(UTC)
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="New Story",
-            tw_status=IssueStatus.NEW,
-            project="test",
+            status=IssueStatus.NEW,
             annotations=[
                 Annotation(
                     type=AnnotationType.COMMENT,
                     timestamp=now,
                     message="Some comment",
-                ),
+
+        ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = get_status_timestamp(issue)
         assert result is None
 
     def test_get_status_timestamp_done_returns_none(self) -> None:
         """For done issues, returns None regardless of annotations."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="Done Story",
-            tw_status=IssueStatus.DONE,
-            project="test",
+            status=IssueStatus.DONE,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_END,
                     timestamp=now,
                     message="",
-                ),
+
+        ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = get_status_timestamp(issue)
         assert result is None
 
     def test_get_status_timestamp_no_annotations(self) -> None:
         """With no annotations, returns None."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="In Progress Story",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="test",
+            status=IssueStatus.IN_PROGRESS,
             annotations=[],
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = get_status_timestamp(issue)
         assert result is None
 
     def test_status_timestamp_filter(self) -> None:
         """Status timestamp filter returns formatted relative time."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         work_start = now - timedelta(hours=1)
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="In Progress Story",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="test",
+            status=IssueStatus.IN_PROGRESS,
             annotations=[
                 Annotation(
                     type=AnnotationType.WORK_BEGIN,
                     timestamp=work_start,
                     message="",
-                ),
+
+        ),
             ],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = status_timestamp(issue)
         assert result == "1 hour ago"
 
     def test_status_timestamp_filter_none(self) -> None:
         """Status timestamp filter returns None when no timestamp."""
+        from datetime import datetime
         issue = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1",
+            type=IssueType.STORY,
             title="New Story",
-            tw_status=IssueStatus.NEW,
-            project="test",
+            status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = status_timestamp(issue)
         assert result is None
@@ -1036,12 +1175,12 @@ class TestRenderDigest:
     def test_render_digest_single(self) -> None:
         """Render digest with parent and no children."""
         parent = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+            id="PROJ-1",
+            type=IssueType.EPIC,
             title="User Authentication",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
+            status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_digest(parent, [])
         assert "PROJ-1" in result
@@ -1051,24 +1190,26 @@ class TestRenderDigest:
 
     def test_render_digest_multiple(self) -> None:
         """Render digest with parent and children."""
+        from datetime import datetime
         parent = Issue(
-            uuid="abc-1",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+            id="PROJ-1",
+            type=IssueType.EPIC,
             title="User Authentication",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
+            status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         children = [
             Issue(
-                uuid="abc-2",
-                tw_id="PROJ-1-1",
-                tw_type=IssueType.STORY,
+                id="PROJ-1-1",
+                type=IssueType.STORY,
                 title="Login Flow",
-                tw_status=IssueStatus.IN_PROGRESS,
-                project="myproject",
-                tw_parent="PROJ-1",
-            ),
+                status=IssueStatus.IN_PROGRESS,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
         result = render_digest(parent, children)
         assert "PROJ-1" in result
@@ -1079,13 +1220,14 @@ class TestRenderDigest:
     def test_render_digest_with_parent(self) -> None:
         """Digest shows parent info correctly."""
         parent = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1-1",
-            tw_type=IssueType.STORY,
+            id="PROJ-1-1",
+            type=IssueType.STORY,
             title="Login Flow",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
-            tw_parent="PROJ-1",
+            status=IssueStatus.IN_PROGRESS,
+            parent="PROJ-1",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         result = render_digest(parent, [])
         assert "PROJ-1-1" in result
@@ -1095,16 +1237,18 @@ class TestRenderDigest:
 class TestRenderGroomContent:
     def test_render_single_bug(self) -> None:
         """Render single bug for groom editor."""
+        from datetime import datetime
         issues = [
             Issue(
-                uuid="uuid1",
-                tw_id="TEST-5",
-                tw_type=IssueType.BUG,
+                id="TEST-5",
+                type=IssueType.BUG,
                 title="Login broken",
-                tw_status=IssueStatus.NEW,
-                project="test",
-                tw_body="The form crashes.\n---\nDetails here.",
-            )
+                status=IssueStatus.NEW,
+            body="The form crashes.\n---\nDetails here.",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         ]
 
         content = render_groom_content(issues)
@@ -1119,22 +1263,23 @@ class TestRenderGroomContent:
         """Render multiple items (bug and idea) for groom editor."""
         issues = [
             Issue(
-                uuid="uuid1",
-                tw_id="TEST-1",
-                tw_type=IssueType.BUG,
+                id="TEST-1",
+                type=IssueType.BUG,
                 title="Bug one",
-                tw_status=IssueStatus.NEW,
-                project="test",
-            ),
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
             Issue(
-                uuid="uuid2",
-                tw_id="TEST-2",
-                tw_type=IssueType.IDEA,
+                id="TEST-2",
+                type=IssueType.IDEA,
                 title="Idea one",
-                tw_status=IssueStatus.NEW,
-                project="test",
-                tw_body="Some description.",
-            ),
+                status=IssueStatus.NEW,
+            body="Some description.",
+
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
         ]
 
         content = render_groom_content(issues)
@@ -1149,7 +1294,6 @@ class TestRenderGroomContent:
 class TestParseGroomResult:
     def test_unchanged_item(self) -> None:
         """Item left as-is should be marked unchanged."""
-        from tw.render import parse_groom_result
 
         content = """# TEST-1 (bug)
 - bug: original title
@@ -1165,7 +1309,6 @@ class TestParseGroomResult:
 
     def test_removed_item(self) -> None:
         """Item removed from content should be marked resolved."""
-        from tw.render import parse_groom_result
 
         content = """# Some comment
 """
@@ -1178,7 +1321,6 @@ class TestParseGroomResult:
 
     def test_transformed_item(self) -> None:
         """Item changed to different type should create new + resolve old."""
-        from tw.render import parse_groom_result
 
         content = """# TEST-1 (bug)
 - task: fix the bug
@@ -1199,7 +1341,6 @@ class TestParseGroomResult:
 
     def test_new_item_no_comment(self) -> None:
         """Item without # comment is new."""
-        from tw.render import parse_groom_result
 
         content = """- epic: new epic
     Description.
@@ -1220,23 +1361,23 @@ class TestRenderTreeWithBacklog:
 
         hierarchy = [
             Issue(
-                uuid="u1",
-                tw_id="TEST-1",
-                tw_type=IssueType.EPIC,
+                id="TEST-1",
+                type=IssueType.EPIC,
                 title="Epic One",
-                tw_status=IssueStatus.NEW,
-                project="test",
-            )
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         ]
         backlog = [
             Issue(
-                uuid="u2",
-                tw_id="TEST-2",
-                tw_type=IssueType.BUG,
+                id="TEST-2",
+                type=IssueType.BUG,
                 title="Bug One",
-                tw_status=IssueStatus.NEW,
-                project="test",
-            )
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         ]
 
         output = render_tree_with_backlog(hierarchy, backlog)
@@ -1250,13 +1391,13 @@ class TestRenderTreeWithBacklog:
 
         hierarchy = [
             Issue(
-                uuid="u1",
-                tw_id="TEST-1",
-                tw_type=IssueType.EPIC,
+                id="TEST-1",
+                type=IssueType.EPIC,
                 title="Epic One",
-                tw_status=IssueStatus.NEW,
-                project="test",
-            )
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         ]
         backlog = []
 
@@ -1271,13 +1412,13 @@ class TestRenderTreeWithBacklog:
         hierarchy = []
         backlog = [
             Issue(
-                uuid="u2",
-                tw_id="TEST-2",
-                tw_type=IssueType.BUG,
+                id="TEST-2",
+                type=IssueType.BUG,
                 title="Bug One",
-                tw_status=IssueStatus.NEW,
-                project="test",
-            )
+                status=IssueStatus.NEW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
         ]
 
         output = render_tree_with_backlog(hierarchy, backlog)
@@ -1468,3 +1609,204 @@ This is detail
 
         assert parsed_title == original_title
         assert parsed_body == original_body
+
+
+class TestRenderBrief:
+    def test_render_brief_basic(self) -> None:
+        """Brief should include task title, status, and protocol."""
+        now = datetime.now(UTC)
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Implement login form",
+            status=IssueStatus.NEW,
+            body="Add a login form with email and password fields.",
+            parent="PROJ-1-1",
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_brief(task)
+        assert "# Coder Brief: PROJ-1-1a" in result
+        assert "Implement login form" in result
+        assert "type: task | status: new" in result
+        assert "Add a login form" in result
+        assert "tw start PROJ-1-1a" in result
+        assert "tw done PROJ-1-1a" in result
+        assert "tw record PROJ-1-1a lesson" in result
+
+    def test_render_brief_with_sibling_lessons(self) -> None:
+        """Brief should prominently show lessons from completed siblings."""
+        now = datetime.now(UTC)
+        completed_sibling = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Setup database",
+            status=IssueStatus.DONE,
+            parent="PROJ-1-1",
+            created_at=now,
+            updated_at=now,
+            annotations=[
+                Annotation(
+                    type=AnnotationType.LESSON,
+                    timestamp=now,
+                    message="Use COALESCE for nullable columns",
+                ),
+                Annotation(
+                    type=AnnotationType.DEVIATION,
+                    timestamp=now,
+                    message="Changed from JSON to JSONB",
+                ),
+            ],
+        )
+        current_task = Issue(
+            id="PROJ-1-1b",
+            type=IssueType.TASK,
+            title="Implement queries",
+            status=IssueStatus.NEW,
+            parent="PROJ-1-1",
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_brief(current_task, siblings=[completed_sibling])
+        assert "## Lessons from Completed Siblings" in result
+        assert "PROJ-1-1a" in result
+        assert "Use COALESCE for nullable columns" in result
+        assert "Changed from JSON to JSONB" in result
+        assert "[lesson]" in result
+        assert "[deviation]" in result
+
+    def test_render_brief_with_ancestors(self) -> None:
+        """Brief should include parent context."""
+        now = datetime.now(UTC)
+        epic = Issue(
+            id="PROJ-1",
+            type=IssueType.EPIC,
+            title="Authentication System",
+            status=IssueStatus.IN_PROGRESS,
+            body="Build complete auth system.\n---\nDetailed specs here.",
+            created_at=now,
+            updated_at=now,
+        )
+        story = Issue(
+            id="PROJ-1-1",
+            type=IssueType.STORY,
+            title="Login Flow",
+            status=IssueStatus.IN_PROGRESS,
+            body="Implement OAuth login.",
+            parent="PROJ-1",
+            created_at=now,
+            updated_at=now,
+        )
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Add login button",
+            status=IssueStatus.NEW,
+            parent="PROJ-1-1",
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_brief(task, ancestors=[story, epic])
+        assert "## Parent Context" in result
+        assert "PROJ-1-1" in result
+        assert "Login Flow" in result
+        assert "Implement OAuth login" in result
+        assert "PROJ-1" in result
+        assert "Build complete auth system" in result
+
+    def test_render_brief_blocked_warning(self) -> None:
+        """Brief should warn when task is blocked."""
+        now = datetime.now(UTC)
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Blocked task",
+            status=IssueStatus.BLOCKED,
+            created_at=now,
+            updated_at=now,
+            annotations=[
+                Annotation(
+                    type=AnnotationType.BLOCKED,
+                    timestamp=now,
+                    message="Waiting for API credentials",
+                ),
+            ],
+        )
+        result = render_brief(task)
+        assert "WARNING: This task is BLOCKED" in result
+        assert "Waiting for API credentials" in result
+        assert "tw unblock PROJ-1-1a" in result
+
+    def test_render_brief_stopped_with_handoff(self) -> None:
+        """Brief should show handoff message for stopped tasks."""
+        now = datetime.now(UTC)
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Handed off task",
+            status=IssueStatus.STOPPED,
+            created_at=now,
+            updated_at=now,
+            annotations=[
+                Annotation(
+                    type=AnnotationType.HANDOFF,
+                    timestamp=now,
+                    message="Completed form layout, remaining: validation",
+                ),
+            ],
+        )
+        result = render_brief(task)
+        assert "handed off" in result.lower()
+        assert "HANDOFF:" in result
+        assert "Completed form layout" in result
+
+    def test_render_brief_workflow_section(self) -> None:
+        """Brief should include workflow checklist."""
+        now = datetime.now(UTC)
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Test task",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_brief(task)
+        assert "## Workflow" in result
+        assert "1. `tw start PROJ-1-1a`" in result
+        assert "Implement the task" in result
+        assert "BEFORE completing" in result
+        assert "mandatory" in result.lower()
+
+    def test_render_brief_rules_section(self) -> None:
+        """Brief should include rules for coders."""
+        now = datetime.now(UTC)
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Test task",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_brief(task)
+        assert "## Rules" in result
+        assert "Don't edit issues" in result
+        assert "Record lessons before done" in result
+
+    def test_render_brief_discovered_work_section(self) -> None:
+        """Brief should include guidance for discovered work."""
+        now = datetime.now(UTC)
+        task = Issue(
+            id="PROJ-1-1a",
+            type=IssueType.TASK,
+            title="Test task",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+        )
+        result = render_brief(task)
+        assert "## Discovered Work" in result
+        assert "tw new bug" in result
+        assert "tw new idea" in result
+        assert "Do NOT fix unrelated issues" in result

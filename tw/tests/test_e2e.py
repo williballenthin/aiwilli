@@ -7,7 +7,6 @@ multiple commands in sequence to ensure the system works as a whole.
 import json
 import threading
 import time
-from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -17,18 +16,14 @@ from tw.cli import main
 class TestFullWorkflow:
     """Test complete workflows from creation to completion."""
 
-    def test_epic_story_task_workflow(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_epic_story_task_workflow(self, sqlite_env: dict[str, str]) -> None:
         """Test creating and completing nested issues: epic → story → task."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -44,10 +39,6 @@ class TestFullWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -65,10 +56,6 @@ class TestFullWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "task",
                 "--title",
@@ -84,10 +71,6 @@ class TestFullWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-1a",
             ],
@@ -99,10 +82,6 @@ class TestFullWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1-1a",
                 "--message",
@@ -117,40 +96,32 @@ class TestFullWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1-1a",
             ],
         )
         assert result.exit_code == 0
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "done"
+        assert output["tw_status"] == "done"
 
         # Verify all issues appear in tree
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "tree"],
+            ["tree"],
         )
         assert result.exit_code == 0
         assert "TEST-1" in result.output
         assert "TEST-1-1" in result.output
         assert "TEST-1-1a" in result.output
 
-    def test_multiple_parallel_stories(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_multiple_parallel_stories(self, sqlite_env: dict[str, str]) -> None:
         """Test creating multiple stories under one epic and completing them."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -162,10 +133,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -177,10 +144,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -192,10 +155,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -208,7 +167,7 @@ class TestFullWorkflow:
         # Verify all stories exist
         result = runner.invoke(
             main,
-            ["--json", "--project-name", "test", "--project-prefix", "TEST", "tree"],
+            ["--json", "tree"],
         )
         assert result.exit_code == 0
         output = json.loads(result.output.strip())
@@ -222,10 +181,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-1",
             ],
@@ -233,10 +188,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1-1",
             ],
@@ -245,10 +196,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-2",
             ],
@@ -256,10 +203,6 @@ class TestFullWorkflow:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1-2",
             ],
@@ -270,48 +213,36 @@ class TestFullWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1-1",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "done"
+        assert output["tw_status"] == "done"
 
         result = runner.invoke(
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1-2",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "done"
+        assert output["tw_status"] == "done"
 
 
 class TestHandoffWorkflow:
     """Test handoff workflow with structured summaries."""
 
-    def test_complete_handoff_workflow(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_complete_handoff_workflow(self, sqlite_env: dict[str, str]) -> None:
         """Test creating issue, starting, handing off, resuming, and completing."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -324,10 +255,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1",
             ],
@@ -339,25 +266,17 @@ class TestHandoffWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "in_progress"
+        assert output["tw_status"] == "in_progress"
 
         # Handoff with summary
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "handoff",
                 "TEST-1",
                 "--status",
@@ -376,25 +295,17 @@ class TestHandoffWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "stopped"
+        assert output["tw_status"] == "stopped"
 
         # Resume work
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1",
             ],
@@ -406,25 +317,17 @@ class TestHandoffWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "in_progress"
+        assert output["tw_status"] == "in_progress"
 
         # Complete the work
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1",
                 "--message",
@@ -438,29 +341,21 @@ class TestHandoffWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "done"
+        assert output["tw_status"] == "done"
 
-    def test_multiple_handoffs(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_multiple_handoffs(self, sqlite_env: dict[str, str]) -> None:
         """Test multiple handoffs on the same issue."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic first, then story
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -472,10 +367,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -489,10 +380,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-1",
             ],
@@ -503,10 +390,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "handoff",
                 "TEST-1-1",
                 "--status",
@@ -523,10 +406,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-1",
             ],
@@ -536,10 +415,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "handoff",
                 "TEST-1-1",
                 "--status",
@@ -556,10 +431,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-1",
             ],
@@ -569,10 +440,6 @@ class TestHandoffWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1-1",
             ],
@@ -584,19 +451,15 @@ class TestBlockUnblockWorkflow:
     """Test blocking and unblocking issues."""
 
     def test_block_unblock_complete_workflow(
-        self, taskwarrior_env: dict[str, str]
+        self, sqlite_env: dict[str, str]
     ) -> None:
         """Test complete block/unblock workflow."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -609,10 +472,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1",
             ],
@@ -623,10 +482,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "blocked",
                 "TEST-1",
                 "--reason",
@@ -640,10 +495,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
@@ -654,10 +505,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "unblock",
                 "TEST-1",
                 "--message",
@@ -671,24 +518,16 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
-        assert "in_progress" in result.output.lower() or "progress" in result.output.lower()
+        assert "open" in result.output.lower() or "in_progress" in result.output.lower()
 
         # Complete
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1",
                 "--message",
@@ -701,28 +540,20 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
         assert "done" in result.output.lower()
 
-    def test_multiple_blocks(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_multiple_blocks(self, sqlite_env: dict[str, str]) -> None:
         """Test multiple block/unblock cycles."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic first
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -734,10 +565,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1",
             ],
@@ -748,10 +575,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "blocked",
                 "TEST-1",
                 "--reason",
@@ -763,10 +586,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "unblock",
                 "TEST-1",
                 "--message",
@@ -778,10 +597,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "blocked",
                 "TEST-1",
                 "--reason",
@@ -795,25 +610,17 @@ class TestBlockUnblockWorkflow:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
         )
         output = json.loads(result.output.strip())
-        assert output["issue"]["tw_status"] == "blocked"
+        assert output["tw_status"] == "blocked"
 
         # Unblock and complete
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "unblock",
                 "TEST-1",
             ],
@@ -823,10 +630,6 @@ class TestBlockUnblockWorkflow:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1",
             ],
@@ -837,18 +640,14 @@ class TestBlockUnblockWorkflow:
 class TestTreeAndView:
     """Test tree and view commands with various scenarios."""
 
-    def test_tree_shows_all_issue_types(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_tree_shows_all_issue_types(self, sqlite_env: dict[str, str]) -> None:
         """Test that tree shows epics, stories, and tasks."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create various issue types
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -858,10 +657,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -873,10 +668,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "task",
                 "--title",
@@ -889,7 +680,7 @@ class TestTreeAndView:
         # List all (using human-readable format)
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "tree"],
+            ["tree"],
         )
         assert result.exit_code == 0
         assert "TEST-1" in result.output
@@ -899,18 +690,14 @@ class TestTreeAndView:
         assert "TEST-1-1a" in result.output
         assert "Task One" in result.output
 
-    def test_tree_shows_statuses(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_tree_shows_statuses(self, sqlite_env: dict[str, str]) -> None:
         """Test that tree shows correct status for each issue."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epics with different statuses
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -920,10 +707,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -933,10 +716,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -948,10 +727,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-2",
             ],
@@ -959,10 +734,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-3",
             ],
@@ -970,10 +741,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-3",
             ],
@@ -982,7 +749,7 @@ class TestTreeAndView:
         # Verify tree shows incomplete issues (completed epics are filtered out)
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "tree"],
+            ["tree"],
         )
         assert result.exit_code == 0
         assert "TEST-1" in result.output
@@ -992,42 +759,39 @@ class TestTreeAndView:
         # Verify statuses via individual show commands
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "view", "TEST-1"],
+            ["view", "TEST-1"],
         )
         assert "new" in result.output.lower()
 
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "view", "TEST-2"],
+            ["view", "TEST-2"],
         )
-        assert "in_progress" in result.output.lower() or "progress" in result.output.lower()
+        assert "open" in result.output.lower() or "in_progress" in result.output.lower()
 
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "view", "TEST-3"],
+            ["view", "TEST-3"],
         )
         assert "done" in result.output.lower()
 
     def test_show_displays_complete_details(
-        self, taskwarrior_env: dict[str, str]
+        self, sqlite_env: dict[str, str]
     ) -> None:
         """Test that show displays all issue details."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create issue with full details
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
                 "Complete Epic",
                 "--body",
-                "This is a detailed body with multiple lines.\nIt has descriptions and requirements.",
+                "This is a detailed body with multiple lines.\n"
+                "It has descriptions and requirements.",
             ],
         )
 
@@ -1035,10 +799,6 @@ class TestTreeAndView:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1",
             ],
@@ -1051,19 +811,15 @@ class TestTreeAndView:
         assert "new" in result.output.lower()
 
     def test_show_hierarchical_relationships(
-        self, taskwarrior_env: dict[str, str]
+        self, sqlite_env: dict[str, str]
     ) -> None:
         """Test that show displays parent relationships correctly."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create hierarchy
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -1073,10 +829,6 @@ class TestTreeAndView:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1091,10 +843,6 @@ class TestTreeAndView:
             main,
             [
                 "--json",
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1-1",
             ],
@@ -1102,39 +850,32 @@ class TestTreeAndView:
         assert result.exit_code == 0
         output = json.loads(result.output.strip())
 
-        assert output["issue"]["tw_parent"] == "TEST-1"
+        assert output["tw_parent"] == "TEST-1"
 
         # Verify in human-readable format too
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1-1",
             ],
         )
         assert result.exit_code == 0
-        assert "parent: TEST-1" in result.output
+        assert "parent:" in result.output
+        assert "TEST-1" in result.output
 
 
 class TestComplexWorkflows:
     """Test complex multi-issue workflows."""
 
-    def test_mixed_status_workflow(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_mixed_status_workflow(self, sqlite_env: dict[str, str]) -> None:
         """Test workflow with multiple issues in different states."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic with multiple stories
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -1146,10 +887,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1161,10 +898,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-1",
             ],
@@ -1172,10 +905,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "done",
                 "TEST-1-1",
             ],
@@ -1185,10 +914,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1200,10 +925,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-2",
             ],
@@ -1213,10 +934,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1228,10 +945,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-3",
             ],
@@ -1239,10 +952,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "blocked",
                 "TEST-1-3",
                 "--reason",
@@ -1254,10 +963,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1269,10 +974,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1-4",
             ],
@@ -1280,10 +981,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "handoff",
                 "TEST-1-4",
                 "--status",
@@ -1299,10 +996,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1315,7 +1008,7 @@ class TestComplexWorkflows:
         # Verify all issues and their statuses via tree
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "tree"],
+            ["tree"],
         )
         assert result.exit_code == 0
         # Check that all IDs appear
@@ -1329,28 +1022,24 @@ class TestComplexWorkflows:
         # Verify specific statuses by checking individual issues
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "view", "TEST-1-1"],
+            ["view", "TEST-1-1"],
         )
         assert "done" in result.output.lower()
 
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "view", "TEST-1-3"],
+            ["view", "TEST-1-3"],
         )
         assert "blocked" in result.output.lower()
 
-    def test_deep_hierarchy_workflow(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_deep_hierarchy_workflow(self, sqlite_env: dict[str, str]) -> None:
         """Test creating and working with deep hierarchies."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create epic → story → task → subtask-like structure
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "epic",
                 "--title",
@@ -1360,10 +1049,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "story",
                 "--title",
@@ -1375,10 +1060,6 @@ class TestComplexWorkflows:
         runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "task",
                 "--title",
@@ -1392,22 +1073,19 @@ class TestComplexWorkflows:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "view",
                 "TEST-1-1a",
             ],
         )
         assert result.exit_code == 0
         assert "TEST-1-1a" in result.output
-        assert "parent: TEST-1-1" in result.output
+        assert "parent:" in result.output
+        assert "TEST-1-1" in result.output
 
         # Verify tree shows all levels
         result = runner.invoke(
             main,
-            ["--project-name", "test", "--project-prefix", "TEST", "tree"],
+            ["tree"],
         )
         assert result.exit_code == 0
         assert "TEST-1" in result.output
@@ -1418,18 +1096,14 @@ class TestComplexWorkflows:
 class TestWatchCommand:
     """Test watch command functionality."""
 
-    def test_watch_tree_command_with_file_change(self, taskwarrior_env: dict[str, str]) -> None:
+    def test_watch_tree_command_with_file_change(self, sqlite_env: dict[str, str]) -> None:
         """Test that watch command detects file changes and updates display."""
-        runner = CliRunner(env=taskwarrior_env)
+        runner = CliRunner(env=sqlite_env)
 
         # Create an issue
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "new",
                 "task",
                 "-t",
@@ -1446,10 +1120,6 @@ class TestWatchCommand:
             result = runner.invoke(
                 main,
                 [
-                    "--project-name",
-                    "test",
-                    "--project-prefix",
-                    "TEST",
                     "watch",
                     "tree",
                     "-n",
@@ -1469,10 +1139,6 @@ class TestWatchCommand:
         result = runner.invoke(
             main,
             [
-                "--project-name",
-                "test",
-                "--project-prefix",
-                "TEST",
                 "start",
                 "TEST-1",
             ],

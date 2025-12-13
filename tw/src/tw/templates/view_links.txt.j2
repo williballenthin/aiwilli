@@ -1,7 +1,7 @@
 {% if ancestors %}
 [bold]Ancestors[/bold]
 {% for ancestor in ancestors | reverse %}
-[dim]{{ ancestor.tw_type.value }}:[/dim] {{ ancestor.title }} [dim]({{ ancestor.tw_id }}, {{ ancestor.tw_status.value }})[/dim]
+[dim]{{ ancestor.type.value }}:[/dim] {{ ancestor.title }} [dim]({{ ancestor.id }}, {{ ancestor.status.value }})[/dim]
 {% endfor %}
 {% endif %}
 {% if siblings %}

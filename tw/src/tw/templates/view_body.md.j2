@@ -1,5 +1,5 @@
-# {{ issue.tw_id }}: {{ issue.title }}
-{% if issue.tw_status.value == 'stopped' %}
+# {{ issue.id }}: {{ issue.title }}
+{% if issue.status.value == 'stopped' %}
 {% set handoff = issue.annotations | selectattr('type.value', 'equalto', 'handoff') | list | last %}
 {% if handoff %}
 
@@ -7,13 +7,13 @@
 {% endif %}
 {% endif %}
 
-{% set props = [issue.tw_type.value, issue.tw_status.value] %}
-{% if issue.tw_parent %}{% set props = props + ['parent: ' + issue.tw_parent] %}{% endif %}
-{% if issue.tw_refs %}{% set props = props + ['refs: ' + issue.tw_refs|join(', ')] %}{% endif %}
+{% set props = [issue.type.value, issue.status.value] %}
+{% if issue.parent %}{% set props = props + ['parent: ' + issue.parent] %}{% endif %}
+{% if issue.refs %}{% set props = props + ['refs: ' + issue.refs|join(', ')] %}{% endif %}
 *{{ props | join(' | ') }}*
 
-{% if issue.tw_body %}
-{{ issue.tw_body }}
+{% if issue.body %}
+{{ issue.body }}
 {% endif %}
 {% if issue.annotations %}
 {% set visible_annotations = issue.annotations | rejectattr('type.value', 'in', ['work-begin', 'work-end']) | selectattr('message') | list %}

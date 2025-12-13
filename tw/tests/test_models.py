@@ -1,6 +1,6 @@
 """Tests for core data models."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from tw.models import Annotation, AnnotationType, Issue, IssueStatus, IssueType
 
@@ -76,123 +76,90 @@ class TestAnnotation:
         )
         assert ann.render() == "[lesson] Key rotation is tricky"
 
-    def test_from_taskwarrior(self) -> None:
-        """Parse TaskWarrior annotation format."""
-        ann = Annotation.from_taskwarrior(
-            entry="20240115T103000Z",
-            description="[lesson] Key rotation is tricky",
-        )
-        assert ann.type == AnnotationType.LESSON
-        assert ann.message == "Key rotation is tricky"
-        assert ann.timestamp.year == 2024
-
-    def test_from_taskwarrior_unknown_type(self) -> None:
-        """Unknown types default to comment."""
-        ann = Annotation.from_taskwarrior(
-            entry="20240115T103000Z",
-            description="Some random text",
-        )
-        assert ann.type == AnnotationType.COMMENT
-        assert ann.message == "Some random text"
-
-    def test_from_taskwarrior_unknown_type_with_prefix(self) -> None:
-        """Unknown type prefixes are handled, message extracted correctly."""
-        ann = Annotation.from_taskwarrior(
-            entry="20240115T103000Z",
-            description="[unknown-type] Some message",
-        )
-        assert ann.type == AnnotationType.COMMENT
-        assert ann.message == "Some message"
-
-    def test_to_taskwarrior(self) -> None:
-        ts = datetime(2024, 1, 15, 10, 30, 0)
-        ann = Annotation(
-            type=AnnotationType.LESSON,
-            timestamp=ts,
-            message="Key rotation is tricky",
-        )
-        result = ann.to_taskwarrior()
-        assert result["description"] == "[lesson] Key rotation is tricky"
-        assert "entry" in result
-
 
 class TestIssue:
     def test_create_minimal(self) -> None:
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+        from datetime import datetime
+        now = datetime.now(UTC)
+        issue = Issue(id="PROJ-1",
+            type=IssueType.EPIC,
             title="User Authentication",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
         )
-        assert issue.tw_id == "PROJ-1"
-        assert issue.tw_type == IssueType.EPIC
+        assert issue.id == "PROJ-1"
+        assert issue.type == IssueType.EPIC
         assert issue.title == "User Authentication"
-        assert issue.tw_parent is None
-        assert issue.tw_body is None
-        assert issue.tw_refs == []
+        assert issue.parent is None
+        assert issue.body is None
+        assert issue.refs == []
         assert issue.annotations == []
 
     def test_create_full(self) -> None:
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1-1a",
-            tw_type=IssueType.TASK,
+        from datetime import datetime
+        now = datetime.now(UTC)
+        issue = Issue(id="PROJ-1-1a",
+            type=IssueType.TASK,
             title="Implement login",
-            tw_status=IssueStatus.IN_PROGRESS,
-            project="myproject",
-            tw_parent="PROJ-1-1",
-            tw_body="Summary here\n---\nDetails here",
-            tw_refs=["PROJ-2", "PROJ-3"],
+            status=IssueStatus.IN_PROGRESS,
+            created_at=now,
+            updated_at=now,
+            parent="PROJ-1-1",
+            body="Summary here\n---\nDetails here",
+            refs=["PROJ-2", "PROJ-3"],
         )
-        assert issue.tw_parent == "PROJ-1-1"
-        assert issue.tw_body == "Summary here\n---\nDetails here"
-        assert issue.tw_refs == ["PROJ-2", "PROJ-3"]
+        assert issue.parent == "PROJ-1-1"
+        assert issue.body == "Summary here\n---\nDetails here"
+        assert issue.refs == ["PROJ-2", "PROJ-3"]
 
     def test_get_repeatable_body(self) -> None:
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+        from datetime import datetime
+        now = datetime.now(UTC)
+        issue = Issue(id="PROJ-1",
+            type=IssueType.EPIC,
             title="Auth",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_body="This is repeatable.\n---\nThis is not.",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            body="This is repeatable.\n---\nThis is not.",
         )
         assert issue.get_repeatable_body() == "This is repeatable."
 
     def test_get_repeatable_body_no_separator(self) -> None:
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+        from datetime import datetime
+        now = datetime.now(UTC)
+        issue = Issue(id="PROJ-1",
+            type=IssueType.EPIC,
             title="Auth",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_body="All of this is repeatable.",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            body="All of this is repeatable.",
         )
         assert issue.get_repeatable_body() == "All of this is repeatable."
 
     def test_get_repeatable_body_none(self) -> None:
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+        from datetime import datetime
+        now = datetime.now(UTC)
+        issue = Issue(id="PROJ-1",
+            type=IssueType.EPIC,
             title="Auth",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
         )
-        assert issue.get_repeatable_body() is None
+        assert issue.get_repeatable_body() == ""
 
     def test_get_full_body(self) -> None:
-        issue = Issue(
-            uuid="abc-123",
-            tw_id="PROJ-1",
-            tw_type=IssueType.EPIC,
+        from datetime import datetime
+        now = datetime.now(UTC)
+        issue = Issue(id="PROJ-1",
+            type=IssueType.EPIC,
             title="Auth",
-            tw_status=IssueStatus.NEW,
-            project="myproject",
-            tw_body="Repeatable.\n---\nDetails.",
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            body="Repeatable.\n---\nDetails.",
         )
         assert issue.get_full_body() == "Repeatable.\n---\nDetails."

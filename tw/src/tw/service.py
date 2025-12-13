@@ -3,7 +3,7 @@
 import logging
 from datetime import UTC, datetime
 
-from tw.backend import TaskWarriorBackend
+from tw.backend import SqliteBackend
 from tw.ids import generate_next_epic_id, generate_next_story_id, generate_next_task_id
 from tw.models import Annotation, AnnotationType, Issue, IssueStatus, IssueType
 from tw.refs import extract_refs
@@ -16,13 +16,23 @@ class IssueService:
 
     def __init__(
         self,
-        backend: TaskWarriorBackend,
-        project: str,
+        backend: SqliteBackend,
         prefix: str,
     ) -> None:
         self._backend = backend
-        self._project = project
         self._prefix = prefix
+
+    def _get_all_issues(self) -> list[Issue]:
+        """Get all issues from backend."""
+        return self._backend.get_all_issues()
+
+    def _save_issue(self, issue: Issue) -> None:
+        """Save an issue to the backend."""
+        self._backend.save_issue(issue)
+
+    def _get_all_ids(self, include_deleted: bool = False) -> list[str]:
+        """Get all issue IDs."""
+        return self._backend.get_all_ids()
 
     def create_issue(
         self,
@@ -54,10 +64,10 @@ class IssueService:
         # Validate parent is not a backlog item
         if parent_id is not None:
             parent = self.get_issue(parent_id)
-            if is_backlog_type(parent.tw_type):
-                raise ValueError(f"{parent.tw_type.value} issues cannot have children")
+            if is_backlog_type(parent.type):
+                raise ValueError(f"{parent.type.value} issues cannot have children")
 
-        existing_ids = self._backend.get_all_ids(self._project, include_deleted=True)
+        existing_ids = self._get_all_ids(include_deleted=True)
 
         # Generate ID based on type
         if issue_type == IssueType.EPIC or is_backlog_type(issue_type):
@@ -72,19 +82,20 @@ class IssueService:
         if body:
             tw_refs = extract_refs(body, self._prefix)
 
+        now = datetime.now(UTC)
         issue = Issue(
-            uuid=self._backend.generate_uuid(),
-            tw_id=tw_id,
-            tw_type=issue_type,
+            id=tw_id,
+            type=issue_type,
             title=title,
-            tw_status=IssueStatus.NEW,
-            project=self._project,
-            tw_parent=parent_id,
-            tw_body=body,
-            tw_refs=tw_refs,
+            status=IssueStatus.NEW,
+            created_at=now,
+            updated_at=now,
+            parent=parent_id,
+            body=body,
+            refs=tw_refs,
         )
 
-        self._backend.import_issue(issue)
+        self._save_issue(issue)
         logger.debug(f"Created {issue_type.value} {tw_id}: {title}")
         return tw_id
 
@@ -94,15 +105,14 @@ class IssueService:
         Raises:
             KeyError: If the issue is not found.
         """
-        issues = self._backend.export_project(self._project)
-        for issue in issues:
-            if issue.tw_id == tw_id:
-                return issue
-        raise KeyError(f"Issue {tw_id} not found")
+        issue = self._backend.get_issue(tw_id)
+        if issue is None:
+            raise KeyError(f"Issue {tw_id} not found")
+        return issue
 
     def get_all_issues(self) -> list[Issue]:
         """Get all issues in the project."""
-        return self._backend.export_project(self._project)
+        return self._get_all_issues()
 
     def get_issue_with_children(self, tw_id: str) -> tuple[Issue, list[Issue]]:
         """Get an issue and its direct children.
@@ -118,13 +128,15 @@ class IssueService:
         """
         parent = self.get_issue(tw_id)
         all_issues = self.get_all_issues()
-        children = [issue for issue in all_issues if issue.tw_parent == tw_id]
+        children = [issue for issue in all_issues if issue.parent == tw_id]
         return parent, children
 
     def get_issue_with_context(
         self, tw_id: str
     ) -> tuple[Issue, list[Issue], list[Issue], list[Issue], list[Issue], list[Issue]]:
-        """Get an issue with full context (ancestors, siblings, descendants, referenced, referencing).
+        """Get an issue with full context.
+
+        Context includes: ancestors, siblings, descendants, referenced, referencing.
 
         Args:
             tw_id: The issue ID
@@ -144,53 +156,53 @@ class IssueService:
 
         issue = self.get_issue(tw_id)
         all_issues = self.get_all_issues()
-        issue_by_id = {i.tw_id: i for i in all_issues}
+        issue_by_id = {i.id: i for i in all_issues}
 
         ancestors: list[Issue] = []
-        current_parent_id = issue.tw_parent
+        current_parent_id = issue.parent
         while current_parent_id:
             parent = issue_by_id.get(current_parent_id)
             if parent:
                 ancestors.append(parent)
-                current_parent_id = parent.tw_parent
+                current_parent_id = parent.parent
             else:
                 break
 
-        if issue.tw_parent is not None:
+        if issue.parent is not None:
             siblings = [
                 i
                 for i in all_issues
-                if i.tw_parent == issue.tw_parent and i.tw_id != tw_id
+                if i.parent == issue.parent and i.id != tw_id
             ]
-            siblings = sorted(siblings, key=lambda i: parse_id_sort_key(i.tw_id))
+            siblings = sorted(siblings, key=lambda i: parse_id_sort_key(i.id))
         else:
             siblings = []
 
         def get_all_descendants(issue_id: str) -> list[Issue]:
             """Recursively get all descendants of an issue."""
             result = []
-            children = [i for i in all_issues if i.tw_parent == issue_id]
-            children = sorted(children, key=lambda i: parse_id_sort_key(i.tw_id))
+            children = [i for i in all_issues if i.parent == issue_id]
+            children = sorted(children, key=lambda i: parse_id_sort_key(i.id))
             for child in children:
                 result.append(child)
-                result.extend(get_all_descendants(child.tw_id))
+                result.extend(get_all_descendants(child.id))
             return result
 
         descendants = get_all_descendants(tw_id)
 
         referenced = []
-        if issue.tw_refs:
-            for ref_id in issue.tw_refs:
+        if issue.refs:
+            for ref_id in issue.refs:
                 ref_issue = issue_by_id.get(ref_id)
                 if ref_issue:
                     referenced.append(ref_issue)
-        referenced = sorted(referenced, key=lambda i: parse_id_sort_key(i.tw_id))
+        referenced = sorted(referenced, key=lambda i: parse_id_sort_key(i.id))
 
         referencing = [
             i for i in all_issues
-            if i.tw_refs and tw_id in i.tw_refs
+            if i.refs and tw_id in i.refs
         ]
-        referencing = sorted(referencing, key=lambda i: parse_id_sort_key(i.tw_id))
+        referencing = sorted(referencing, key=lambda i: parse_id_sort_key(i.id))
 
         return issue, ancestors, siblings, descendants, referenced, referencing
 
@@ -219,7 +231,7 @@ class IssueService:
         if root_id is not None:
             root_issue = None
             for issue in all_issues:
-                if issue.tw_id == root_id:
+                if issue.id == root_id:
                     root_issue = issue
                     break
 
@@ -229,18 +241,18 @@ class IssueService:
             def get_all_descendants(issue_id: str) -> list[Issue]:
                 """Recursively get all descendants of an issue."""
                 descendants = []
-                children = [i for i in all_issues if i.tw_parent == issue_id]
+                children = [i for i in all_issues if i.parent == issue_id]
                 for child in children:
                     descendants.append(child)
-                    descendants.extend(get_all_descendants(child.tw_id))
+                    descendants.extend(get_all_descendants(child.id))
                 return descendants
 
             result = [root_issue]
             result.extend(get_all_descendants(root_id))
 
-            return sorted(result, key=lambda i: parse_id_sort_key(i.tw_id))
+            return sorted(result, key=lambda i: parse_id_sort_key(i.id))
 
-        issue_by_id = {issue.tw_id: issue for issue in all_issues}
+        issue_by_id = {issue.id: issue for issue in all_issues}
 
         def is_tree_complete(issue_id: str) -> bool:
             """Check if an issue and all its descendants are complete."""
@@ -249,53 +261,53 @@ class IssueService:
                 return False
 
             children = [
-                i for i in all_issues if i.tw_parent == issue_id
+                i for i in all_issues if i.parent == issue_id
             ]
 
-            if issue.tw_status != IssueStatus.DONE:
+            if issue.status != IssueStatus.DONE:
                 return False
 
             for child in children:
-                if not is_tree_complete(child.tw_id):
+                if not is_tree_complete(child.id):
                     return False
 
             return True
 
         def get_children_sorted(parent_id: str) -> list[Issue]:
             """Get children of a parent, sorted by ID."""
-            children = [i for i in all_issues if i.tw_parent == parent_id]
-            return sorted(children, key=lambda i: parse_id_sort_key(i.tw_id))
+            children = [i for i in all_issues if i.parent == parent_id]
+            return sorted(children, key=lambda i: parse_id_sort_key(i.id))
 
         # Collect all root-level issues (epics + orphan stories + orphan tasks)
         epics = [
             i for i in all_issues
-            if i.tw_type == IssueType.EPIC and not is_tree_complete(i.tw_id)
+            if i.type == IssueType.EPIC and not is_tree_complete(i.id)
         ]
         orphan_stories = [
             i for i in all_issues
-            if i.tw_type == IssueType.STORY
-            and i.tw_parent is None
-            and not is_tree_complete(i.tw_id)
+            if i.type == IssueType.STORY
+            and i.parent is None
+            and not is_tree_complete(i.id)
         ]
         orphan_tasks = [
             i for i in all_issues
-            if i.tw_type == IssueType.TASK
-            and i.tw_parent is None
-            and i.tw_status != IssueStatus.DONE
+            if i.type == IssueType.TASK
+            and i.parent is None
+            and i.status != IssueStatus.DONE
         ]
 
         roots = epics + orphan_stories + orphan_tasks
-        roots_sorted = sorted(roots, key=lambda i: parse_id_sort_key(i.tw_id))
+        roots_sorted = sorted(roots, key=lambda i: parse_id_sort_key(i.id))
 
         result = []
         for root in roots_sorted:
             result.append(root)
-            if root.tw_type == IssueType.EPIC:
-                for story in get_children_sorted(root.tw_id):
+            if root.type == IssueType.EPIC:
+                for story in get_children_sorted(root.id):
                     result.append(story)
-                    result.extend(get_children_sorted(story.tw_id))
-            elif root.tw_type == IssueType.STORY:
-                result.extend(get_children_sorted(root.tw_id))
+                    result.extend(get_children_sorted(story.id))
+            elif root.type == IssueType.STORY:
+                result.extend(get_children_sorted(root.id))
 
         return result
 
@@ -303,15 +315,19 @@ class IssueService:
         self, issue: Issue, ann_type: AnnotationType, message: str
     ) -> None:
         """Add an annotation to an issue and save."""
+        now = datetime.now(UTC)
         annotation = Annotation(
             type=ann_type,
-            timestamp=datetime.now(UTC),
+            timestamp=now,
             message=message,
         )
         if issue.annotations is None:
             issue.annotations = []
         issue.annotations.append(annotation)
-        self._backend.import_issue(issue)
+        issue.updated_at = now
+
+        self._backend.add_annotation(issue.id, annotation)
+        self._backend.save_issue(issue)
 
     def _validate_not_backlog(self, tw_id: str, operation: str) -> Issue:
         """Validate issue is not a backlog type, return the issue.
@@ -329,8 +345,8 @@ class IssueService:
         from tw.models import is_backlog_type
 
         issue = self.get_issue(tw_id)
-        if is_backlog_type(issue.tw_type):
-            raise ValueError(f"{operation} not supported for {issue.tw_type.value} issues")
+        if is_backlog_type(issue.type):
+            raise ValueError(f"{operation} not supported for {issue.type.value} issues")
         return issue
 
     def _transition(
@@ -344,12 +360,12 @@ class IssueService:
         """Perform a status transition with validation."""
         issue = self.get_issue(tw_id)
 
-        if issue.tw_status not in valid_from:
+        if issue.status not in valid_from:
             raise ValueError(
-                f"cannot transition {tw_id}: already {issue.tw_status.value}"
+                f"cannot transition {tw_id}: already {issue.status.value}"
             )
 
-        issue.tw_status = to_status
+        issue.status = to_status
         self._add_annotation(issue, ann_type, message)
         logger.info(f"{tw_id}: {to_status.value}")
 
@@ -372,27 +388,27 @@ class IssueService:
 
         if not force:
             # Backlog items can go directly from NEW to DONE
-            if is_backlog_type(issue.tw_type):
+            if is_backlog_type(issue.type):
                 valid_from = [IssueStatus.NEW, IssueStatus.IN_PROGRESS]
             else:
                 valid_from = [IssueStatus.IN_PROGRESS]
 
-            if issue.tw_status not in valid_from:
+            if issue.status not in valid_from:
                 raise ValueError(
-                    f"cannot transition {tw_id}: status is {issue.tw_status.value}"
+                    f"cannot transition {tw_id}: status is {issue.status.value}"
                 )
 
             all_issues = self.get_all_issues()
-            children = [i for i in all_issues if i.tw_parent == tw_id]
-            undone_children = [c for c in children if c.tw_status != IssueStatus.DONE]
+            children = [i for i in all_issues if i.parent == tw_id]
+            undone_children = [c for c in children if c.status != IssueStatus.DONE]
 
             if undone_children:
-                undone_ids = ", ".join(c.tw_id for c in undone_children)
+                undone_ids = ", ".join(c.id for c in undone_children)
                 raise ValueError(
                     f"cannot mark {tw_id} as done: has undone children: {undone_ids}"
                 )
 
-        issue.tw_status = IssueStatus.DONE
+        issue.status = IssueStatus.DONE
         self._add_annotation(issue, AnnotationType.WORK_END, "")
         logger.info(f"{tw_id}: done")
 
@@ -403,10 +419,10 @@ class IssueService:
         def get_all_descendants(parent_id: str) -> list[str]:
             """Recursively get all descendant IDs."""
             descendants = []
-            children = [i for i in all_issues if i.tw_parent == parent_id]
+            children = [i for i in all_issues if i.parent == parent_id]
             for child in children:
-                descendants.append(child.tw_id)
-                descendants.extend(get_all_descendants(child.tw_id))
+                descendants.append(child.id)
+                descendants.extend(get_all_descendants(child.id))
             return descendants
 
         descendants = get_all_descendants(tw_id)
@@ -478,10 +494,11 @@ class IssueService:
             issue.title = title
 
         if body is not None:
-            issue.tw_body = body if body else None
-            issue.tw_refs = extract_refs(body, self._prefix) if body else []
+            issue.body = body if body else None
+            issue.refs = extract_refs(body, self._prefix) if body else []
 
-        self._backend.import_issue(issue)
+        issue.updated_at = datetime.now(UTC)
+        self._save_issue(issue)
         logger.info(f"Updated {tw_id}")
 
     def delete_issue(self, tw_id: str) -> None:
@@ -494,20 +511,209 @@ class IssueService:
             ValueError: If the issue has children that must be deleted first.
             KeyError: If the issue is not found.
         """
-        issue = self.get_issue(tw_id)
+        self.get_issue(tw_id)
 
         all_issues = self.get_all_issues()
-        children = [i for i in all_issues if i.tw_parent == tw_id]
+        children = [i for i in all_issues if i.parent == tw_id]
 
         if children:
-            child_ids = ", ".join(i.tw_id for i in children)
+            child_ids = ", ".join(i.id for i in children)
             raise ValueError(
                 f"Cannot delete {tw_id}: it has children ({child_ids}). "
                 f"Delete children first."
             )
 
-        self._backend.delete_issue(issue.uuid)
+        self._backend.delete_issue(tw_id)
         logger.info(f"Deleted {tw_id}")
+
+    def promote_issue(
+        self,
+        tw_id: str,
+        target_type: IssueType | None = None,
+        new_parent_id: str | None = None,
+    ) -> str:
+        """Promote an issue to a specific type or parent.
+
+        Creates a new issue with the specified type and parent, copies all
+        metadata (title, body, annotations, status), and deletes the original.
+        If the issue has children, they are recursively moved as well.
+
+        Args:
+            tw_id: The issue ID to promote
+            target_type: The desired issue type (epic, story, task). If None,
+                type is inferred from parent.
+            new_parent_id: The new parent's tw_id, or None for orphan
+
+        Returns:
+            The new tw_id of the promoted issue
+
+        Raises:
+            ValueError: If the promotion is invalid
+            KeyError: If the issue or parent is not found.
+        """
+        from tw.models import is_backlog_type
+
+        issue = self.get_issue(tw_id)
+
+        if new_parent_id == tw_id:
+            raise ValueError("Cannot promote an issue to itself")
+
+        if new_parent_id is not None:
+            new_parent = self.get_issue(new_parent_id)
+            if is_backlog_type(new_parent.type):
+                raise ValueError(f"Cannot promote to a {new_parent.type.value}")
+
+            ancestors = []
+            current = new_parent
+            while current.parent:
+                ancestors.append(current.parent)
+                try:
+                    current = self.get_issue(current.parent)
+                except KeyError:
+                    break
+            if tw_id in ancestors:
+                raise ValueError("Cannot promote an issue to one of its descendants")
+
+        all_issues = self.get_all_issues()
+        children = [i for i in all_issues if i.parent == tw_id]
+        existing_ids = self._get_all_ids(include_deleted=True)
+
+        if target_type is not None:
+            new_type = target_type
+            if new_type == IssueType.EPIC or is_backlog_type(new_type):
+                if new_parent_id is not None:
+                    raise ValueError("Epics and backlog items cannot have parents")
+                new_id = generate_next_epic_id(self._prefix, existing_ids)
+            elif new_type == IssueType.STORY:
+                if new_parent_id is not None:
+                    parent = self.get_issue(new_parent_id)
+                    if parent.type != IssueType.EPIC:
+                        raise ValueError("Stories can only be children of epics")
+                    new_id = generate_next_story_id(new_parent_id, existing_ids, self._prefix)
+                else:
+                    new_id = generate_next_story_id(None, existing_ids, self._prefix)
+            else:
+                if new_parent_id is not None:
+                    new_id = generate_next_task_id(new_parent_id, existing_ids, self._prefix)
+                else:
+                    new_id = generate_next_task_id(None, existing_ids, self._prefix)
+        elif new_parent_id is None:
+            new_type = IssueType.EPIC
+            new_id = generate_next_epic_id(self._prefix, existing_ids)
+        else:
+            new_parent = self.get_issue(new_parent_id)
+            if new_parent.type == IssueType.EPIC:
+                new_type = IssueType.STORY
+                new_id = generate_next_story_id(new_parent_id, existing_ids, self._prefix)
+            else:
+                new_type = IssueType.TASK
+                new_id = generate_next_task_id(new_parent_id, existing_ids, self._prefix)
+
+        now = datetime.now(UTC)
+        new_issue = Issue(
+            id=new_id,
+            type=new_type,
+            title=issue.title,
+            status=issue.status,
+            created_at=issue.created_at,
+            updated_at=now,
+            parent=new_parent_id,
+            body=issue.body,
+            refs=issue.refs,
+            annotations=issue.annotations,
+        )
+        self._save_issue(new_issue)
+        existing_ids.append(new_id)
+
+        for child in children:
+            self.reparent_issue(child.id, new_id)
+        self._backend.delete_issue(tw_id)
+        logger.info(f"Promoted {tw_id} -> {new_id}")
+        return new_id
+
+    def reparent_issue(self, tw_id: str, new_parent_id: str | None) -> str:
+        """Move an issue to a new parent.
+
+        Creates a new issue under the new parent with a new ID, copies all
+        metadata (title, body, annotations, status), and deletes the original.
+        If the issue has children, they are recursively moved as well.
+
+        Args:
+            tw_id: The issue ID to move
+            new_parent_id: The new parent's tw_id, or None to make it a
+                top-level issue
+
+        Returns:
+            The new tw_id of the moved issue
+
+        Raises:
+            ValueError: If the move is invalid (e.g., moving to self, invalid
+                parent type, or backlog item)
+            KeyError: If the issue or parent is not found.
+        """
+        from tw.models import is_backlog_type
+
+        issue = self.get_issue(tw_id)
+
+        if is_backlog_type(issue.type):
+            raise ValueError("Cannot re-parent backlog items; use promote instead")
+
+        if new_parent_id == tw_id:
+            raise ValueError("Cannot re-parent an issue to itself")
+
+        if new_parent_id is not None:
+            new_parent = self.get_issue(new_parent_id)
+            if is_backlog_type(new_parent.type):
+                raise ValueError(f"Cannot re-parent to a {new_parent.type.value}")
+
+            ancestors = []
+            current = new_parent
+            while current.parent:
+                ancestors.append(current.parent)
+                try:
+                    current = self.get_issue(current.parent)
+                except KeyError:
+                    break
+            if tw_id in ancestors:
+                raise ValueError("Cannot re-parent an issue to one of its descendants")
+
+        all_issues = self.get_all_issues()
+        children = [i for i in all_issues if i.parent == tw_id]
+        existing_ids = self._get_all_ids(include_deleted=True)
+
+        if new_parent_id is None:
+            new_type = IssueType.EPIC
+            new_id = generate_next_epic_id(self._prefix, existing_ids)
+        else:
+            new_parent = self.get_issue(new_parent_id)
+            if new_parent.type == IssueType.EPIC:
+                new_type = IssueType.STORY
+                new_id = generate_next_story_id(new_parent_id, existing_ids, self._prefix)
+            else:
+                new_type = IssueType.TASK
+                new_id = generate_next_task_id(new_parent_id, existing_ids, self._prefix)
+
+        now = datetime.now(UTC)
+        new_issue = Issue(
+            id=new_id,
+            type=new_type,
+            title=issue.title,
+            status=issue.status,
+            created_at=issue.created_at,
+            updated_at=now,
+            parent=new_parent_id,
+            body=issue.body,
+            refs=issue.refs,
+            annotations=issue.annotations,
+        )
+        self._save_issue(new_issue)
+        existing_ids.append(new_id)
+
+        for child in children:
+            self.reparent_issue(child.id, new_id)
+        self._backend.delete_issue(tw_id)
+        logger.info(f"Re-parented {tw_id} -> {new_id}")
+        return new_id
 
     def get_backlog_issues(self) -> list[Issue]:
         """Get all NEW backlog items (bugs and ideas).
@@ -515,15 +721,15 @@ class IssueService:
         Returns:
             List of backlog issues with NEW status, sorted by ID
         """
-        from tw.models import is_backlog_type
         from tw.ids import parse_id_sort_key
+        from tw.models import is_backlog_type
 
         all_issues = self.get_all_issues()
         backlog = [
             i for i in all_issues
-            if is_backlog_type(i.tw_type) and i.tw_status == IssueStatus.NEW
+            if is_backlog_type(i.type) and i.status == IssueStatus.NEW
         ]
-        return sorted(backlog, key=lambda i: parse_id_sort_key(i.tw_id))
+        return sorted(backlog, key=lambda i: parse_id_sort_key(i.id))
 
     def get_issue_tree_with_backlog(
         self, root_id: str | None = None
@@ -539,7 +745,7 @@ class IssueService:
         tree = self.get_issue_tree(root_id)
         hierarchy_tree = [
             issue for issue in tree
-            if not is_backlog_type(issue.tw_type)
+            if not is_backlog_type(issue.type)
         ]
 
         return hierarchy_tree, backlog_issues

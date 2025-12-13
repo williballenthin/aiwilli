@@ -160,6 +160,7 @@ Auto-generated keybinding hints showing available actions.
 | `b` | new_bug | Create new bug in backlog |
 | `i` | new_idea | Create new idea in backlog |
 | `p` | promote_issue | Promote backlog item to hierarchy |
+| `r` | reparent | Move issue to a different parent |
 | `c` | comment | Add comment to selected issue |
 | `g` | groom | Groom backlog via external editor |
 | `Escape` | close_dialogs | Close any open dialogs |
@@ -227,6 +228,15 @@ Auto-generated keybinding hints showing available actions.
 4. Create new issue (STORY if parent is EPIC, else TASK)
 5. Copy title and body from original
 6. Mark original backlog item as done
+
+**Re-parent (r):**
+1. Verify selected issue is not a backlog type
+2. Show picker dialog with available parents (epics/stories/tasks) plus "(none)" option
+3. User selects new parent
+4. Create new issue under the new parent with appropriate type
+5. Copy all metadata (title, body, annotations, status)
+6. Recursively move any children
+7. Delete original issue
 
 **Groom (g):**
 1. Suspend TUI

@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from tw.backend import SqliteBackend
+from tw.service import IssueService
+
 
 @pytest.fixture(scope="session")
 def project_root() -> Path:
@@ -21,36 +24,29 @@ def temp_dir() -> Generator[Path, None, None]:
         yield Path(tmpdir)
 
 
-@pytest.fixture
-def taskwarrior_env(temp_dir: Path) -> Generator[dict[str, str], None, None]:
-    """Provide isolated TaskWarrior environment.
 
-    Creates a temporary TASKDATA directory and configures UDAs.
+
+@pytest.fixture
+def sqlite_env(temp_dir: Path) -> Generator[dict[str, str], None, None]:
+    """Provide isolated SQLite environment for testing.
+
+    Creates a temporary database and sets required environment variables.
     """
-    taskdata = temp_dir / "task"
-    taskdata.mkdir()
+    db_path = temp_dir / "tw.db"
 
     env = os.environ.copy()
-    env["TASKDATA"] = str(taskdata)
-    env["TASKRC"] = str(temp_dir / "taskrc")
-
-    # Create minimal taskrc with UDAs
-    taskrc_content = """
-data.location={}
-uda.tw_type.type=string
-uda.tw_type.label=Type
-uda.tw_id.type=string
-uda.tw_id.label=TW ID
-uda.tw_parent.type=string
-uda.tw_parent.label=Parent
-uda.tw_body.type=string
-uda.tw_body.label=Body
-uda.tw_refs.type=string
-uda.tw_refs.label=Refs
-uda.tw_status.type=string
-uda.tw_status.label=TW Status
-""".format(taskdata)
-
-    (temp_dir / "taskrc").write_text(taskrc_content)
+    env["TW_DB_PATH"] = str(db_path)
+    env["TW_PREFIX"] = "TEST"
 
     yield env
+
+
+@pytest.fixture
+def sqlite_service(temp_dir: Path) -> IssueService:
+    """Provide an IssueService with SqliteBackend for testing.
+
+    Creates a temporary SQLite database and initializes the service.
+    """
+    db_path = temp_dir / "test.db"
+    backend = SqliteBackend(db_path)
+    return IssueService(backend, prefix="TEST")

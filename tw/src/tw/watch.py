@@ -1,5 +1,4 @@
 import logging
-import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -16,35 +15,10 @@ from tw.service import IssueService
 logger = logging.getLogger(__name__)
 
 
-def get_taskwarrior_data_dir() -> Path:
-    """Get TaskWarrior data directory from config.
-
-    Queries TaskWarrior for rc.data.location to respect custom configurations.
-
-    Returns:
-        Path to TaskWarrior data directory
-
-    Raises:
-        RuntimeError: If TaskWarrior query fails
-    """
-    result = subprocess.run(
-        ["task", "rc.confirmation=off", "_get", "rc.data.location"],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError("Failed to get TaskWarrior data directory")
-
-    data_dir = result.stdout.strip()
-    return Path(data_dir).expanduser().resolve()
-
-
 class WatchHandler(FileSystemEventHandler):
     """File system event handler with debouncing.
 
-    Triggers refresh event when .data files are modified, with 100ms debounce
-    to handle rapid successive writes from TaskWarrior.
+    Triggers refresh event when database files are modified, with 100ms debounce.
     """
 
     def __init__(self, event: threading.Event) -> None:
@@ -68,7 +42,7 @@ class WatchHandler(FileSystemEventHandler):
             return
 
         src_path = getattr(event, 'src_path')
-        if not isinstance(src_path, str) or not src_path.endswith('.data'):
+        if not isinstance(src_path, str) or not src_path.endswith('.db'):
             return
 
         with self.lock:
@@ -95,10 +69,11 @@ def watch_tree(
     tw_id: str | None,
     interval: int,
     console: Console,
+    db_path: Path,
 ) -> None:
     """Watch tree output with auto-refresh.
 
-    Monitors TaskWarrior data directory for changes and refreshes tree display.
+    Monitors SQLite database file for changes and refreshes tree display.
     Uses hybrid file watching + polling approach.
 
     Args:
@@ -106,11 +81,8 @@ def watch_tree(
         tw_id: Optional issue ID to filter tree
         interval: Poll interval in seconds
         console: Rich console for output
-
-    Raises:
-        RuntimeError: If TaskWarrior data directory cannot be detected
+        db_path: Path to the SQLite database file
     """
-    data_dir = get_taskwarrior_data_dir()
     refresh_event = threading.Event()
 
     handler = WatchHandler(refresh_event)
@@ -118,7 +90,7 @@ def watch_tree(
     use_watchdog = True
 
     try:
-        observer.schedule(handler, str(data_dir), recursive=False)
+        observer.schedule(handler, str(db_path.parent), recursive=False)
         observer.start()
     except Exception as e:
         logger.warning(f"File watching unavailable, using polling only: {e}")
