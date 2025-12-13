@@ -167,11 +167,11 @@ class Cursor(Static):
 
     DEFAULT_CSS = """
     Cursor {
-        width: 2;
+        width: 1;
         height: 1;
-        color: $primary;
+        border-left: outer $text-accent;
         &.-blink {
-            color: $primary 50%;
+            border-left: outer $text-accent 20%;
         }
     }
     """
@@ -211,7 +211,7 @@ class Cursor(Static):
             self._update_follow()
 
     def render(self) -> str:
-        return "▐"
+        return ""
 
 
 @dataclass
@@ -231,10 +231,10 @@ class IssueRow(Static):
         height: 1;
         padding: 0 1;
         &:hover {
-            background: $surface;
+            background: $foreground 5%;
         }
         &.-selected {
-            background: $primary 20%;
+            background: $primary 15%;
         }
         &.-done {
             color: $text-muted;
@@ -291,9 +291,12 @@ class IssueTree(VerticalScroll):
     DEFAULT_CSS = """
     IssueTree {
         height: 1fr;
-        border: solid $primary;
-        border-title-color: $primary;
+        border-left: tall $secondary;
         scrollbar-gutter: stable;
+        padding: 0 1 0 0;
+        &:focus-within {
+            border-left: tall $primary;
+        }
     }
     """
 
@@ -305,7 +308,14 @@ class IssueTree(VerticalScroll):
     ]
 
     highlighted: reactive[int | None] = reactive(None)
-    nodes: var[list[IssueNode]] = var(list)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._issue_nodes: list[IssueNode] = []
+
+    @property
+    def nodes(self) -> list[IssueNode]:
+        return self._issue_nodes
 
     @dataclass
     class SelectionChanged(Message):
@@ -323,15 +333,14 @@ class IssueTree(VerticalScroll):
             yield Cursor(id="tree-cursor")
             yield Vertical(id="tree-rows")
 
-    def on_mount(self) -> None:
-        self.border_title = "Issues"
-
-    def watch_nodes(self, nodes: list[IssueNode]) -> None:
+    async def refresh_nodes(self, nodes: list[IssueNode]) -> None:
+        """Update the tree with new nodes, properly awaiting DOM changes."""
+        self._issue_nodes = nodes
         container = self.query_one("#tree-rows", Vertical)
-        container.remove_children()
-        for i, node in enumerate(nodes):
-            row = IssueRow(node, id=f"row-{i}")
-            container.mount(row)
+        await container.remove_children()
+        for node in nodes:
+            row = IssueRow(node, id=f"row-{node.issue.tw_id}")
+            await container.mount(row)
         if self.highlighted is not None and self.highlighted >= len(nodes):
             self.highlighted = len(nodes) - 1 if nodes else None
         self._update_selection_classes()
@@ -352,7 +361,8 @@ class IssueTree(VerticalScroll):
         cursor = self.query_one("#tree-cursor", Cursor)
         if self.highlighted is not None and self.highlighted < len(self.nodes):
             try:
-                row = self.query_one(f"#row-{self.highlighted}", IssueRow)
+                tw_id = self.nodes[self.highlighted].issue.tw_id
+                row = self.query_one(f"#row-{tw_id}", IssueRow)
                 cursor.follow(row)
                 self.scroll_to_widget(row, animate=False)
             except Exception:
@@ -382,12 +392,11 @@ class IssueTree(VerticalScroll):
             return
         for ancestor in event.widget.ancestors_with_self:
             if isinstance(ancestor, IssueRow):
-                try:
-                    idx = int(ancestor.id.split("-")[1]) if ancestor.id else -1
-                    if 0 <= idx < len(self.nodes):
-                        self.highlighted = idx
-                except (ValueError, IndexError):
-                    pass
+                tw_id = ancestor.node.issue.tw_id
+                for i, node in enumerate(self.nodes):
+                    if node.issue.tw_id == tw_id:
+                        self.highlighted = i
+                        break
                 break
 
     def get_selected_issue(self) -> Issue | None:
@@ -409,9 +418,12 @@ class IssueDetail(VerticalScroll):
     DEFAULT_CSS = """
     IssueDetail {
         height: 1fr;
-        border: solid $accent;
-        border-title-color: $accent;
-        padding: 0 1;
+        border-left: tall $secondary;
+        padding: 1 1 0 1;
+        background: $foreground 4%;
+        &:focus-within {
+            border-left: tall $primary;
+        }
 
         #detail-body {
             height: auto;
@@ -433,9 +445,6 @@ class IssueDetail(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield Markdown(id="detail-body")
         yield Static(id="detail-links")
-
-    def on_mount(self) -> None:
-        self.border_title = "Details"
 
     def watch_issue(self, issue: Issue | None) -> None:
         body_widget = self.query_one("#detail-body", Markdown)
@@ -471,8 +480,8 @@ class InputDialog(Widget):
         overlay: screen;
         height: auto;
         width: 100%;
-        background: $surface;
-        border-top: solid $primary;
+        background: $background;
+        border: tall $secondary;
         padding: 1;
         display: none;
 
@@ -480,8 +489,13 @@ class InputDialog(Widget):
             display: block;
         }
 
+        &:focus-within {
+            border: tall $primary;
+        }
+
         #input-label {
             margin-bottom: 1;
+            color: $text-muted;
         }
         #input-field {
             width: 100%;
@@ -551,8 +565,8 @@ class PickerDialog(Widget):
         overlay: screen;
         height: 20;
         width: 100%;
-        background: $surface;
-        border: heavy $primary;
+        background: $background;
+        border: tall $secondary;
         padding: 1;
         display: none;
 
@@ -560,9 +574,13 @@ class PickerDialog(Widget):
             display: block;
         }
 
+        &:focus-within {
+            border: tall $primary;
+        }
+
         #picker-title {
             text-align: center;
-            text-style: bold;
+            color: $text-muted;
             margin-bottom: 1;
         }
         #picker-filter {
@@ -680,6 +698,7 @@ class TwApp(App[None]):
     CSS = """
     TwApp {
         layers: base float;
+        background: $background;
     }
 
     #main-container {
@@ -693,6 +712,19 @@ class TwApp(App[None]):
 
     #detail-pane {
         height: 40%;
+    }
+
+    Footer {
+        background: transparent;
+        .footer-key--key {
+            color: $text;
+            background: transparent;
+            padding: 0 1;
+        }
+        .footer-key--description {
+            padding: 0 1 0 0;
+            color: $text-muted;
+        }
     }
     """
 
@@ -805,7 +837,7 @@ class TwApp(App[None]):
             nodes = [IssueNode(issue=i, depth=compute_depth(i)) for i in hierarchy]
             nodes += [IssueNode(issue=i, depth=0) for i in backlog]
 
-            tree.nodes = nodes
+            await tree.refresh_nodes(nodes)
 
             if selected_id:
                 tree.select_issue_by_id(selected_id)
