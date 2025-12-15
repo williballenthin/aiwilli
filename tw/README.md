@@ -17,11 +17,35 @@
 
 - Python 3.11 or higher
 
+### Run Without Installing (using uv)
+
+```bash
+# Run directly from GitHub
+uvx --from git+https://github.com/williballenthin/aiwilli@main#subdirectory=tw tw --help
+
+# Pin to a specific commit
+uvx --from git+https://github.com/williballenthin/aiwilli@96135d7#subdirectory=tw tw --help
+
+# Alternative: uv run syntax
+uv run --with "tw @ git+https://github.com/williballenthin/aiwilli@main#subdirectory=tw" --no-project -- tw --help
+```
+
+### Run Without Installing (using Nix)
+
+```bash
+# Run directly from GitHub
+nix run github:williballenthin/aiwilli?dir=tw -- --help
+
+# Build locally
+nix build github:williballenthin/aiwilli?dir=tw
+./result/bin/tw --help
+```
+
 ### Install from Source
 
 ```bash
-git clone <repository-url>
-cd tw
+git clone https://github.com/williballenthin/aiwilli
+cd aiwilli/tw
 pip install -e ".[dev]"
 ```
 
