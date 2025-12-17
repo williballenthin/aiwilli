@@ -37,8 +37,10 @@ from tw.backend import SqliteBackend
 from tw.config import get_db_path, get_prefix
 from tw.models import AnnotationType, Issue, IssueStatus, IssueType, is_backlog_type
 from tw.render import (
+    build_claude_prompt,
     generate_edit_template,
     parse_edited_content,
+    render_brief,
     render_view_body,
     render_view_links,
     status_timestamp,
@@ -892,6 +894,11 @@ class TwCommandProvider(Provider):
             help="Open backlog grooming interface (g)",
         )
         yield DiscoveryHit(
+            "Toggle project filter",
+            self._app.action_toggle_project_filter,
+            help="Show only current project issues",
+        )
+        yield DiscoveryHit(
             "Quit application",
             self._app.action_quit,
             help="Exit the tw TUI (q)",
@@ -914,6 +921,7 @@ class TwCommandProvider(Provider):
             ("Comment on issue", self._app.action_comment, "Add comment to issue (c)"),
             ("Send to Claude", self._app.action_send_to_claude, "Send to Claude (C)"),
             ("Groom backlog", self._app.action_groom, "Open backlog grooming (g)"),
+            ("Toggle project filter", self._app.action_toggle_project_filter, "Show only current project"),
             ("Quit application", self._app.action_quit, "Exit tw TUI (q)"),
         ]
 
@@ -995,6 +1003,7 @@ class TwApp(App[None]):
 
     busy_count: reactive[int] = reactive(0)
     hide_done: reactive[bool] = reactive(False)
+    filter_by_prefix: reactive[bool] = reactive(True)
     _service: IssueService
     _observer: BaseObserver | None = None
     _watch_handler: WatchHandler | None = None
@@ -1073,6 +1082,12 @@ class TwApp(App[None]):
                 select_id = self._selected_issue_id
 
             hierarchy, backlog = self._service.get_issue_tree_with_backlog()
+
+            if self.filter_by_prefix:
+                prefix = self._service.prefix
+                hierarchy = [i for i in hierarchy if i.id.startswith(prefix)]
+                backlog = [i for i in backlog if i.id.startswith(prefix)]
+
             await tree.refresh_tree(hierarchy, backlog, select_id, self.hide_done)
 
         finally:
@@ -1322,29 +1337,16 @@ class TwApp(App[None]):
             self.flash("Select an issue first", "warning")
             return
 
-        parent, children = self._service.get_issue_with_children(issue.id)
+        issue_obj, ancestors, siblings, descendants, referenced, referencing = (
+            self._service.get_issue_with_context(issue.id)
+        )
+        brief_output = render_brief(
+            issue_obj, ancestors, siblings, descendants, referenced, referencing
+        )
+        child_count = sum(1 for d in descendants if d.parent == issue.id)
+        prompt = build_claude_prompt(brief_output, child_count, issue_obj.id)
 
         def run_claude(model: str) -> None:
-            try:
-                brief_result = subprocess.run(
-                    ["tw", "brief", issue.id],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                prompt = brief_result.stdout
-                if len(children) > 1:
-                    prompt += (
-                        "\n\nConsider chunking the work and dispatching to "
-                        "parallel or sequential subagents"
-                    )
-            except subprocess.CalledProcessError as e:
-                self.flash(f"Failed to get brief for {issue.id}: {e}", "error")
-                return
-            except FileNotFoundError:
-                self.flash("tw command not found", "error")
-                return
-
             try:
                 with self.suspend():
                     subprocess.run(
@@ -1370,6 +1372,13 @@ class TwApp(App[None]):
         self._load_tree()
         status = "on" if self.hide_done else "off"
         self.flash(f"Hide done: {status}")
+
+    def action_toggle_project_filter(self) -> None:
+        self._record_action()
+        self.filter_by_prefix = not self.filter_by_prefix
+        self._load_tree()
+        status = "on" if self.filter_by_prefix else "off"
+        self.flash(f"Project filter: {status}")
 
     def action_cursor_down(self) -> None:
         tree = self.query_one("#tree-pane", IssueTree)
