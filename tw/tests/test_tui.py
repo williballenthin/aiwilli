@@ -22,6 +22,7 @@ from tw.tui import (
 def mock_service() -> MagicMock:
     """Create a mock IssueService with test data."""
     service = MagicMock(spec=IssueService)
+    service.prefix = "TW"
     now = datetime.now(UTC)
 
     test_issues = [
@@ -339,7 +340,7 @@ class TestIssueDetail:
                     async with app.run_test() as pilot:
                         await pilot.pause()
                         detail = app.query_one("#detail-pane", IssueDetail)
-                        assert detail.issue is not None
+                        assert detail.context is not None
 
 
 class TestSelectionPreservation:
