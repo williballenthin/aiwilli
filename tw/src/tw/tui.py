@@ -41,8 +41,6 @@ from tw.render import (
     generate_edit_template,
     parse_edited_content,
     render_brief,
-    render_view_body,
-    render_view_links,
     status_timestamp,
 )
 from tw.service import IssueService
@@ -332,9 +330,49 @@ class IssueTree(Tree[Issue]):
             return True
         return False
 
+    def update_issue(self, issue: Issue) -> None:
+        """Update label and data for an existing issue node in-place."""
+        if issue.id not in self._issue_map:
+            return
+        node = self._issue_map[issue.id]
+        node.set_label(self._render_issue_label(issue))
+        node.data = issue
+
+    def add_issue(self, issue: Issue, parent_id: str | None, is_backlog: bool = False) -> None:
+        """Add a new issue node under the given parent."""
+        if is_backlog:
+            backlog_node = None
+            for child in self.root.children:
+                if child.data is None:
+                    backlog_node = child
+                    break
+            if backlog_node is None:
+                backlog_label = Text("backlog", style="dim")
+                backlog_node = self.root.add(backlog_label, expand=True, allow_expand=False)
+            parent_node = backlog_node
+        elif parent_id is None:
+            parent_node = self.root
+        elif parent_id in self._issue_map:
+            parent_node = self._issue_map[parent_id]
+        else:
+            return
+
+        label = self._render_issue_label(issue)
+        child_node = parent_node.add_leaf(label, data=issue)
+        self._issue_map[issue.id] = child_node
+        self.select_node(child_node)
+
+    def remove_issue(self, issue_id: str) -> None:
+        """Remove an issue node from the tree."""
+        if issue_id not in self._issue_map:
+            return
+        node = self._issue_map[issue_id]
+        node.remove()
+        del self._issue_map[issue_id]
+
 
 class IssueDetail(VerticalScroll, can_focus=False):
-    """Detail pane showing selected issue context."""
+    """Detail pane showing selected issue brief."""
 
     DEFAULT_CSS = """
     IssueDetail {
@@ -346,12 +384,8 @@ class IssueDetail(VerticalScroll, can_focus=False):
             border-left: tall $primary;
         }
 
-        #detail-body {
+        #detail-brief {
             height: auto;
-        }
-        #detail-links {
-            height: auto;
-            margin-top: 1;
         }
     }
     """
@@ -360,35 +394,21 @@ class IssueDetail(VerticalScroll, can_focus=False):
         Issue, list[Issue], list[Issue], list[Issue], list[Issue], list[Issue]
     ]
 
-    issue: var[Issue | None] = var(None)
     context: var[IssueContext | None] = var(None)
 
     def compose(self) -> ComposeResult:
-        yield Markdown(id="detail-body")
-        yield Static(id="detail-links")
-
-    def watch_issue(self, issue: Issue | None) -> None:
-        body_widget = self.query_one("#detail-body", Markdown)
-        if issue is None:
-            body_widget.update("")
-        else:
-            body_md = render_view_body(issue)
-            body_widget.update(body_md)
+        yield Markdown(id="detail-brief")
 
     def watch_context(self, context: IssueContext | None) -> None:
-        links_widget = self.query_one("#detail-links", Static)
+        brief_widget = self.query_one("#detail-brief", Markdown)
         if context is None:
-            links_widget.update("")
+            brief_widget.update("")
         else:
-            _, ancestors, siblings, descendants, referenced, referencing = context
-            links_markup = render_view_links(
-                ancestors=ancestors,
-                siblings=siblings,
-                descendants=descendants,
-                referenced=referenced,
-                referencing=referencing,
+            issue, ancestors, siblings, descendants, referenced, referencing = context
+            brief_md = render_brief(
+                issue, ancestors, siblings, descendants, referenced, referencing
             )
-            links_widget.update(links_markup)
+            brief_widget.update(brief_md)
 
 
 class InputDialog(Widget):
@@ -894,11 +914,6 @@ class TwCommandProvider(Provider):
             help="Open backlog grooming interface (g)",
         )
         yield DiscoveryHit(
-            "Toggle project filter",
-            self._app.action_toggle_project_filter,
-            help="Show only current project issues",
-        )
-        yield DiscoveryHit(
             "Quit application",
             self._app.action_quit,
             help="Exit the tw TUI (q)",
@@ -921,7 +936,6 @@ class TwCommandProvider(Provider):
             ("Comment on issue", self._app.action_comment, "Add comment to issue (c)"),
             ("Send to Claude", self._app.action_send_to_claude, "Send to Claude (C)"),
             ("Groom backlog", self._app.action_groom, "Open backlog grooming (g)"),
-            ("Toggle project filter", self._app.action_toggle_project_filter, "Show only current project"),
             ("Quit application", self._app.action_quit, "Exit tw TUI (q)"),
         ]
 
@@ -1003,7 +1017,6 @@ class TwApp(App[None]):
 
     busy_count: reactive[int] = reactive(0)
     hide_done: reactive[bool] = reactive(False)
-    filter_by_prefix: reactive[bool] = reactive(True)
     _service: IssueService
     _observer: BaseObserver | None = None
     _watch_handler: WatchHandler | None = None
@@ -1082,11 +1095,9 @@ class TwApp(App[None]):
                 select_id = self._selected_issue_id
 
             hierarchy, backlog = self._service.get_issue_tree_with_backlog()
-
-            if self.filter_by_prefix:
-                prefix = self._service.prefix
-                hierarchy = [i for i in hierarchy if i.id.startswith(prefix)]
-                backlog = [i for i in backlog if i.id.startswith(prefix)]
+            prefix = self._service.prefix
+            hierarchy = [i for i in hierarchy if i.id.startswith(prefix)]
+            backlog = [i for i in backlog if i.id.startswith(prefix)]
 
             await tree.refresh_tree(hierarchy, backlog, select_id, self.hide_done)
 
@@ -1103,10 +1114,8 @@ class TwApp(App[None]):
         except Exception:
             return
         if event.issue is None:
-            detail.issue = None
             detail.context = None
         else:
-            detail.issue = event.issue
             try:
                 context = self._service.get_issue_with_context(event.issue.id)
                 detail.context = context
@@ -1134,8 +1143,9 @@ class TwApp(App[None]):
             return
         try:
             self._service.start_issue(issue.id)
+            updated = self._service.get_issue(issue.id)
+            tree.update_issue(updated)
             self.flash(f"Started {issue.id}")
-            self._load_tree()
         except ValueError as e:
             self.flash(str(e), "error")
 
@@ -1147,8 +1157,9 @@ class TwApp(App[None]):
             return
         try:
             self._service.done_issue(issue.id)
+            updated = self._service.get_issue(issue.id)
+            tree.update_issue(updated)
             self.flash(f"Completed {issue.id}")
-            self._load_tree()
         except ValueError as e:
             self.flash(str(e), "error")
 
@@ -1176,8 +1187,9 @@ class TwApp(App[None]):
 
             new_title, new_body = parse_edited_content(content)
             self._service.update_issue(issue.id, title=new_title, body=new_body)
+            updated = self._service.get_issue(issue.id)
+            tree.update_issue(updated)
             self.flash(f"Updated {issue.id}")
-            self._load_tree()
         except (ValueError, subprocess.CalledProcessError) as e:
             self.flash(str(e), "error")
         finally:
@@ -1207,8 +1219,9 @@ class TwApp(App[None]):
                 new_id = self._service.create_issue(
                     child_type, title, parent_id=issue.id
                 )
+                new_issue = self._service.get_issue(new_id)
+                tree.add_issue(new_issue, issue.id)
                 self.flash(f"Created {new_id}")
-                self._load_tree(new_id)
             except ValueError as e:
                 self.flash(str(e), "error")
 
@@ -1217,12 +1230,14 @@ class TwApp(App[None]):
 
     def action_new_epic(self) -> None:
         self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
 
         def create_epic(title: str) -> None:
             try:
                 new_id = self._service.create_issue(IssueType.EPIC, title)
+                new_issue = self._service.get_issue(new_id)
+                tree.add_issue(new_issue, None)
                 self.flash(f"Created {new_id}")
-                self._load_tree(new_id)
             except ValueError as e:
                 self.flash(str(e), "error")
 
@@ -1231,12 +1246,14 @@ class TwApp(App[None]):
 
     def action_new_bug(self) -> None:
         self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
 
         def create_bug(title: str) -> None:
             try:
                 new_id = self._service.create_issue(IssueType.BUG, title)
+                new_issue = self._service.get_issue(new_id)
+                tree.add_issue(new_issue, None, is_backlog=True)
                 self.flash(f"Created {new_id}")
-                self._load_tree(new_id)
             except ValueError as e:
                 self.flash(str(e), "error")
 
@@ -1245,12 +1262,14 @@ class TwApp(App[None]):
 
     def action_new_idea(self) -> None:
         self._record_action()
+        tree = self.query_one("#tree-pane", IssueTree)
 
         def create_idea(title: str) -> None:
             try:
                 new_id = self._service.create_issue(IssueType.IDEA, title)
+                new_issue = self._service.get_issue(new_id)
+                tree.add_issue(new_issue, None, is_backlog=True)
                 self.flash(f"Created {new_id}")
-                self._load_tree(new_id)
             except ValueError as e:
                 self.flash(str(e), "error")
 
@@ -1312,7 +1331,6 @@ class TwApp(App[None]):
                     issue.id, AnnotationType.COMMENT, comment
                 )
                 self.flash(f"Added comment to {issue.id}")
-                self._load_tree()
             except ValueError as e:
                 self.flash(str(e), "error")
 
@@ -1372,13 +1390,6 @@ class TwApp(App[None]):
         self._load_tree()
         status = "on" if self.hide_done else "off"
         self.flash(f"Hide done: {status}")
-
-    def action_toggle_project_filter(self) -> None:
-        self._record_action()
-        self.filter_by_prefix = not self.filter_by_prefix
-        self._load_tree()
-        status = "on" if self.filter_by_prefix else "off"
-        self.flash(f"Project filter: {status}")
 
     def action_cursor_down(self) -> None:
         tree = self.query_one("#tree-pane", IssueTree)
