@@ -340,3 +340,64 @@ class TestIssueDetail:
                         await pilot.pause()
                         detail = app.query_one("#detail-pane", IssueDetail)
                         assert detail.issue is not None
+
+
+class TestSelectionPreservation:
+    """Tests for selection preservation across tree refreshes."""
+
+    @pytest.mark.asyncio
+    async def test_selection_preserved_after_refresh(self, mock_service: MagicMock) -> None:
+        """Selection should be preserved when tree is refreshed."""
+        with patch("tw.tui.SqliteBackend"):
+            with patch("tw.tui.IssueService", return_value=mock_service):
+                app = TwApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    tree = app.query_one("#tree-pane", IssueTree)
+                    tree.select_issue_by_id("TW-1-1")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert tree.get_selected_issue() is not None
+                    assert tree.get_selected_issue().id == "TW-1-1"
+                    assert app._selected_issue_id == "TW-1-1"
+                    app._load_tree()
+                    await pilot.pause()
+                    await pilot.pause()
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert tree.get_selected_issue() is not None
+                    assert tree.get_selected_issue().id == "TW-1-1"
+
+    @pytest.mark.asyncio
+    async def test_selection_id_tracked_on_change(self, mock_service: MagicMock) -> None:
+        """App should track selected issue ID when selection changes."""
+        with patch("tw.tui.SqliteBackend"):
+            with patch("tw.tui.IssueService", return_value=mock_service):
+                app = TwApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    tree = app.query_one("#tree-pane", IssueTree)
+                    tree.select_issue_by_id("TW-1-1a")
+                    await pilot.pause()
+                    assert app._selected_issue_id == "TW-1-1a"
+
+    @pytest.mark.asyncio
+    async def test_selection_preserved_after_action(self, mock_service: MagicMock) -> None:
+        """Selection should be preserved after actions that refresh the tree."""
+        with patch("tw.tui.SqliteBackend"):
+            with patch("tw.tui.IssueService", return_value=mock_service):
+                app = TwApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.pause()
+                    tree = app.query_one("#tree-pane", IssueTree)
+                    tree.select_issue_by_id("TW-1-1")
+                    await pilot.pause()
+                    assert app._selected_issue_id == "TW-1-1"
+                    app.action_refresh()
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert tree.get_selected_issue() is not None
+                    assert tree.get_selected_issue().id == "TW-1-1"

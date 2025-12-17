@@ -1,5 +1,6 @@
 """Modern TUI for tw issue tracker using Textual best practices."""
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -292,6 +293,8 @@ class IssueTree(Tree[Issue]):
                 label = self._render_issue_label(issue)
                 child_node = backlog_node.add_leaf(label, data=issue)
                 self._issue_map[issue.id] = child_node
+
+        await asyncio.sleep(0)
 
         if selected_id and selected_id in self._issue_map:
             self.select_node(self._issue_map[selected_id])
@@ -998,6 +1001,7 @@ class TwApp(App[None]):
     _refresh_event: threading.Event | None = None
     _last_action_time: float = 0.0
     _refresh_timer: Timer | None = None
+    _selected_issue_id: str | None = None
 
     def __init__(self) -> None:
         super().__init__()
@@ -1066,8 +1070,7 @@ class TwApp(App[None]):
         try:
             tree = self.query_one("#tree-pane", IssueTree)
             if select_id is None:
-                issue = tree.get_selected_issue()
-                select_id = issue.id if issue else None
+                select_id = self._selected_issue_id
 
             hierarchy, backlog = self._service.get_issue_tree_with_backlog()
             await tree.refresh_tree(hierarchy, backlog, select_id, self.hide_done)
@@ -1078,6 +1081,8 @@ class TwApp(App[None]):
     @on(IssueTree.SelectionChanged)
     async def on_selection_changed(self, event: IssueTree.SelectionChanged) -> None:
         event.stop()
+        if event.issue is not None:
+            self._selected_issue_id = event.issue.id
         try:
             detail = self.query_one("#detail-pane", IssueDetail)
         except Exception:
