@@ -926,6 +926,68 @@ def render_brief(
     return "\n".join(lines)
 
 
+def build_claude_prompt(brief: str, child_count: int, issue_id: str) -> str:
+    """Build the complete Claude prompt from a brief.
+
+    When the issue has children (non-leaf), generates an orchestrator prompt
+    that instructs the agent to dispatch subagents for individual tasks.
+    For leaf issues (no children), returns the brief unchanged.
+
+    Args:
+        brief: The rendered brief from render_brief()
+        child_count: Number of direct children (not total descendants)
+        issue_id: The issue ID for the orchestrator prompt
+
+    Returns:
+        The complete prompt to send to Claude
+    """
+    if child_count == 0:
+        return brief
+
+    orchestrator_prompt = f"""# Orchestrator Brief: {issue_id}
+
+You are an **orchestrator** for this issue. Do not implement tasks yourself.
+
+{brief}
+
+---
+
+## Your Role: Orchestrator
+
+Address {issue_id} by acting as the orchestrator for subagents that complete specific tasks.
+**Do not do any implementation work yourself.** Your role is to:
+
+1. Review the subtasks listed above
+2. Dispatch subagents using the **haiku** model to implement tasks one by one
+3. Monitor task completion via `tw view` and `tw tree`
+4. Mark stories as done when their child tasks are complete
+
+## Workflow
+
+1. Run `tw tree {issue_id}` to see current subtask status
+2. Pick an actionable subtask (status: new or in_progress)
+3. Dispatch a subagent: use `Task` tool with haiku model and prompt like:
+   ```
+   tw brief SUBTASK-ID
+
+   Implement this task following the brief above.
+   ```
+4. When subagent completes, verify with `tw view SUBTASK-ID`
+5. Repeat until all subtasks are done
+6. Mark parent stories done when all their tasks complete
+7. Finally: `tw done {issue_id}`
+
+## Rules
+
+- **Never implement code yourself** — dispatch subagents
+- **Use haiku model** for subagents to minimize cost/latency
+- **One task at a time** unless tasks are independent
+- **Verify completion** before moving to next task
+- Record lessons at the end: `tw record {issue_id} lesson -m "..."`
+"""
+    return orchestrator_prompt
+
+
 def generate_edit_template(title: str, body: str | None) -> str:
     """Generate a markdown template for editing an issue.
 

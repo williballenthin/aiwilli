@@ -101,6 +101,9 @@ def watch_tree(
             while True:
                 try:
                     hierarchy, backlog = service.get_issue_tree_with_backlog(tw_id)
+                    prefix = service.prefix
+                    hierarchy = [i for i in hierarchy if i.id.startswith(prefix)]
+                    backlog = [i for i in backlog if i.id.startswith(prefix)]
                     tree_output = render_tree_with_backlog(hierarchy, backlog)
 
                     display = Text()

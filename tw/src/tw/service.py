@@ -22,6 +22,10 @@ class IssueService:
         self._backend = backend
         self._prefix = prefix
 
+    @property
+    def prefix(self) -> str:
+        return self._prefix
+
     def _get_all_issues(self) -> list[Issue]:
         """Get all issues from backend."""
         return self._backend.get_all_issues()

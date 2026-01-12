@@ -20,6 +20,7 @@ from tw.backend import SqliteBackend
 from tw.config import ConfigError, get_db_path, get_prefix
 from tw.models import AnnotationType, Issue, IssueStatus, IssueType
 from tw.render import (
+    build_claude_prompt,
     generate_edit_template,
     parse_edited_content,
     parse_groom_result,
@@ -544,6 +545,8 @@ def edit(
 
         if tw_id is None:
             issues = service.get_issue_tree()
+            prefix = service.prefix
+            issues = [i for i in issues if i.id.startswith(prefix)]
             if not issues:
                 click.echo("No open issues to edit", err=True)
                 ctx.exit(1)
@@ -620,6 +623,9 @@ def tree(ctx: click.Context, tw_id: str | None) -> None:
     try:
         service = get_service(ctx)
         hierarchy, backlog = service.get_issue_tree_with_backlog(root_id=tw_id)
+        prefix = service.prefix
+        hierarchy = [i for i in hierarchy if i.id.startswith(prefix)]
+        backlog = [i for i in backlog if i.id.startswith(prefix)]
 
         console: Console = ctx.obj["stdout"]
         if ctx.obj["json"]:
@@ -851,6 +857,8 @@ def groom(ctx: click.Context) -> None:
     try:
         service = get_service(ctx)
         backlog = service.get_backlog_issues()
+        prefix = service.prefix
+        backlog = [i for i in backlog if i.id.startswith(prefix)]
 
         console: Console = ctx.obj["stdout"]
 
@@ -950,6 +958,8 @@ def claude_cmd(
 
         if tw_id is None:
             issues = service.get_issue_tree()
+            prefix = service.prefix
+            issues = [i for i in issues if i.id.startswith(prefix)]
             actionable = [i for i in issues if i.status != IssueStatus.DONE]
 
             if not actionable:
@@ -1001,7 +1011,9 @@ def claude_cmd(
         brief_output = render_brief(
             issue, ancestors, siblings, descendants, referenced, referencing
         )
-        subprocess.run(["claude", "--dangerously-skip-permissions", "--model", model, brief_output])
+        child_count = sum(1 for d in descendants if d.parent == issue.id)
+        prompt = build_claude_prompt(brief_output, child_count, issue.id)
+        subprocess.run(["claude", "--dangerously-skip-permissions", "--model", model, prompt])
     except Exception as e:
         click.echo(f"error: {e}", err=True)
         ctx.exit(1)

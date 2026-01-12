@@ -6,6 +6,7 @@ import pytest
 
 from tw.models import Annotation, AnnotationType, Issue, IssueStatus, IssueType
 from tw.render import (
+    build_claude_prompt,
     generate_edit_template,
     get_status_timestamp,
     parse_edited_content,
@@ -1810,3 +1811,44 @@ class TestRenderBrief:
         assert "tw new bug" in result
         assert "tw new idea" in result
         assert "Do NOT fix unrelated issues" in result
+
+
+class TestBuildClaudePrompt:
+    def test_leaf_issue_returns_brief_unchanged(self) -> None:
+        """Leaf issues (no children) return the brief unchanged."""
+        brief = "# Coder Brief: PROJ-1\nSome content"
+        result = build_claude_prompt(brief, child_count=0, issue_id="PROJ-1")
+        assert result == brief
+
+    def test_non_leaf_issue_returns_orchestrator_prompt(self) -> None:
+        """Non-leaf issues (with children) return an orchestrator prompt."""
+        brief = "# Coder Brief: PROJ-1\nSome content"
+        result = build_claude_prompt(brief, child_count=3, issue_id="PROJ-1")
+        assert "# Orchestrator Brief: PROJ-1" in result
+        assert "orchestrator" in result.lower()
+        assert "Do not implement tasks yourself" in result
+        assert "haiku" in result.lower()
+        assert brief in result
+
+    def test_orchestrator_prompt_includes_workflow(self) -> None:
+        """Orchestrator prompt includes dispatch workflow."""
+        brief = "# Coder Brief: PROJ-1\nSome content"
+        result = build_claude_prompt(brief, child_count=2, issue_id="PROJ-1")
+        assert "tw tree PROJ-1" in result
+        assert "tw view" in result
+        assert "tw done PROJ-1" in result
+        assert "Task" in result
+
+    def test_orchestrator_prompt_includes_rules(self) -> None:
+        """Orchestrator prompt includes orchestration rules."""
+        brief = "# Coder Brief: PROJ-1\nSome content"
+        result = build_claude_prompt(brief, child_count=1, issue_id="PROJ-1")
+        assert "Never implement code yourself" in result
+        assert "Use haiku model" in result
+        assert "Verify completion" in result
+
+    def test_single_child_still_triggers_orchestrator(self) -> None:
+        """Even a single child triggers orchestrator mode."""
+        brief = "# Coder Brief: PROJ-1\nSome content"
+        result = build_claude_prompt(brief, child_count=1, issue_id="PROJ-1")
+        assert "# Orchestrator Brief: PROJ-1" in result
