@@ -24,6 +24,15 @@
       "hooks": [
         "./hooks/hooks.json"
       ]
+    },
+    {
+      "name": "ida",
+      "description": "IDA Pro extensions for Claude",
+      "source": "./claude/",
+      "version": "0.1.0",
+      "skills": [
+        "./skills/analyze-with-ida-domain-api"
+      ]
     }
   ]
 }
