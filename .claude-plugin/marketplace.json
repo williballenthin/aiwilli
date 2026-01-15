@@ -29,9 +29,10 @@
       "name": "ida",
       "description": "IDA Pro extensions for Claude",
       "source": "./claude/ida/",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "skills": [
-        "./skills/analyze-with-ida-domain-api"
+        "./skills/analyze-with-ida-domain-api",
+        "./skills/develop-ida-plugin"
       ]
     }
   ]
