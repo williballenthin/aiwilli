@@ -11,24 +11,9 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        claude-contextusage-statusline = pkgs.rustPlatform.buildRustPackage {
-          pname = "claude-contextusage-statusline";
-          version = "0.1.0";
-
-          src = ./.;
-
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
-
-          meta = with pkgs.lib; {
-            description = "Claude context usage statusline";
-            homepage = "https://github.com/aiwilli/claude";
-            license = licenses.mit;
-            maintainers = [ ];
-            mainProgram = "claude-contextusage-statusline";
-          };
-        };
+        claude-contextusage-statusline = pkgs.writeShellScriptBin "claude-contextusage-statusline" ''
+          ${pkgs.python3}/bin/python3 ${./statusline.py}
+        '';
       in
       {
         packages = {
@@ -49,11 +34,7 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            cargo
-            rustc
-            rust-analyzer
-            rustfmt
-            clippy
+            python3
           ];
         };
       }
