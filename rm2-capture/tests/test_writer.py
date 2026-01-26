@@ -63,6 +63,7 @@ def test_write_markdown_creates_note(writer, sample_email):
 
     content = result.md_path.read_text()
     assert 'subject: "Test Notes"' in content
+    assert 'attachment: "Notes - page 1.pdf"' in content
     assert "received: 2026-01-26T11:30:00" in content
     assert "transcribed:" in content
     assert "![[_attachments/Notes - page 1.pdf]]" in content
@@ -81,6 +82,7 @@ def test_write_markdown_creates_error_note(writer, sample_email):
     assert result.error == "LLM failed"
 
     content = result.md_path.read_text()
+    assert 'attachment: "Notes - page 1.pdf"' in content
     assert 'error: "LLM failed"' in content
     assert "<!-- TRANSCRIPTION_FAILED: LLM failed -->" in content
     assert "transcribed:" not in content

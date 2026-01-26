@@ -73,6 +73,7 @@ class Writer:
         received = email.received.isoformat(timespec="seconds")
         return f"""---
 subject: "{email.subject}"
+attachment: "{attachment.filename}"
 received: {received}
 transcribed: {now}
 ---
@@ -86,6 +87,7 @@ transcribed: {now}
         received = email.received.isoformat(timespec="seconds")
         return f"""---
 subject: "{email.subject}"
+attachment: "{attachment.filename}"
 received: {received}
 error: "{error}"
 ---
