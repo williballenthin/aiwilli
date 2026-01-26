@@ -29,15 +29,15 @@ All output is written to a single directory specified at startup.
 ```
 output_dir/
   2026-01-26/
-    11:30 - Meeting notes - page 1-a1b2c3d4.md
-    14:45 - 2026 - page 122-e5f6g7h8.md
+    11:30 - Meeting notes - page 1.md
+    14:45 - 2026 - page 122.md
     _attachments/
-      Meeting notes - page 1-a1b2c3d4.pdf
-      2026 - page 122-e5f6g7h8.pdf
+      11:30 - Meeting notes - page 1.pdf
+      14:45 - 2026 - page 122.pdf
   2026-01-27/
-    09:00 - Ideas - page 1-i9j0k1l2.md
+    09:00 - Ideas - page 1.md
     _attachments/
-      Ideas - page 1-i9j0k1l2.pdf
+      09:00 - Ideas - page 1.pdf
 ```
 
 ### Folder naming
@@ -46,34 +46,33 @@ Date folders use ISO format: `YYYY-MM-DD`, derived from the email's received tim
 
 ### File naming
 
-PDF files: `{original_stem}-{content_hash}.pdf`
-- `original_stem` is the PDF filename without extension
-- `content_hash` is the first 8 characters of the MD5 hash of the PDF content
+Both PDF and markdown files use the same naming convention with timestamp prefix:
 
-Markdown files: `{HH:MM} - {original_stem}-{content_hash}.md`
-- `HH:MM` is the email received time (24-hour format)
-- The stem matches the corresponding PDF filename
+- PDF files: `{HH:MM} - {original_stem}.pdf`
+- Markdown files: `{HH:MM} - {original_stem}.md`
 
-The content hash prevents filename collisions when different PDFs have the same name, and enables content-based deduplication.
+Where `HH:MM` is the email received time (24-hour format) and `original_stem` is the PDF filename without extension.
+
+The timestamp prefix prevents filename collisions when multiple PDFs have the same name.
 
 ### Markdown file format
 
 ```markdown
 ---
 subject: "Email subject line"
-attachment: "Meeting notes - page 1-a1b2c3d4.pdf"
+attachment: "11:30 - Meeting notes - page 1.pdf"
 received: 2026-01-26T11:30:00
 transcribed: 2026-01-26T11:31:15
 ---
 
-![[_attachments/Meeting notes - page 1-a1b2c3d4.pdf]]
+![[_attachments/11:30 - Meeting notes - page 1.pdf]]
 
 [transcribed content here]
 ```
 
 Frontmatter fields:
 - `subject`: Original email subject
-- `attachment`: PDF filename (with content hash)
+- `attachment`: PDF filename (with timestamp prefix)
 - `received`: Email received timestamp (ISO 8601)
 - `transcribed`: When transcription completed (ISO 8601)
 
@@ -86,12 +85,12 @@ When transcription fails, the markdown file contains:
 ```markdown
 ---
 subject: "Email subject line"
-attachment: "Meeting notes - page 1-a1b2c3d4.pdf"
+attachment: "11:30 - Meeting notes - page 1.pdf"
 received: 2026-01-26T11:30:00
 error: "No markdown code block found in response"
 ---
 
-![[_attachments/Meeting notes - page 1-a1b2c3d4.pdf]]
+![[_attachments/11:30 - Meeting notes - page 1.pdf]]
 
 <!-- TRANSCRIPTION_FAILED: No markdown code block found in response -->
 ```

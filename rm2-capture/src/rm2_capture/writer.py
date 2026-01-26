@@ -1,4 +1,3 @@
-import hashlib
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -8,36 +7,27 @@ from .models import Attachment, IncomingEmail, NoteResult
 logger = logging.getLogger(__name__)
 
 
-def hashed_filename(original_filename: str, content: bytes) -> str:
-    """
-    Generate a filename with content hash to prevent collisions.
-
-    Format: {stem}-{hash}.{ext}
-    Example: "Notes - page 1.pdf" -> "Notes - page 1-a1b2c3d4.pdf"
-    """
-    stem = Path(original_filename).stem
-    ext = Path(original_filename).suffix
-    content_hash = hashlib.md5(content).hexdigest()[:8]
-    return f"{stem}-{content_hash}{ext}"
-
-
 class Writer:
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
 
     def pdf_exists(self, received: datetime, attachment: Attachment) -> bool:
         date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        filename = hashed_filename(attachment.filename, attachment.content)
+        timestamp = received.strftime("%H:%M")
+        stem = Path(attachment.filename).stem
+        filename = f"{timestamp} - {stem}.pdf"
         return (date_folder / "_attachments" / filename).exists()
 
     def save_pdf(self, email: IncomingEmail, attachment: Attachment) -> tuple[Path, str]:
         """
         Save PDF attachment to the output directory.
 
-        Returns tuple of (path to saved PDF, hashed filename).
+        Returns tuple of (path to saved PDF, filename).
         """
         date_folder = self._ensure_date_folder(email.received)
-        filename = hashed_filename(attachment.filename, attachment.content)
+        timestamp = email.received.strftime("%H:%M")
+        stem = Path(attachment.filename).stem
+        filename = f"{timestamp} - {stem}.pdf"
         pdf_path = date_folder / "_attachments" / filename
         pdf_path.write_bytes(attachment.content)
         logger.debug(f"Wrote PDF: {pdf_path}")
@@ -59,9 +49,8 @@ class Writer:
         """
         date_folder = pdf_path.parent.parent
 
-        timestamp = email.received.strftime("%H:%M")
         stem = Path(pdf_filename).stem
-        md_filename = f"{timestamp} - {stem}.md"
+        md_filename = f"{stem}.md"
         md_path = date_folder / md_filename
 
         if content is not None:
