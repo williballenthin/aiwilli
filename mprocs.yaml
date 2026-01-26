@@ -1,0 +1,3 @@
+procs:
+  rm2:
+    shell: rm2-capture "$OBSIDIAN_RM2_PATH"
