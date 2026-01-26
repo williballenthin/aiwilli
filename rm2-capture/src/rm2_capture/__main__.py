@@ -5,9 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from rich.console import Console
 from rich.logging import RichHandler
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 from .config import Config, ConfigError
 from .email_monitor import EmailMonitor
@@ -15,7 +13,6 @@ from .processor import Processor, TranscriptionError
 from .writer import Writer
 
 logger = logging.getLogger(__name__)
-stderr_console = Console(stderr=True)
 
 
 def setup_logging(verbose: bool, quiet: bool) -> None:
@@ -30,7 +27,7 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
         level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(console=stderr_console, rich_tracebacks=verbose)],
+        handlers=[RichHandler(rich_tracebacks=verbose)],
     )
 
 
@@ -39,7 +36,6 @@ def process_batch(
     processor: Processor,
     writer: Writer,
     client,
-    console: Console,
 ) -> int:
     emails = list(monitor.fetch_matching_emails(client))
 
@@ -47,48 +43,41 @@ def process_batch(
         return 0
 
     total_attachments = sum(len(e.attachments) for e in emails)
+    logger.info(f"Found {len(emails)} emails with {total_attachments} attachments")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Processing emails...", total=total_attachments)
+    processed = 0
+    for email_obj in emails:
+        for attachment in email_obj.attachments:
+            if writer.pdf_exists(email_obj.received, attachment.filename):
+                logger.debug(f"Skipping {attachment.filename} - already exists")
+                continue
 
-        for email_obj in emails:
-            for attachment in email_obj.attachments:
-                progress.update(task, description=f"Processing {attachment.filename}")
+            logger.info(f"Processing {attachment.filename}")
 
-                if writer.pdf_exists(email_obj.received, attachment.filename):
-                    logger.debug(f"Skipping {attachment.filename} - already exists")
-                    progress.advance(task)
-                    continue
+            pdf_path = writer.save_pdf(email_obj, attachment)
+            logger.info(f"Saved PDF to {pdf_path}")
 
-                pdf_path = writer.save_pdf(email_obj, attachment)
+            logger.info(f"Transcribing {attachment.filename}...")
+            try:
+                content = processor.transcribe_pdf(pdf_path)
+                error = None
+            except TranscriptionError as e:
+                logger.warning(f"Transcription failed: {e}")
+                content = None
+                error = str(e)
 
-                try:
-                    content = processor.transcribe_pdf(pdf_path)
-                    error = None
-                except TranscriptionError as e:
-                    logger.warning(f"Transcription failed: {e}")
-                    content = None
-                    error = str(e)
+            result = writer.write_markdown(email_obj, attachment, pdf_path, content, error)
 
-                result = writer.write_markdown(email_obj, attachment, pdf_path, content, error)
+            if result.error:
+                logger.warning(f"Created error note: {result.md_path}")
+            else:
+                logger.info(f"Created note: {result.md_path}")
 
-                if result.error:
-                    logger.warning(f"Created error note: {result.md_path}")
-                else:
-                    logger.info(f"Created note: {result.md_path}")
+            processed += 1
 
-                progress.advance(task)
+        monitor.mark_as_read(client, email_obj)
 
-            monitor.mark_as_read(client, email_obj)
-
-    return len(emails)
+    return processed
 
 
 def run_daemon(
@@ -98,7 +87,7 @@ def run_daemon(
     poll_interval: int,
 ) -> None:
     def handle_signal(signum, frame):
-        stderr_console.print("[yellow]Shutting down...[/]")
+        logger.info("Shutting down...")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
@@ -107,9 +96,9 @@ def run_daemon(
     while True:
         try:
             with monitor.connect() as client:
-                count = process_batch(monitor, processor, writer, client, stderr_console)
+                count = process_batch(monitor, processor, writer, client)
                 if count > 0:
-                    logger.info(f"Processed {count} emails")
+                    logger.info(f"Processed {count} attachments")
 
                 while True:
                     logger.debug(f"Entering IDLE (timeout={poll_interval}s)")
@@ -119,13 +108,13 @@ def run_daemon(
 
                     if responses:
                         logger.debug(f"IDLE notification: {responses}")
-                        count = process_batch(monitor, processor, writer, client, stderr_console)
+                        count = process_batch(monitor, processor, writer, client)
                         if count > 0:
-                            logger.info(f"Processed {count} emails")
+                            logger.info(f"Processed {count} attachments")
 
         except Exception as e:
             logger.warning(f"Connection error: {e}")
-            stderr_console.print("[yellow]Reconnecting in 5s...[/]")
+            logger.info("Reconnecting in 5s...")
             time.sleep(5)
 
 
@@ -161,11 +150,11 @@ def main() -> None:
     try:
         config = Config.from_env()
     except ConfigError as e:
-        stderr_console.print(f"[red]error:[/] {e}")
+        logger.error(f"Configuration error: {e}")
         sys.exit(1)
 
     if not args.output_dir.exists():
-        stderr_console.print(f"[red]error:[/] Output directory does not exist: {args.output_dir}")
+        logger.error(f"Output directory does not exist: {args.output_dir}")
         sys.exit(1)
 
     monitor = EmailMonitor(config)
