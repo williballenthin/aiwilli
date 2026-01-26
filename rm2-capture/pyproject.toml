@@ -1,0 +1,33 @@
+[project]
+name = "rm2-capture"
+version = "0.1.0"
+description = "Capture Remarkable 2 handwritten notes via email to markdown"
+requires-python = ">=3.11"
+dependencies = [
+    "imapclient>=3.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+rm2-capture = "rm2_capture.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rm2_capture"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
