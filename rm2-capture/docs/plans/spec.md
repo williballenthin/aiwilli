@@ -57,6 +57,7 @@ PDF files are stored with their original filename in the `_attachments/` subdire
 ```markdown
 ---
 subject: "Email subject line"
+attachment: "Meeting notes - page 1.pdf"
 received: 2026-01-26T11:30:00
 transcribed: 2026-01-26T11:31:15
 ---
@@ -68,6 +69,7 @@ transcribed: 2026-01-26T11:31:15
 
 Frontmatter fields:
 - `subject`: Original email subject
+- `attachment`: Original PDF filename
 - `received`: Email received timestamp (ISO 8601)
 - `transcribed`: When transcription completed (ISO 8601)
 
@@ -80,6 +82,7 @@ When transcription fails, the markdown file contains:
 ```markdown
 ---
 subject: "Email subject line"
+attachment: "Meeting notes - page 1.pdf"
 received: 2026-01-26T11:30:00
 error: "No markdown code block found in response"
 ---
@@ -204,12 +207,17 @@ Options:
 
 ### Output
 
-Uses Rich library for terminal output:
-- Progress bar when processing multiple emails
-- Status spinners for individual steps (downloading, transcribing, writing)
-- Colored log messages
+Simple logging to stderr via Rich's logging handler. No progress bars or spinners.
 
-All progress/status output goes to stderr. stdout is reserved for command output (currently unused).
+Example output:
+```
+Connected to imap.gmail.com as user@gmail.com
+Found 2 emails with 3 attachments
+Processing Notes - page 1.pdf
+Saved PDF to /path/2026-01-26/_attachments/Notes - page 1.pdf
+Transcribing Notes - page 1.pdf...
+Created note: /path/2026-01-26/11:30 - Notes - page 1.md
+```
 
 ### Logging
 
@@ -219,8 +227,8 @@ All progress/status output goes to stderr. stdout is reserved for command output
 
 ### Signals
 
-- `SIGINT` (Ctrl+C): Graceful shutdown after current operation
-- `SIGTERM`: Graceful shutdown after current operation
+- `SIGINT` (Ctrl+C): Immediate exit
+- `SIGTERM`: Immediate exit
 
 ## Guarantees
 
