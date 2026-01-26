@@ -29,15 +29,15 @@ All output is written to a single directory specified at startup.
 ```
 output_dir/
   2026-01-26/
-    11:30 - Meeting notes - page 1.md
-    14:45 - 2026 - page 122.md
+    11:30 - Meeting notes - page 1-a1b2c3d4.md
+    14:45 - 2026 - page 122-e5f6g7h8.md
     _attachments/
-      Meeting notes - page 1.pdf
-      2026 - page 122.pdf
+      Meeting notes - page 1-a1b2c3d4.pdf
+      2026 - page 122-e5f6g7h8.pdf
   2026-01-27/
-    09:00 - Ideas - page 1.md
+    09:00 - Ideas - page 1-i9j0k1l2.md
     _attachments/
-      Ideas - page 1.pdf
+      Ideas - page 1-i9j0k1l2.pdf
 ```
 
 ### Folder naming
@@ -46,30 +46,34 @@ Date folders use ISO format: `YYYY-MM-DD`, derived from the email's received tim
 
 ### File naming
 
-Markdown files: `{HH:MM} - {pdf_stem}.md`
-- `HH:MM` is the email received time (24-hour format)
-- `pdf_stem` is the PDF filename without extension
+PDF files: `{original_stem}-{content_hash}.pdf`
+- `original_stem` is the PDF filename without extension
+- `content_hash` is the first 8 characters of the MD5 hash of the PDF content
 
-PDF files are stored with their original filename in the `_attachments/` subdirectory.
+Markdown files: `{HH:MM} - {original_stem}-{content_hash}.md`
+- `HH:MM` is the email received time (24-hour format)
+- The stem matches the corresponding PDF filename
+
+The content hash prevents filename collisions when different PDFs have the same name, and enables content-based deduplication.
 
 ### Markdown file format
 
 ```markdown
 ---
 subject: "Email subject line"
-attachment: "Meeting notes - page 1.pdf"
+attachment: "Meeting notes - page 1-a1b2c3d4.pdf"
 received: 2026-01-26T11:30:00
 transcribed: 2026-01-26T11:31:15
 ---
 
-![[_attachments/Meeting notes - page 1.pdf]]
+![[_attachments/Meeting notes - page 1-a1b2c3d4.pdf]]
 
 [transcribed content here]
 ```
 
 Frontmatter fields:
 - `subject`: Original email subject
-- `attachment`: Original PDF filename
+- `attachment`: PDF filename (with content hash)
 - `received`: Email received timestamp (ISO 8601)
 - `transcribed`: When transcription completed (ISO 8601)
 
@@ -82,12 +86,12 @@ When transcription fails, the markdown file contains:
 ```markdown
 ---
 subject: "Email subject line"
-attachment: "Meeting notes - page 1.pdf"
+attachment: "Meeting notes - page 1-a1b2c3d4.pdf"
 received: 2026-01-26T11:30:00
 error: "No markdown code block found in response"
 ---
 
-![[_attachments/Meeting notes - page 1.pdf]]
+![[_attachments/Meeting notes - page 1-a1b2c3d4.pdf]]
 
 <!-- TRANSCRIPTION_FAILED: No markdown code block found in response -->
 ```

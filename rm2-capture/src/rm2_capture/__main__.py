@@ -48,13 +48,13 @@ def process_batch(
     processed = 0
     for email_obj in emails:
         for attachment in email_obj.attachments:
-            if writer.pdf_exists(email_obj.received, attachment.filename):
+            if writer.pdf_exists(email_obj.received, attachment):
                 logger.debug(f"Skipping {attachment.filename} - already exists")
                 continue
 
             logger.info(f"Processing {attachment.filename}")
 
-            pdf_path = writer.save_pdf(email_obj, attachment)
+            pdf_path, pdf_filename = writer.save_pdf(email_obj, attachment)
             logger.info(f"Saved PDF to {pdf_path}")
 
             logger.info(f"Transcribing {attachment.filename}...")
@@ -66,7 +66,7 @@ def process_batch(
                 content = None
                 error = str(e)
 
-            result = writer.write_markdown(email_obj, attachment, pdf_path, content, error)
+            result = writer.write_markdown(email_obj, attachment, pdf_path, pdf_filename, content, error)
 
             if result.error:
                 logger.warning(f"Created error note: {result.md_path}")
