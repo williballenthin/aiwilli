@@ -99,10 +99,16 @@ def run_daemon(
     poll_interval: int,
 ) -> None:
     shutdown = threading.Event()
+    current_client = None
 
     def handle_signal(signum, frame):
         stderr_console.print("[yellow]Shutting down...[/]")
         shutdown.set()
+        if current_client is not None:
+            try:
+                current_client.logout()
+            except Exception:
+                pass
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -110,6 +116,7 @@ def run_daemon(
     while not shutdown.is_set():
         try:
             with monitor.connect() as client:
+                current_client = client
                 count = process_batch(monitor, processor, writer, client, stderr_console)
                 if count > 0:
                     logger.info(f"Processed {count} emails")
@@ -121,7 +128,10 @@ def run_daemon(
                     try:
                         responses = client.idle_check(timeout=poll_interval)
                     finally:
-                        client.idle_done()
+                        try:
+                            client.idle_done()
+                        except Exception:
+                            pass
 
                     if shutdown.is_set():
                         break
@@ -132,7 +142,10 @@ def run_daemon(
                         if count > 0:
                             logger.info(f"Processed {count} emails")
 
+                current_client = None
+
         except Exception as e:
+            current_client = None
             if shutdown.is_set():
                 break
             logger.warning(f"Connection error: {e}")
