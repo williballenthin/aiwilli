@@ -2,7 +2,6 @@ import argparse
 import logging
 import signal
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -98,43 +97,25 @@ def run_daemon(
     writer: Writer,
     poll_interval: int,
 ) -> None:
-    shutdown = threading.Event()
-    current_client = None
-
     def handle_signal(signum, frame):
         stderr_console.print("[yellow]Shutting down...[/]")
-        shutdown.set()
-        if current_client is not None:
-            try:
-                current_client.logout()
-            except Exception:
-                pass
+        sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    while not shutdown.is_set():
+    while True:
         try:
             with monitor.connect() as client:
-                current_client = client
                 count = process_batch(monitor, processor, writer, client, stderr_console)
                 if count > 0:
                     logger.info(f"Processed {count} emails")
 
-                while not shutdown.is_set():
+                while True:
                     logger.debug(f"Entering IDLE (timeout={poll_interval}s)")
                     client.idle()
-
-                    try:
-                        responses = client.idle_check(timeout=poll_interval)
-                    finally:
-                        try:
-                            client.idle_done()
-                        except Exception:
-                            pass
-
-                    if shutdown.is_set():
-                        break
+                    responses = client.idle_check(timeout=poll_interval)
+                    client.idle_done()
 
                     if responses:
                         logger.debug(f"IDLE notification: {responses}")
@@ -142,12 +123,7 @@ def run_daemon(
                         if count > 0:
                             logger.info(f"Processed {count} emails")
 
-                current_client = None
-
         except Exception as e:
-            current_client = None
-            if shutdown.is_set():
-                break
             logger.warning(f"Connection error: {e}")
             stderr_console.print("[yellow]Reconnecting in 5s...[/]")
             time.sleep(5)
