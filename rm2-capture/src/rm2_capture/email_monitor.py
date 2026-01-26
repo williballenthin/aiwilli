@@ -25,7 +25,7 @@ class EmailMonitor:
         try:
             client.login(self.config.imap_user, self.config.imap_password)
             client.select_folder("INBOX")
-            logger.debug("Connected and selected INBOX")
+            logger.info(f"Connected to {self.config.imap_host} as {self.config.imap_user}")
             yield client
         finally:
             try:
