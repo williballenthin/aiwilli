@@ -10,10 +10,9 @@
       "name": "wb",
       "description": "core extensions for Claude",
       "source": "./claude/wb/",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "skills": [
         "./skills/codex-review",
-        "./skills/package-ida-plugin",
         "./skills/working-with-git",
         "./skills/working-with-jj",
         "./skills/working-with-sqlite"
@@ -23,16 +22,6 @@
       ],
       "hooks": [
         "./hooks/hooks.json"
-      ]
-    },
-    {
-      "name": "ida",
-      "description": "IDA Pro extensions for Claude",
-      "source": "./claude/ida/",
-      "version": "0.2.0",
-      "skills": [
-        "./skills/analyze-with-ida-domain-api",
-        "./skills/develop-ida-plugin"
       ]
     }
   ]
