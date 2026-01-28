@@ -1,3 +1,5 @@
 procs:
   rm2:
-    shell: rm2-capture "$OBSIDIAN_RM2_PATH"
+    shell: ./scripts/rm2-pipe-obsidian.py "$OBSIDIAN_RM2_PATH"
+  vnote:
+    shell: ./scripts/vnote-pipe-obsidian.py "$OBSIDIAN_VNOTE_PATH"
