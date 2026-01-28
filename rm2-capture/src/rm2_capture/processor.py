@@ -11,7 +11,10 @@ PROMPT = """Transcribe this handwritten note verbatim. Output ONLY a single mark
 code block containing the transcription. Preserve the structure including:
 - Bullet points and indentation
 - Tables (as markdown tables)
-- Line breaks and paragraphs
+- Paragraphs
+
+Its ok to rejoin/wrap lines if it appears the original text was wrapping, but
+maintain line breaks if they indicate structure or format.
 
 Do not add any commentary, analysis, or text outside the code block."""
 
