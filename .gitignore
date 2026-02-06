@@ -3,3 +3,7 @@ tw/.coverage
 tw/uv.lock
 .envrc
 mprocs.log
+transcribe/build/libvoxtral.a
+transcribe/build/main.o
+transcribe/build
+transcribe/VoxtralDictate

@@ -4,3 +4,6 @@
 [submodule "ocr/deps/cliclick"]
 	path = ocr/deps/cliclick
 	url = https://github.com/BlueM/cliclick.git
+[submodule "transcribe/deps/voxtral.c"]
+	path = transcribe/deps/voxtral.c
+	url = git@github.com:antirez/voxtral.c.git
