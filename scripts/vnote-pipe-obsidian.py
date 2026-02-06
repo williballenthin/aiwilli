@@ -13,11 +13,11 @@ Monitors an IMAP mailbox for emails from allowed senders,
 and saves the body text as markdown files.
 
 Required environment variables:
-    IMAP_HOST          - IMAP server (e.g., imap.gmail.com)
-    IMAP_USER          - Email account username
-    IMAP_PASSWORD      - Password or app-specific password
-    FILTER_TO_ADDRESS  - Target email address to filter (e.g., user+vnote@gmail.com)
-    ALLOWED_SENDERS    - Comma-separated list of allowed sender addresses
+    IMAP_HOST                - IMAP server (e.g., imap.gmail.com)
+    IMAP_USER                - Email account username
+    IMAP_PASSWORD            - Password or app-specific password
+    VNOTE_FILTER_TO_ADDRESS  - Target email address to filter (e.g., user+vnote@gmail.com)
+    VNOTE_ALLOWED_SENDERS    - Comma-separated list of allowed sender addresses
 
 Usage:
     ./vnote-pipe-obsidian <output_dir> [--poll-interval=300] [--verbose] [--quiet]
@@ -94,8 +94,8 @@ class Config:
             "IMAP_HOST",
             "IMAP_USER",
             "IMAP_PASSWORD",
-            "FILTER_TO_ADDRESS",
-            "ALLOWED_SENDERS",
+            "VNOTE_FILTER_TO_ADDRESS",
+            "VNOTE_ALLOWED_SENDERS",
         ]
         missing = [var for var in required if not os.environ.get(var)]
 
@@ -106,8 +106,8 @@ class Config:
             imap_host=os.environ["IMAP_HOST"],
             imap_user=os.environ["IMAP_USER"],
             imap_password=os.environ["IMAP_PASSWORD"],
-            filter_to_address=os.environ["FILTER_TO_ADDRESS"],
-            allowed_senders=[s.strip() for s in os.environ["ALLOWED_SENDERS"].split(",")],
+            filter_to_address=os.environ["VNOTE_FILTER_TO_ADDRESS"],
+            allowed_senders=[s.strip() for s in os.environ["VNOTE_ALLOWED_SENDERS"].split(",")],
         )
 
 

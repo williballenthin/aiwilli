@@ -15,11 +15,11 @@ Monitors an IMAP mailbox for emails with PDF attachments from allowed senders,
 transcribes handwritten notes using an LLM, and saves them as markdown files.
 
 Required environment variables:
-    IMAP_HOST          - IMAP server (e.g., imap.gmail.com)
-    IMAP_USER          - Email account username
-    IMAP_PASSWORD      - Password or app-specific password
-    FILTER_TO_ADDRESS  - Target email address to filter (e.g., user+remarkable@gmail.com)
-    ALLOWED_SENDERS    - Comma-separated list of allowed sender addresses
+    IMAP_HOST              - IMAP server (e.g., imap.gmail.com)
+    IMAP_USER              - Email account username
+    IMAP_PASSWORD          - Password or app-specific password
+    RM2_FILTER_TO_ADDRESS  - Target email address to filter (e.g., user+remarkable@gmail.com)
+    RM2_ALLOWED_SENDERS    - Comma-separated list of allowed sender addresses
 
 Usage:
     ./rm2-pipe-obsidian <output_dir> [--poll-interval=300] [--verbose] [--quiet]
@@ -113,8 +113,8 @@ class Config:
             "IMAP_HOST",
             "IMAP_USER",
             "IMAP_PASSWORD",
-            "FILTER_TO_ADDRESS",
-            "ALLOWED_SENDERS",
+            "RM2_FILTER_TO_ADDRESS",
+            "RM2_ALLOWED_SENDERS",
         ]
         missing = [var for var in required if not os.environ.get(var)]
 
@@ -125,8 +125,8 @@ class Config:
             imap_host=os.environ["IMAP_HOST"],
             imap_user=os.environ["IMAP_USER"],
             imap_password=os.environ["IMAP_PASSWORD"],
-            filter_to_address=os.environ["FILTER_TO_ADDRESS"],
-            allowed_senders=[s.strip() for s in os.environ["ALLOWED_SENDERS"].split(",")],
+            filter_to_address=os.environ["RM2_FILTER_TO_ADDRESS"],
+            allowed_senders=[s.strip() for s in os.environ["RM2_ALLOWED_SENDERS"].split(",")],
         )
 
 
