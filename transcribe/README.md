@@ -2,7 +2,7 @@
 
 A macOS menubar dictation app powered by [voxtral.c](https://github.com/antirez/voxtral.c) — antirez's pure C implementation of Mistral's Voxtral Realtime 4B speech-to-text model.
 
-Hold **Ctrl+Shift+Space** to record. While held, transcription streams in real time and text is typed into whatever field has focus. Release the hotkey to stop capture immediately; the app then flushes the final transcription tail and returns to idle.
+Hold **Ctrl+Shift+Space** to record. While held, audio is streamed continuously and transcription output is emitted incrementally to the focused text field. Release the hotkey to stop capture immediately; the app then flushes the final transcription tail and returns to idle.
 
 ## Architecture
 
@@ -72,8 +72,8 @@ make VOXTRAL_SRC=/path/to/voxtral.c
 
 ### Build Troubleshooting
 
-**"USE_MPS" define not recognized:**
-The Makefile assumes `-DUSE_MPS` enables the Metal backend. Check voxtral.c's own Makefile for the correct define and update `MPS_CFLAGS` in our Makefile.
+**Metal define mismatch (`USE_MPS` vs `USE_METAL`):**
+voxtral.c uses `USE_METAL` (not `USE_MPS`). If acceleration is unexpectedly slow, verify `MPS_CFLAGS` includes `-DUSE_METAL` (and ideally `-DUSE_BLAS`) in this project's Makefile.
 
 **Header conflicts with Swift:**
 If `#include "voxtral.h"` causes issues, edit `VoxtralBridge.h` — comment out the `#include` and uncomment the forward-declaration fallback block.
@@ -108,11 +108,19 @@ Grant both in **System Settings → Privacy & Security**.
 
 | Action | Effect |
 |--------|--------|
-| **Hold Ctrl+Shift+Space** | Start recording + live transcription (menubar turns red) |
+| **Hold Ctrl+Shift+Space** | Start recording + incremental transcription (menubar turns red; output may be bursty) |
 | **Release Ctrl+Shift+Space** | Stop recording immediately, flush final transcription output, then return idle |
 | **Press while finishing** | Ignored until the previous session finishes flushing |
 
 The first transcription after launch may take a few extra seconds while macOS pages in the model weights. Subsequent transcriptions are faster.
+
+## Known Limitation: Streaming Latency (Upstream)
+
+This app already feeds audio to `vox_stream_feed()` continuously and emits tokens as soon as `vox_stream_get()` returns them.
+
+However, the current upstream `voxtral.c` C implementation is still chunk-oriented and does **not** yet implement the full low-latency online decode schedule described in its model notes (see upstream `MODEL.md`: "Online Decode Schedule (not yet implemented in C)"). In practice, this means output may still feel delayed or bursty, especially before the final flush.
+
+So if dictation does not feel truly real-time, the main bottleneck is currently upstream decoding strategy rather than app hotkey/audio plumbing. If/when upstream lands full online decode support, this app can adopt it and reduce latency significantly.
 
 ## Configuration
 
@@ -206,6 +214,7 @@ launchctl load ~/Library/LaunchAgents/com.voxtral.dictate.plist
 
 ## Future Ideas
 
+- **Adopt upstream true online decode** (once available in voxtral.c) for lower-latency token emission
 - **Configurable hotkey UI** via a preferences panel
 - **Language selection** in the menubar
 - **Audio level indicator** in the menubar during recording
