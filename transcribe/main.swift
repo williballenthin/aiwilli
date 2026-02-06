@@ -422,20 +422,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("[VoxtralDictate] Global hotkey registered.")
     }
 
-    // MARK: - Toggle
+    // MARK: - Push-to-talk
 
-    func toggle() {
+    func onHotkeyDown() {
         switch currentState {
-        case .downloading:
-            return  // Model downloading — ignore
-        case .loading:
-            return  // Model still loading — ignore
+        case .downloading, .loading:
+            return
         case .idle:
             startRecording()
         case .recording:
-            stopRecording(cancelled: false)
+            return  // Already recording
         case .transcribing:
             doCancelTranscription()
+            startRecording()
+        }
+    }
+
+    func onHotkeyUp() {
+        if case .recording = currentState {
+            stopRecording(cancelled: false)
         }
     }
 
@@ -444,6 +449,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func startRecording() {
         guard voxCtx != nil else {
             print("[VoxtralDictate] Model not loaded yet.")
+            return
+        }
+
+        guard audioEngine == nil else {
+            print("[VoxtralDictate] Already recording.")
             return
         }
 
@@ -459,9 +469,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         recordedBuffers = []
 
         // Install tap — capture at hardware format, we'll resample later
+        // Copy buffer data since the system may reuse the buffer object
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) {
             [weak self] buffer, _ in
-            self?.recordedBuffers.append((buffer, hwFormat))
+            guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+            copy.frameLength = buffer.frameLength
+            if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+                for ch in 0..<Int(buffer.format.channelCount) {
+                    dst[ch].update(from: src[ch], count: Int(buffer.frameLength))
+                }
+            }
+            self?.recordedBuffers.append((copy, hwFormat))
         }
 
         do {
@@ -615,9 +633,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            // Clear recorded buffers — no longer needed
-            DispatchQueue.main.async { self.recordedBuffers = [] }
-
             let sampleCount = samples.count
             print("[VoxtralDictate] Feeding \(sampleCount) samples (\(String(format: "%.1f", Double(sampleCount) / Config.targetSampleRate))s of audio)")
 
@@ -748,10 +763,6 @@ func globalHotkeyCallback(
         return Unmanaged.passRetained(event)
     }
 
-    guard type == .keyDown else {
-        return Unmanaged.passRetained(event)
-    }
-
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
     let flags = event.flags
 
@@ -759,11 +770,19 @@ func globalHotkeyCallback(
     let active = flags.intersection(significantFlags)
     let expected = Config.hotkeyModifiers.intersection(significantFlags)
 
-    if active == expected && keyCode == Config.hotkeyKeyCode {
-        DispatchQueue.main.async {
-            appDelegateRef?.toggle()
+    // Push-to-talk: keyDown starts, keyUp stops
+    if keyCode == Config.hotkeyKeyCode {
+        if type == .keyDown && active == expected {
+            DispatchQueue.main.async {
+                appDelegateRef?.onHotkeyDown()
+            }
+            return nil
+        } else if type == .keyUp {
+            DispatchQueue.main.async {
+                appDelegateRef?.onHotkeyUp()
+            }
+            return nil
         }
-        return nil  // Suppress the hotkey
     }
 
     return Unmanaged.passRetained(event)
