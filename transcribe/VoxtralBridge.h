@@ -12,6 +12,11 @@
 // (Requires -I pointing to voxtral.c source dir during compilation)
 #include "voxtral.h"
 
+// Metal acceleration lifecycle (available when voxtral_metal.m is linked)
+int vox_metal_init(void);
+int vox_metal_available(void);
+void vox_metal_shutdown(void);
+
 // ---- Fallback: forward declarations only ----
 // Uncomment this block and comment out the #include above if voxtral.h
 // causes compilation issues with Swift.

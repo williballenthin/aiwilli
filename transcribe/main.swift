@@ -1,7 +1,7 @@
 // VoxtralDictate — macOS menubar dictation with voxtral.c linked as a library
 //
 // The voxtral model is loaded once at startup and stays warm in memory.
-// Press the hotkey to start recording, press again to stop.
+// Hold the hotkey to record with live transcription; release to stop capture.
 // Audio is resampled to 16kHz mono and fed directly to the voxtral streaming
 // API. Tokens are typed into the focused text field as they're generated.
 //
@@ -42,8 +42,6 @@ struct Config {
     // 0.5-1.0 = batch processing (more efficient for long recordings).
     static let processingInterval: Float = 0.0
 
-    // How often to poll vox_stream_get() for new tokens during transcription (seconds)
-    static let tokenPollInterval: TimeInterval = 0.02
 }
 
 // ============================================================================
@@ -154,6 +152,7 @@ enum AppState: Equatable {
 var currentState: AppState = .loading
 var appDelegateRef: AppDelegate?
 var globalEventTap: CFMachPort?
+var hotkeyChordActive = false
 
 // ============================================================================
 // MARK: - AppDelegate
@@ -161,19 +160,41 @@ var globalEventTap: CFMachPort?
 
 class AppDelegate: NSObject, NSApplicationDelegate {
 
+    private final class LiveSession {
+        let id: Int
+        let stream: OpaquePointer
+        let converter: AVAudioConverter
+        let targetFormat: AVAudioFormat
+        let typingGroup = DispatchGroup()
+
+        var totalSamplesFed = 0
+        var totalTokensEmitted = 0
+        var streamFreed = false
+
+        init(id: Int,
+             stream: OpaquePointer,
+             converter: AVAudioConverter,
+             targetFormat: AVAudioFormat) {
+            self.id = id
+            self.stream = stream
+            self.converter = converter
+            self.targetFormat = targetFormat
+        }
+    }
+
     private var statusItem: NSStatusItem!
     private var eventTap: CFMachPort?
 
     // Voxtral model context — loaded once, kept warm
     private var voxCtx: UnsafeMutablePointer<vox_ctx_t>?
 
-    // Audio recording
+    // Live session + queues
     private var audioEngine: AVAudioEngine?
-    private var recordedBuffers: [(AVAudioPCMBuffer, AVAudioFormat)] = []
-
-    // Transcription
-    private var transcriptionThread: Thread?
-    private var cancelTranscription = false
+    private var liveSession: LiveSession?
+    private var nextSessionID = 1
+    private var warnedBusyDuringFlush = false
+    private let streamQueue = DispatchQueue(label: "aiwilli.transcribe.stream", qos: .userInitiated)
+    private let typingQueue = DispatchQueue(label: "aiwilli.transcribe.typing", qos: .userInitiated)
 
     // Model download
     private var downloader: ModelDownloader?
@@ -185,6 +206,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         updateUI()
         checkPermissions()
+        initializeAcceleration()
 
         // Load model in background to keep UI responsive
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -196,10 +218,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
-        stopRecording(cancelled: true)
+
+        teardownLiveSessionSynchronously()
+
         if let ctx = voxCtx {
             vox_free(ctx)
             voxCtx = nil
+        }
+
+        vox_metal_shutdown()
+    }
+
+    // MARK: - Acceleration
+
+    private func initializeAcceleration() {
+        let metalReady = vox_metal_init()
+        if metalReady != 0 {
+            print("[VoxtralDictate] Metal GPU acceleration enabled.")
+        } else {
+            print("[VoxtralDictate] Metal GPU unavailable — falling back to CPU/Accelerate.")
         }
     }
 
@@ -292,7 +329,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             currentState = .idle
             self?.setupGlobalHotkey()
             self?.updateUI()
-            print("[VoxtralDictate] Ready. Press Ctrl+Shift+Space to toggle recording.")
+            print("[VoxtralDictate] Ready. Hold Ctrl+Shift+Space to dictate.")
         }
     }
 
@@ -431,10 +468,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .idle:
             startRecording()
         case .recording:
-            return  // Already recording
+            return
         case .transcribing:
-            doCancelTranscription()
-            startRecording()
+            if !warnedBusyDuringFlush {
+                warnedBusyDuringFlush = true
+                print("[VoxtralDictate] Finishing previous dictation — please wait.")
+            }
         }
     }
 
@@ -444,16 +483,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Audio Recording
+    // MARK: - Live Audio + Streaming Transcription
 
     private func startRecording() {
-        guard voxCtx != nil else {
+        guard let ctx = voxCtx else {
             print("[VoxtralDictate] Model not loaded yet.")
             return
         }
 
-        guard audioEngine == nil else {
-            print("[VoxtralDictate] Already recording.")
+        guard audioEngine == nil, liveSession == nil else {
+            print("[VoxtralDictate] Session already active.")
             return
         }
 
@@ -466,246 +505,360 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        recordedBuffers = []
-
-        // Install tap — capture at hardware format, we'll resample later
-        // Copy buffer data since the system may reuse the buffer object
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) {
-            [weak self] buffer, _ in
-            guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
-            copy.frameLength = buffer.frameLength
-            if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
-                for ch in 0..<Int(buffer.format.channelCount) {
-                    dst[ch].update(from: src[ch], count: Int(buffer.frameLength))
-                }
-            }
-            self?.recordedBuffers.append((copy, hwFormat))
-        }
-
-        do {
-            engine.prepare()
-            try engine.start()
-            audioEngine = engine
-            currentState = .recording
-            updateUI()
-            playSound(.beginRecording)
-            print("[VoxtralDictate] 🔴 Recording...")
-        } catch {
-            print("[VoxtralDictate] ❌ Failed to start recording: \(error)")
-        }
-    }
-
-    private func stopRecording(cancelled: Bool) {
-        guard let engine = audioEngine else { return }
-
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        audioEngine = nil
-
-        if cancelled {
-            recordedBuffers = []
-            currentState = .idle
-            updateUI()
-            return
-        }
-
-        playSound(.endRecording)
-        print("[VoxtralDictate] ⏹ Stopped. Transcribing \(recordedBuffers.count) chunks...")
-        transcribe()
-    }
-
-    // MARK: - Audio Resampling
-
-    /// Convert recorded buffers to 16kHz mono Float32 array for voxtral
-    private func resampleTo16kMono() -> [Float]? {
-        guard let (firstBuffer, srcFormat) = recordedBuffers.first else { return nil }
-        _ = firstBuffer  // suppress unused warning
-
-        // Target format: 16kHz, mono, float32, non-interleaved
-        guard let dstFormat = AVAudioFormat(
+        guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Config.targetSampleRate,
             channels: 1,
             interleaved: false
         ) else {
             print("[VoxtralDictate] ❌ Failed to create target audio format")
-            return nil
+            return
         }
 
-        guard let converter = AVAudioConverter(from: srcFormat, to: dstFormat) else {
+        guard let converter = AVAudioConverter(from: hwFormat, to: targetFormat) else {
             print("[VoxtralDictate] ❌ Failed to create audio converter")
+            return
+        }
+
+        guard let stream = vox_stream_init(ctx) else {
+            print("[VoxtralDictate] ❌ Failed to create voxtral stream")
+            return
+        }
+
+        if Config.processingInterval > 0 {
+            vox_set_processing_interval(stream, Config.processingInterval)
+        }
+
+        let session = LiveSession(
+            id: nextSessionID,
+            stream: stream,
+            converter: converter,
+            targetFormat: targetFormat
+        )
+        nextSessionID += 1
+        liveSession = session
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { [weak self, session] buffer, _ in
+            guard let self = self else { return }
+            guard let copy = self.copyPCMBuffer(buffer) else { return }
+            self.streamQueue.async { [weak self] in
+                self?.processAudioBuffer(copy, session: session)
+            }
+        }
+
+        do {
+            engine.prepare()
+            try engine.start()
+            audioEngine = engine
+            warnedBusyDuringFlush = false
+            currentState = .recording
+            updateUI()
+            playSound(.beginRecording)
+            print("[VoxtralDictate] 🔴 Recording + live transcription...")
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            freeStreamIfNeeded(session)
+            liveSession = nil
+            print("[VoxtralDictate] ❌ Failed to start recording: \(error)")
+        }
+    }
+
+    private func stopRecording(cancelled: Bool) {
+        guard let session = liveSession else { return }
+
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            audioEngine = nil
+        }
+
+        if cancelled {
+            streamQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.freeStreamIfNeeded(session)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    if self.liveSession === session {
+                        self.liveSession = nil
+                        self.warnedBusyDuringFlush = false
+                        currentState = .idle
+                        self.updateUI()
+                    }
+                }
+            }
+            return
+        }
+
+        playSound(.endRecording)
+        currentState = .transcribing
+        updateUI()
+        print("[VoxtralDictate] ⏹ Capture stopped. Flushing final transcription...")
+
+        finishSessionAfterCaptureStops(session)
+    }
+
+    private func teardownLiveSessionSynchronously() {
+        guard let session = liveSession else { return }
+
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            audioEngine = nil
+        }
+
+        streamQueue.sync {
+            self.freeStreamIfNeeded(session)
+        }
+
+        liveSession = nil
+        warnedBusyDuringFlush = false
+    }
+
+    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, session: LiveSession) {
+        guard liveSession === session else { return }
+
+        guard var samples = convertToTargetSamples(buffer, session: session) else { return }
+        if samples.isEmpty { return }
+
+        session.totalSamplesFed += samples.count
+
+        let feedResult: Int32 = samples.withUnsafeMutableBufferPointer { ptr in
+            guard let base = ptr.baseAddress else { return -1 }
+            return vox_stream_feed(session.stream, base, Int32(ptr.count))
+        }
+
+        if feedResult != 0 {
+            print("[VoxtralDictate] ❌ vox_stream_feed failed")
+            return
+        }
+
+        pullAvailableTokensAndQueueTyping(for: session)
+    }
+
+    private func finishSessionAfterCaptureStops(_ session: LiveSession) {
+        streamQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard self.liveSession === session else { return }
+
+            if var tailSamples = self.flushConverterRemainder(session: session), !tailSamples.isEmpty {
+                session.totalSamplesFed += tailSamples.count
+                let tailFeedResult: Int32 = tailSamples.withUnsafeMutableBufferPointer { ptr in
+                    guard let base = ptr.baseAddress else { return -1 }
+                    return vox_stream_feed(session.stream, base, Int32(ptr.count))
+                }
+                if tailFeedResult != 0 {
+                    print("[VoxtralDictate] ❌ Failed to feed converter tail")
+                }
+                self.pullAvailableTokensAndQueueTyping(for: session)
+            }
+
+            let finishResult = vox_stream_finish(session.stream)
+            if finishResult != 0 {
+                print("[VoxtralDictate] ❌ vox_stream_finish failed")
+            }
+
+            self.pullAvailableTokensAndQueueTyping(for: session)
+            self.freeStreamIfNeeded(session)
+
+            let totalTokens = session.totalTokensEmitted
+            let seconds = Double(session.totalSamplesFed) / Config.targetSampleRate
+
+            session.typingGroup.notify(queue: .main) { [weak self] in
+                guard let self = self else { return }
+                guard self.liveSession === session else { return }
+
+                self.liveSession = nil
+                self.warnedBusyDuringFlush = false
+                currentState = .idle
+                self.updateUI()
+                self.playSound(.transcriptionDone)
+                print("[VoxtralDictate] ✅ Done — \(totalTokens) tokens (\(String(format: "%.1f", seconds))s audio)")
+            }
+        }
+    }
+
+    private func freeStreamIfNeeded(_ session: LiveSession) {
+        if session.streamFreed { return }
+        vox_stream_free(session.stream)
+        session.streamFreed = true
+    }
+
+    private func pullAvailableTokensAndQueueTyping(for session: LiveSession) {
+        let maxTokens = 64
+        let tokenPtrs = UnsafeMutablePointer<UnsafePointer<CChar>?>.allocate(capacity: maxTokens)
+        defer { tokenPtrs.deallocate() }
+
+        while true {
+            let n = vox_stream_get(session.stream, tokenPtrs, Int32(maxTokens))
+            if n <= 0 { break }
+
+            session.totalTokensEmitted += Int(n)
+
+            var text = ""
+            for i in 0..<Int(n) {
+                if let cStr = tokenPtrs[i] {
+                    text += String(cString: cStr)
+                }
+            }
+
+            if !text.isEmpty {
+                let sanitized = sanitizeTextForTyping(text)
+                if !sanitized.isEmpty {
+                    queueTextForTyping(sanitized, session: session)
+                }
+            }
+        }
+    }
+
+    private func queueTextForTyping(_ text: String, session: LiveSession) {
+        session.typingGroup.enter()
+        typingQueue.async { [weak self] in
+            defer { session.typingGroup.leave() }
+            self?.typeText(text)
+        }
+    }
+
+    private func flushConverterRemainder(session: LiveSession) -> [Float]? {
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: session.targetFormat, frameCapacity: 1024) else {
             return nil
         }
 
-        // Calculate total frames at target sample rate
-        var totalSourceFrames: AVAudioFrameCount = 0
-        for (buf, _) in recordedBuffers {
-            totalSourceFrames += buf.frameLength
-        }
-        let ratio = Config.targetSampleRate / srcFormat.sampleRate
-        let estimatedOutputFrames = AVAudioFrameCount(Double(totalSourceFrames) * ratio) + 1024
+        var outputSamples: [Float] = []
+        var loops = 0
 
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: dstFormat,
-            frameCapacity: estimatedOutputFrames
-        ) else {
+        while true {
+            loops += 1
+            if loops > 128 {
+                print("[VoxtralDictate] ⚠️ Converter loop guard tripped (tail flush)")
+                return outputSamples
+            }
+
+            outputBuffer.frameLength = 0
+
+            var error: NSError?
+            let status = session.converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+
+            if status == .error {
+                print("[VoxtralDictate] ❌ Converter tail flush failed: \(error?.localizedDescription ?? "unknown")")
+                return nil
+            }
+
+            if outputBuffer.frameLength > 0, let channelData = outputBuffer.floatChannelData?[0] {
+                let count = Int(outputBuffer.frameLength)
+                outputSamples.append(contentsOf: UnsafeBufferPointer(start: channelData, count: count))
+            }
+
+            switch status {
+            case .haveData:
+                if outputBuffer.frameLength == 0 {
+                    print("[VoxtralDictate] ⚠️ Converter produced empty .haveData during tail flush; stopping flush")
+                    return outputSamples
+                }
+                continue
+            case .inputRanDry, .endOfStream:
+                return outputSamples
+            case .error:
+                return nil
+            @unknown default:
+                return outputSamples
+            }
+        }
+    }
+
+    private func copyPCMBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
+            return nil
+        }
+        copy.frameLength = buffer.frameLength
+
+        let srcList = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        let dstList = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+
+        for i in 0..<min(srcList.count, dstList.count) {
+            guard let srcData = srcList[i].mData, let dstData = dstList[i].mData else { continue }
+            memcpy(dstData, srcData, Int(srcList[i].mDataByteSize))
+            dstList[i].mDataByteSize = srcList[i].mDataByteSize
+        }
+
+        return copy
+    }
+
+    private func convertToTargetSamples(_ buffer: AVAudioPCMBuffer, session: LiveSession) -> [Float]? {
+        let ratio = session.targetFormat.sampleRate / buffer.format.sampleRate
+        let estimatedFrames = AVAudioFrameCount(max(64, Int(Double(buffer.frameLength) * ratio) + 64))
+
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: session.targetFormat, frameCapacity: estimatedFrames) else {
             print("[VoxtralDictate] ❌ Failed to allocate output buffer")
             return nil
         }
 
-        // Feed buffers through converter
-        var bufferIndex = 0
-        var bufferOffset: AVAudioFrameCount = 0
+        var didProvideInput = false
+        var outputSamples: [Float] = []
+        var loops = 0
 
-        let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
-            while bufferIndex < self.recordedBuffers.count {
-                let (srcBuf, _) = self.recordedBuffers[bufferIndex]
-                let remaining = srcBuf.frameLength - bufferOffset
+        while true {
+            loops += 1
+            if loops > 128 {
+                print("[VoxtralDictate] ⚠️ Converter loop guard tripped (live buffer)")
+                return outputSamples
+            }
 
-                if remaining > 0 {
-                    // Create a slice of the current buffer
-                    let framesToCopy = min(AVAudioFrameCount(inNumPackets), remaining)
-                    guard let sliceBuffer = AVAudioPCMBuffer(
-                        pcmFormat: srcBuf.format,
-                        frameCapacity: framesToCopy
-                    ) else {
-                        outStatus.pointee = .endOfStream
-                        return nil
-                    }
+            outputBuffer.frameLength = 0
 
-                    // Copy audio data
-                    let srcChannels = srcBuf.format.channelCount
-                    for ch in 0..<Int(srcChannels) {
-                        if let srcData = srcBuf.floatChannelData?[ch],
-                           let dstData = sliceBuffer.floatChannelData?[ch] {
-                            dstData.update(from: srcData.advanced(by: Int(bufferOffset)),
-                                           count: Int(framesToCopy))
-                        }
-                    }
-                    sliceBuffer.frameLength = framesToCopy
-                    bufferOffset += framesToCopy
-
-                    outStatus.pointee = .haveData
-                    return sliceBuffer
+            var error: NSError?
+            let status = session.converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                if didProvideInput {
+                    outStatus.pointee = .noDataNow
+                    return nil
                 }
 
-                bufferIndex += 1
-                bufferOffset = 0
+                didProvideInput = true
+                outStatus.pointee = .haveData
+                return buffer
             }
 
-            outStatus.pointee = .endOfStream
-            return nil
-        }
+            if status == .error {
+                print("[VoxtralDictate] ❌ Audio conversion failed: \(error?.localizedDescription ?? "unknown")")
+                return nil
+            }
 
-        var error: NSError?
-        let status = converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
+            if outputBuffer.frameLength > 0, let channelData = outputBuffer.floatChannelData?[0] {
+                let count = Int(outputBuffer.frameLength)
+                outputSamples.append(contentsOf: UnsafeBufferPointer(start: channelData, count: count))
+            }
 
-        if status == .error {
-            print("[VoxtralDictate] ❌ Audio conversion failed: \(error?.localizedDescription ?? "unknown")")
-            return nil
-        }
-
-        // Extract float samples
-        guard let channelData = outputBuffer.floatChannelData else { return nil }
-        let count = Int(outputBuffer.frameLength)
-        return Array(UnsafeBufferPointer(start: channelData[0], count: count))
-    }
-
-    // MARK: - Transcription (direct C API)
-
-    private func transcribe() {
-        guard let ctx = voxCtx else { return }
-
-        currentState = .transcribing
-        cancelTranscription = false
-        updateUI()
-
-        // Resample on a background thread
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-
-            guard var samples = self.resampleTo16kMono() else {
-                print("[VoxtralDictate] ❌ Failed to resample audio")
-                DispatchQueue.main.async {
-                    currentState = .idle
-                    self.updateUI()
+            switch status {
+            case .haveData:
+                if outputBuffer.frameLength == 0 {
+                    print("[VoxtralDictate] ⚠️ Converter produced empty .haveData for live buffer; dropping remainder")
+                    return outputSamples
                 }
-                return
-            }
-
-            let sampleCount = samples.count
-            print("[VoxtralDictate] Feeding \(sampleCount) samples (\(String(format: "%.1f", Double(sampleCount) / Config.targetSampleRate))s of audio)")
-
-            // Create stream and feed audio
-            guard let stream = vox_stream_init(ctx) else {
-                print("[VoxtralDictate] ❌ Failed to create voxtral stream")
-                DispatchQueue.main.async {
-                    currentState = .idle
-                    self.updateUI()
-                }
-                return
-            }
-
-            if Config.processingInterval > 0 {
-                vox_set_processing_interval(stream, Config.processingInterval)
-            }
-
-            // Feed all samples
-            _ = samples.withUnsafeMutableBufferPointer { ptr in
-                vox_stream_feed(stream, ptr.baseAddress!, Int32(sampleCount))
-            }
-
-            // Signal end of audio
-            vox_stream_finish(stream)
-
-            // Collect tokens and type them
-            let maxTokens = 64
-            let tokenPtrs = UnsafeMutablePointer<UnsafePointer<CChar>?>.allocate(capacity: maxTokens)
-            defer { tokenPtrs.deallocate() }
-
-            var totalTokens = 0
-            while !self.cancelTranscription {
-                let n = vox_stream_get(stream, tokenPtrs, Int32(maxTokens))
-                if n <= 0 { break }
-
-                totalTokens += Int(n)
-
-                // Collect token strings
-                var text = ""
-                for i in 0..<Int(n) {
-                    if let cStr = tokenPtrs[i] {
-                        text += String(cString: cStr)
-                    }
-                }
-
-                // Type on main thread
-                if !text.isEmpty {
-                    DispatchQueue.main.sync {
-                        self.typeText(text)
-                    }
-                }
-            }
-
-            vox_stream_free(stream)
-
-            print("[VoxtralDictate] ✅ Done — \(totalTokens) tokens")
-
-            DispatchQueue.main.async {
-                currentState = .idle
-                self.updateUI()
-                self.playSound(.transcriptionDone)
+                continue
+            case .inputRanDry, .endOfStream:
+                return outputSamples
+            case .error:
+                return nil
+            @unknown default:
+                return outputSamples
             }
         }
-    }
-
-    private func doCancelTranscription() {
-        cancelTranscription = true
-        currentState = .idle
-        updateUI()
-        print("[VoxtralDictate] ⛔ Transcription cancelled.")
     }
 
     // MARK: - Text Injection (CGEvent keystrokes)
+
+    private func sanitizeTextForTyping(_ text: String) -> String {
+        let controls = CharacterSet.controlCharacters
+        let filtered = text.unicodeScalars.filter { scalar in
+            if scalar == "\n" || scalar == "\t" || scalar == "\r" {
+                return true
+            }
+            return !controls.contains(scalar)
+        }
+        return String(String.UnicodeScalarView(filtered))
+    }
 
     private func typeText(_ text: String) {
         let utf16 = Array(text.utf16)
@@ -760,7 +913,7 @@ func globalHotkeyCallback(
         if let tap = globalEventTap {
             CGEvent.tapEnable(tap: tap, enable: true)
         }
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -770,14 +923,19 @@ func globalHotkeyCallback(
     let active = flags.intersection(significantFlags)
     let expected = Config.hotkeyModifiers.intersection(significantFlags)
 
-    // Push-to-talk: keyDown starts, keyUp stops
     if keyCode == Config.hotkeyKeyCode {
-        if type == .keyDown && active == expected {
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) == 1
+
+        if type == .keyDown && !isRepeat && active == expected {
+            hotkeyChordActive = true
             DispatchQueue.main.async {
                 appDelegateRef?.onHotkeyDown()
             }
             return nil
-        } else if type == .keyUp {
+        }
+
+        if type == .keyUp && hotkeyChordActive {
+            hotkeyChordActive = false
             DispatchQueue.main.async {
                 appDelegateRef?.onHotkeyUp()
             }
@@ -785,7 +943,14 @@ func globalHotkeyCallback(
         }
     }
 
-    return Unmanaged.passRetained(event)
+    if type == .flagsChanged && hotkeyChordActive && active != expected {
+        hotkeyChordActive = false
+        DispatchQueue.main.async {
+            appDelegateRef?.onHotkeyUp()
+        }
+    }
+
+    return Unmanaged.passUnretained(event)
 }
 
 // ============================================================================

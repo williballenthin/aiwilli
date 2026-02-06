@@ -2,7 +2,7 @@
 
 A macOS menubar dictation app powered by [voxtral.c](https://github.com/antirez/voxtral.c) — antirez's pure C implementation of Mistral's Voxtral Realtime 4B speech-to-text model.
 
-Press **Ctrl+Shift+Space** to start recording, press again to stop. Text is typed directly into whatever text field has focus, streaming words as voxtral generates them.
+Hold **Ctrl+Shift+Space** to record. While held, transcription streams in real time and text is typed into whatever field has focus. Release the hotkey to stop capture immediately; the app then flushes the final transcription tail and returns to idle.
 
 ## Architecture
 
@@ -108,9 +108,9 @@ Grant both in **System Settings → Privacy & Security**.
 
 | Action | Effect |
 |--------|--------|
-| **Ctrl+Shift+Space** | Start recording (menubar turns red) |
-| **Ctrl+Shift+Space** (again) | Stop recording → transcribe → type text |
-| **Ctrl+Shift+Space** (during transcription) | Cancel transcription |
+| **Hold Ctrl+Shift+Space** | Start recording + live transcription (menubar turns red) |
+| **Release Ctrl+Shift+Space** | Stop recording immediately, flush final transcription output, then return idle |
+| **Press while finishing** | Ignored until the previous session finishes flushing |
 
 The first transcription after launch may take a few extra seconds while macOS pages in the model weights. Subsequent transcriptions are faster.
 
@@ -206,8 +206,6 @@ launchctl load ~/Library/LaunchAgents/com.voxtral.dictate.plist
 
 ## Future Ideas
 
-- **Live streaming mode**: Feed audio to vox_stream_feed() during recording for real-time transcription while you speak
-- **Hold-to-talk**: Key down = record, key up = transcribe
 - **Configurable hotkey UI** via a preferences panel
 - **Language selection** in the menubar
 - **Audio level indicator** in the menubar during recording

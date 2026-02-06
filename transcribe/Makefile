@@ -36,12 +36,14 @@ AR = ar
 # ---- Compiler flags ----
 
 # Common C flags
-CFLAGS = -O2 -Wall -std=c11
+CFLAGS = -O3 -Wall -std=c11 -ffast-math
 
 # MPS/Metal flags (Apple Silicon)
-MPS_CFLAGS = -DUSE_MPS
-MPS_OBJCFLAGS = -O2 -Wall -fobjc-arc
-MPS_FRAMEWORKS = -framework Metal -framework Foundation -framework MetalPerformanceShaders
+# IMPORTANT: voxtral.c expects USE_METAL (not USE_MPS).
+# USE_BLAS enables Accelerate GEMM fallback/interop on macOS.
+MPS_CFLAGS = -DUSE_BLAS -DUSE_METAL -DACCELERATE_NEW_LAPACK
+MPS_OBJCFLAGS = -O3 -Wall -fobjc-arc -DUSE_BLAS -DUSE_METAL -DACCELERATE_NEW_LAPACK
+MPS_FRAMEWORKS = -framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph
 
 # Swift flags
 SWIFTFLAGS = -O -import-objc-header VoxtralBridge.h
@@ -49,7 +51,7 @@ SWIFTFLAGS = -O -import-objc-header VoxtralBridge.h
 # Linker flags
 LDFLAGS = -framework Cocoa -framework AVFoundation -framework Carbon \
           -framework Metal -framework Foundation -framework MetalPerformanceShaders \
-          -framework Accelerate
+          -framework MetalPerformanceShadersGraph -framework Accelerate
 
 # ---- voxtral.c source files ----
 # (main.c is excluded — that's voxtral's CLI entry point, not ours)
