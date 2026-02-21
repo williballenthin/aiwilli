@@ -1,0 +1,8 @@
+set shell := ["bash", "-cu"]
+
+lint:
+    ruff check .
+    ty check .
+
+test:
+    pytest

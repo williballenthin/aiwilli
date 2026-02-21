@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-claw"
+version = "0.1.0"
+description = "Global observational memory system"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.8",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+memory-claw = "memory_claw.cli.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+memory_claw = ["store/schema.sql"]
