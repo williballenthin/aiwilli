@@ -8,3 +8,5 @@ transcribe/build/main.o
 transcribe/build
 transcribe/VoxtralDictate
 /scripts/__pycache__
+.direnv
+.env
