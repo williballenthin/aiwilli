@@ -7,3 +7,4 @@ transcribe/build/libvoxtral.a
 transcribe/build/main.o
 transcribe/build
 transcribe/VoxtralDictate
+/scripts/__pycache__

@@ -278,13 +278,13 @@ class Writer:
 
     def note_exists(self, received: datetime) -> bool:
         date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        timestamp = received.strftime("%H:%M")
+        timestamp = received.strftime("%H%M")
         filename = f"{timestamp} - transcription.md"
         return (date_folder / filename).exists()
 
     def write_note(self, email_obj: IncomingEmail) -> NoteResult:
         date_folder = self._ensure_date_folder(email_obj.received)
-        timestamp = email_obj.received.strftime("%H:%M")
+        timestamp = email_obj.received.strftime("%H%M")
 
         # Save attachments
         attachment_paths = []

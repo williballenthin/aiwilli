@@ -305,14 +305,14 @@ class Writer:
 
     def pdf_exists(self, received: datetime, attachment: Attachment) -> bool:
         date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        timestamp = received.strftime("%H:%M")
+        timestamp = received.strftime("%H%M")
         stem = Path(attachment.filename).stem
         filename = f"{timestamp} - {stem}.pdf"
         return (date_folder / "_attachments" / filename).exists()
 
     def save_pdf(self, email_obj: IncomingEmail, attachment: Attachment) -> tuple[Path, str]:
         date_folder = self._ensure_date_folder(email_obj.received)
-        timestamp = email_obj.received.strftime("%H:%M")
+        timestamp = email_obj.received.strftime("%H%M")
         stem = Path(attachment.filename).stem
         filename = f"{timestamp} - {stem}.pdf"
         pdf_path = date_folder / "_attachments" / filename
