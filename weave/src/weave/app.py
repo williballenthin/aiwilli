@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import email
+import json
 import logging
 import os
 import re
@@ -148,6 +149,7 @@ class IncomingMessage:
 class HandlerResult:
     handled: bool
     created_paths: list[Path]
+    note_paths: list[Path]
 
 
 class MessageHandler(Protocol):
@@ -360,7 +362,7 @@ class VoiceNoteHandler:
         note_path = date_folder / f"{timestamp} - transcription.md"
         if note_path.exists():
             logger.debug("voice note already exists at %s", note_path)
-            return HandlerResult(handled=True, created_paths=[])
+            return HandlerResult(handled=True, created_paths=[], note_paths=[])
         parsed = email.message_from_bytes(message.raw_email)
         body = self.get_plain_text_body(parsed)
         attachments = self.get_attachments(parsed)
@@ -379,7 +381,7 @@ class VoiceNoteHandler:
         )
         note_path.write_text(content)
         created_paths = [note_path, *attachment_paths]
-        return HandlerResult(handled=True, created_paths=created_paths)
+        return HandlerResult(handled=True, created_paths=created_paths, note_paths=[note_path])
 
     def get_date_folder(self, received: datetime) -> Path:
         date_folder = self.output_dir / received.strftime("%Y-%m-%d")
@@ -447,10 +449,11 @@ class RemarkableSnapshotHandler:
         attachments = self.get_pdf_attachments(parsed)
         if not attachments:
             logger.debug("message %s has no PDF attachments", message.uid)
-            return HandlerResult(handled=False, created_paths=[])
+            return HandlerResult(handled=False, created_paths=[], note_paths=[])
         date_folder = self.get_date_folder(message.received)
         timestamp = message.received.strftime("%H%M")
         created_paths: list[Path] = []
+        note_paths: list[Path] = []
         for attachment in attachments:
             stem = Path(attachment.filename).stem
             pdf_filename = f"{timestamp} - {stem}.pdf"
@@ -469,7 +472,8 @@ class RemarkableSnapshotHandler:
             rendered = self.get_markdown(message, pdf_filename, content, error)
             md_path.write_text(rendered)
             created_paths.append(md_path)
-        return HandlerResult(handled=True, created_paths=created_paths)
+            note_paths.append(md_path)
+        return HandlerResult(handled=True, created_paths=created_paths, note_paths=note_paths)
 
     def get_date_folder(self, received: datetime) -> Path:
         date_folder = self.output_dir / received.strftime("%Y-%m-%d")
@@ -528,12 +532,58 @@ class RemarkableSnapshotHandler:
         )
 
 
+class DailyNoteWriter:
+    def __init__(self, vault_root: Path):
+        self.vault_root = vault_root
+
+    def append_note_embed(self, received: datetime, note_path: Path) -> Path:
+        daily_path = self.get_daily_note_path(received)
+        daily_path.parent.mkdir(parents=True, exist_ok=True)
+        embed_line = self.render_embed_line(received, note_path)
+        if daily_path.exists():
+            content = daily_path.read_text()
+            existing_lines = content.splitlines()
+            if embed_line in existing_lines:
+                return daily_path
+            separator = "" if content.endswith("\n") or content == "" else "\n"
+            daily_path.write_text(f"{content}{separator}{embed_line}\n")
+            return daily_path
+        daily_path.write_text(f"{embed_line}\n")
+        return daily_path
+
+    def get_daily_note_path(self, received: datetime) -> Path:
+        folder = self.get_daily_notes_folder()
+        return folder / f"{received.strftime('%Y-%m-%d')}.md"
+
+    def get_daily_notes_folder(self) -> Path:
+        settings_path = self.vault_root / ".obsidian" / "daily-notes.json"
+        if not settings_path.exists():
+            return self.vault_root
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            return self.vault_root
+        folder = settings.get("folder")
+        if isinstance(folder, str) and folder.strip():
+            return self.vault_root / Path(folder)
+        return self.vault_root
+
+    def render_embed_line(self, received: datetime, note_path: Path) -> str:
+        try:
+            relative_note_path = note_path.relative_to(self.vault_root)
+        except ValueError:
+            relative_note_path = note_path
+        timestamp = received.strftime("%H:%M")
+        return f"- {timestamp} ![[{relative_note_path.as_posix()}]]"
+
+
 class WeaveService:
     def __init__(self, config: WeaveConfig):
         self.config = config
         self.monitor = MailboxMonitor(config)
         self.route_resolver = RouteResolver(config.routes)
         self.handlers = self.get_handlers(config)
+        self.daily_note_writer = DailyNoteWriter(vault_root=config.vault_root)
 
     def get_handlers(self, config: WeaveConfig) -> dict[str, MessageHandler]:
         handlers: dict[str, MessageHandler] = {}
@@ -574,6 +624,12 @@ class WeaveService:
                 logger.warning("failed processing uid %s: %s", message.uid, exc)
                 continue
             if result.handled:
+                for note_path in result.note_paths:
+                    daily_path = self.daily_note_writer.append_note_embed(
+                        received=message.received,
+                        note_path=note_path,
+                    )
+                    logger.info("updated daily note %s", daily_path)
                 self.monitor.mark_message_seen(client, message)
                 processed += 1
                 for path in result.created_paths:

@@ -12,6 +12,12 @@ Current handlers:
 
 Both handlers write into the vault at `sink/<YYYY-MM-DD>/` and use `_attachments/` for binary files.
 
+For each created sink note, Weave appends an embed entry to the corresponding daily note using the email received timestamp:
+- daily note path: `<daily-folder>/<YYYY-MM-DD>.md`
+- appended line: `- HH:MM ![[sink/.../<note>.md]]`
+
+`<daily-folder>` is read from `.obsidian/daily-notes.json` (`folder`) and falls back to vault root when unset.
+
 The routing variants are hardcoded in `src/weave/app.py`. This is intentional for personal use.
 
 Required environment variables:

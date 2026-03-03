@@ -52,9 +52,17 @@ Routing is hardcoded in code. The base mailbox comes from `WEAVE_BASE_EMAIL`; va
 - transcription is generated through the `llm` CLI against model `gemini/gemini-3-flash-preview`.
 - on transcription failure, Weave still writes an error note and marks the message as seen.
 
+5.3 Daily note embedding
+- for each newly written sink markdown note, Weave appends an embed line to the corresponding daily note.
+- daily note date uses the email received timestamp date.
+- appended line format: `- HH:MM ![[<vault-relative-note-path>]]`
+- daily note folder is loaded from `<vault_root>/.obsidian/daily-notes.json` key `folder`.
+- if the daily-notes config file is missing/invalid or folder is empty, Weave uses `<vault_root>/` as daily note folder.
+- duplicate embed lines are not appended.
+
 6. Message visibility behavior
 
-- a successfully handled routed message is marked `\\Seen`.
+- a successfully handled routed message is marked `\\Seen` after sink-note writing and daily-note embed updates succeed.
 - unrouted messages are left unread.
 - routed messages with disallowed senders are left unread.
 - reMarkable-routed messages without PDF attachments are left unread.
