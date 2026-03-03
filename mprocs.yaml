@@ -1,5 +1,3 @@
 procs:
-  rm2:
-    shell: ./scripts/rm2-pipe-obsidian.py "$OBSIDIAN_RM2_PATH"
-  vnote:
-    shell: ./scripts/vnote-pipe-obsidian.py "$OBSIDIAN_VNOTE_PATH"
+  weave:
+    shell: uv --directory weave run weave "$OBSIDIAN_VAULT_ROOT"

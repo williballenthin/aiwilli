@@ -1,0 +1,49 @@
+[project]
+name = "weave"
+version = "0.1.0"
+description = "Email ingress router for Obsidian"
+readme = "README.md"
+authors = [
+    { name = "Willi Ballenthin", email = "wballenthin@hex-rays.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "imapclient>=3.0.1",
+    "jinja2>=3.1.6",
+    "pydantic>=2.11.9",
+    "rich>=14.1.0",
+]
+
+[project.scripts]
+weave = "weave.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.8,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18.2",
+    "pytest>=8.4.2",
+    "ruff>=0.13.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = ["imapclient"]
+ignore_missing_imports = true
