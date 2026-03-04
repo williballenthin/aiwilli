@@ -21,7 +21,7 @@ Last updated: 2026-03-03
 3. Runtime flow
 
 1. Parse CLI args.
-2. Build `WeaveConfig` from env and hardcoded route variants (`+vnote`, `+rm2`) resolved from `WEAVE_BASE_EMAIL`; route sink path is `sink/` under vault root.
+2. Build `WeaveConfig` from env and hardcoded route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`; route sink path is `sink/` under vault root.
 3. Connect with `IMAPClient` and select `INBOX`.
 4. Fetch unread messages with envelope + RFC822 payload.
 5. Normalize sender/to-addresses and resolve route.
@@ -45,12 +45,22 @@ Last updated: 2026-03-03
 - writes markdown note with embed and transcription
 - writes failure note when transcription throws `TranscriptionError`
 
-4.3 `DailyNoteWriter`
+4.3 `TodoHandler`
+- extracts text/plain body from multipart email
+- extracts all attachment parts marked `attachment`
+- sanitizes subject for use as filename (`sanitize_filename`)
+- writes date folder + `_attachments`
+- writes one markdown note with YAML frontmatter, `## <subject>` heading, body text, and Obsidian attachment embeds
+- returns `todo_entries` on `HandlerResult` instead of `note_paths`, which triggers a `- [ ] TODO:` checkbox line on the daily note
+
+4.4 `DailyNoteWriter`
 - reads daily-note folder from `<vault_root>/.obsidian/daily-notes.json` key `folder`
 - falls back to vault root if config is missing/invalid
 - resolves daily note filename as `YYYY-MM-DD.md` from message received date
 - appends `- HH:MM ![[<vault-relative-note-path>]]` at end of daily note
 - deduplicates exact embed lines
+- `append_todo_embed` renders `- [ ] TODO: <subject> [[path]]` for todo handler entries
+- shared `append_line` method handles file I/O and dedup for both embed styles
 
 5. Transcription abstraction
 
@@ -72,5 +82,5 @@ Weave keeps one monitor/loop and routes to specialized handlers. The previous pe
 7. Planned next refactors
 
 - split `app.py` into `mailbox.py`, `routes.py`, `handlers/`, and `cli.py`
-- add handler for links/todos/quick notes
+- add handler for links/quick notes
 - add route-level metrics and structured JSON run report

@@ -14,9 +14,11 @@ from weave.app import (
     RemarkableSnapshotHandler,
     RouteConfig,
     RouteResolver,
+    TodoHandler,
     TranscriptionError,
     VoiceNoteHandler,
     get_variant_address,
+    sanitize_filename,
 )
 
 
@@ -199,3 +201,69 @@ def test_remarkable_handler_writes_error_note_on_transcription_failure(tmp_path:
     assert result.note_paths == [note_path]
     content = note_path.read_text()
     assert "TRANSCRIPTION_FAILED" in content
+
+
+def test_sanitize_filename_strips_unsafe_chars() -> None:
+    assert sanitize_filename('Fix: the "thing"') == "Fix- the -thing"
+    assert sanitize_filename("slashes/and\\back") == "slashes-and-back"
+    assert sanitize_filename("???") == "untitled"
+    assert sanitize_filename("ok name") == "ok name"
+
+
+def test_todo_handler_writes_note_with_heading_and_attachments(tmp_path: Path) -> None:
+    handler = TodoHandler(output_dir=tmp_path)
+    raw = build_message_with_body_and_attachment()
+    message = build_incoming(raw, subject="Buy groceries")
+
+    result = handler.handle_message(message)
+
+    assert result.handled is True
+    note_path = tmp_path / "2026-03-01" / "1345 - Buy groceries.md"
+    attachment_path = tmp_path / "2026-03-01" / "_attachments" / "1345 - clip.png"
+    assert note_path.exists()
+    assert attachment_path.exists()
+    assert result.note_paths == []
+    assert result.todo_entries == [("Buy groceries", note_path)]
+    content = note_path.read_text()
+    assert "## Buy groceries" in content
+    assert "hello from voice" in content
+    assert "![[_attachments/1345 - clip.png]]" in content
+
+
+def test_todo_handler_skips_existing_note(tmp_path: Path) -> None:
+    handler = TodoHandler(output_dir=tmp_path)
+    raw = build_message_with_body_and_attachment()
+    message = build_incoming(raw, subject="Buy groceries")
+    date_folder = tmp_path / "2026-03-01"
+    date_folder.mkdir(parents=True)
+    (date_folder / "_attachments").mkdir()
+    (date_folder / "1345 - Buy groceries.md").write_text("existing")
+
+    result = handler.handle_message(message)
+
+    assert result.handled is True
+    assert result.created_paths == []
+    assert result.todo_entries == []
+
+
+def test_daily_note_writer_appends_todo_embed(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
+    note_path = vault_root / "sink" / "2026-03-01" / "1345 - Buy groceries.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("content")
+
+    writer = DailyNoteWriter(vault_root=vault_root)
+    writer.append_todo_embed(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        subject="Buy groceries",
+        note_path=note_path,
+    )
+
+    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    assert daily_path.exists()
+    assert daily_path.read_text() == (
+        "- [ ] TODO: Buy groceries [[sink/2026-03-01/1345 - Buy groceries.md]]\n"
+    )

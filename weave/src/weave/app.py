@@ -12,7 +12,7 @@ import sys
 import time
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.header import decode_header
 from email.message import Message
@@ -74,6 +74,23 @@ error: \"{{ error }}\"
 """
 )
 
+TODO_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
+    """---
+subject: \"{{ subject }}\"
+received: {{ received }}
+saved: {{ saved }}
+---
+
+## {{ subject }}
+
+{{ body }}
+{% if attachment_links %}
+
+{{ attachment_links }}
+{% endif %}
+"""
+)
+
 RM2_MODEL = "gemini/gemini-3-flash-preview"
 RM2_PROMPT = """Transcribe this handwritten note verbatim. Output ONLY a single markdown
 code block containing the transcription. Preserve the structure including:
@@ -89,6 +106,7 @@ Do not add any commentary, analysis, or text outside the code block."""
 BASE_EMAIL_ENV = "WEAVE_BASE_EMAIL"
 VOICE_VARIANT = "+vnote"
 RM2_VARIANT = "+rm2"
+TODO_VARIANT = "+todo"
 SINK_RELATIVE_PATH = Path("sink")
 
 
@@ -114,6 +132,12 @@ def get_variant_address(base_email: str, variant: str) -> str:
     if not variant.startswith("+"):
         raise ConfigError(f"Invalid variant format: {variant}")
     return f"{local}{variant}@{domain}"
+
+
+def sanitize_filename(name: str) -> str:
+    sanitized = re.sub(r'[/\\:*?"<>|]', '-', name)
+    sanitized = sanitized.strip(" -")
+    return sanitized[:100] if sanitized else "untitled"
 
 
 @contextmanager
@@ -150,6 +174,7 @@ class HandlerResult:
     handled: bool
     created_paths: list[Path]
     note_paths: list[Path]
+    todo_entries: list[tuple[str, Path]] = field(default_factory=list)
 
 
 class MessageHandler(Protocol):
@@ -205,6 +230,13 @@ class WeaveConfig(BaseModel):
                         to_address=get_variant_address(base_email, RM2_VARIANT),
                         allowed_senders=("my@remarkable.com",),
                         handler_key="rm2",
+                        sink_relative=SINK_RELATIVE_PATH,
+                    ),
+                    RouteConfig(
+                        name="todo",
+                        to_address=get_variant_address(base_email, TODO_VARIANT),
+                        allowed_senders=("wilbal1087@gmail.com",),
+                        handler_key="todo",
                         sink_relative=SINK_RELATIVE_PATH,
                     ),
                 ),
@@ -439,6 +471,101 @@ class VoiceNoteHandler:
         return "".join(parts)
 
 
+class TodoHandler:
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+
+    def handle_message(self, message: IncomingMessage) -> HandlerResult:
+        date_folder = self.get_date_folder(message.received)
+        timestamp = message.received.strftime("%H%M")
+        slug = sanitize_filename(message.subject)
+        note_path = date_folder / f"{timestamp} - {slug}.md"
+        if note_path.exists():
+            logger.debug("todo note already exists at %s", note_path)
+            return HandlerResult(handled=True, created_paths=[], note_paths=[])
+        parsed = email.message_from_bytes(message.raw_email)
+        body = self.get_plain_text_body(parsed)
+        attachments = self.get_attachments(parsed)
+        attachment_paths: list[Path] = []
+        for attachment in attachments:
+            path = date_folder / "_attachments" / f"{timestamp} - {attachment.filename}"
+            path.write_bytes(attachment.content)
+            attachment_paths.append(path)
+        attachment_links = "\n".join(
+            f"![[_attachments/{path.name}]]" for path in attachment_paths
+        )
+        content = TODO_TEMPLATE.render(
+            subject=message.subject,
+            received=message.received.isoformat(timespec="seconds"),
+            saved=datetime.now(tz=UTC).isoformat(timespec="seconds"),
+            body=body,
+            attachment_links=attachment_links,
+        )
+        note_path.write_text(content)
+        created_paths = [note_path, *attachment_paths]
+        return HandlerResult(
+            handled=True,
+            created_paths=created_paths,
+            note_paths=[],
+            todo_entries=[(message.subject, note_path)],
+        )
+
+    def get_date_folder(self, received: datetime) -> Path:
+        date_folder = self.output_dir / received.strftime("%Y-%m-%d")
+        date_folder.mkdir(parents=True, exist_ok=True)
+        (date_folder / "_attachments").mkdir(exist_ok=True)
+        return date_folder
+
+    def get_plain_text_body(self, message: Message) -> str:
+        body_parts: list[str] = []
+        if message.is_multipart():
+            for part in message.walk():
+                disposition = str(part.get("Content-Disposition", "")).lower()
+                if "attachment" in disposition:
+                    continue
+                if part.get_content_type() != "text/plain":
+                    continue
+                payload = part.get_payload(decode=True)
+                if not isinstance(payload, bytes):
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                body_parts.append(payload.decode(charset, errors="replace"))
+        else:
+            if message.get_content_type() == "text/plain":
+                payload = message.get_payload(decode=True)
+                if isinstance(payload, bytes):
+                    charset = message.get_content_charset() or "utf-8"
+                    body_parts.append(payload.decode(charset, errors="replace"))
+        return "\n".join(body_parts).strip()
+
+    def get_attachments(self, message: Message) -> list[Attachment]:
+        attachments: list[Attachment] = []
+        for part in message.walk():
+            disposition = str(part.get("Content-Disposition", "")).lower()
+            filename = part.get_filename()
+            if "attachment" not in disposition or not filename:
+                continue
+            content = part.get_payload(decode=True)
+            if not isinstance(content, bytes):
+                continue
+            attachments.append(
+                Attachment(filename=self.get_decoded_filename(filename), content=content)
+            )
+        return attachments
+
+    def get_decoded_filename(self, filename: str) -> str:
+        chunks = decode_header(filename)
+        parts: list[str] = []
+        for chunk, charset in chunks:
+            if isinstance(chunk, bytes):
+                parts.append(chunk.decode(charset or "utf-8", errors="replace"))
+            elif isinstance(chunk, str):
+                parts.append(chunk)
+            else:
+                parts.append(str(chunk))
+        return "".join(parts)
+
+
 class RemarkableSnapshotHandler:
     def __init__(self, output_dir: Path, transcriber: PdfTranscriber):
         self.output_dir = output_dir
@@ -536,20 +663,27 @@ class DailyNoteWriter:
     def __init__(self, vault_root: Path):
         self.vault_root = vault_root
 
-    def append_note_embed(self, received: datetime, note_path: Path) -> Path:
+    def append_line(self, received: datetime, line: str) -> Path:
         daily_path = self.get_daily_note_path(received)
         daily_path.parent.mkdir(parents=True, exist_ok=True)
-        embed_line = self.render_embed_line(received, note_path)
         if daily_path.exists():
             content = daily_path.read_text()
             existing_lines = content.splitlines()
-            if embed_line in existing_lines:
+            if line in existing_lines:
                 return daily_path
             separator = "" if content.endswith("\n") or content == "" else "\n"
-            daily_path.write_text(f"{content}{separator}{embed_line}\n")
+            daily_path.write_text(f"{content}{separator}{line}\n")
             return daily_path
-        daily_path.write_text(f"{embed_line}\n")
+        daily_path.write_text(f"{line}\n")
         return daily_path
+
+    def append_note_embed(self, received: datetime, note_path: Path) -> Path:
+        embed_line = self.render_embed_line(received, note_path)
+        return self.append_line(received, embed_line)
+
+    def append_todo_embed(self, received: datetime, subject: str, note_path: Path) -> Path:
+        line = self.render_todo_line(subject, note_path)
+        return self.append_line(received, line)
 
     def get_daily_note_path(self, received: datetime) -> Path:
         folder = self.get_daily_notes_folder()
@@ -576,6 +710,13 @@ class DailyNoteWriter:
         timestamp = received.strftime("%H:%M")
         return f"- {timestamp} ![[{relative_note_path.as_posix()}]]"
 
+    def render_todo_line(self, subject: str, note_path: Path) -> str:
+        try:
+            relative_note_path = note_path.relative_to(self.vault_root)
+        except ValueError:
+            relative_note_path = note_path
+        return f"- [ ] TODO: {subject} [[{relative_note_path.as_posix()}]]"
+
 
 class WeaveService:
     def __init__(self, config: WeaveConfig):
@@ -596,6 +737,8 @@ class WeaveService:
                     output_dir=output_dir,
                     transcriber=LlmPdfTranscriber(),
                 )
+            elif route.handler_key == "todo":
+                handlers[route.name] = TodoHandler(output_dir=output_dir)
             else:
                 raise ConfigError(f"Unknown handler key: {route.handler_key}")
         return handlers
@@ -627,6 +770,13 @@ class WeaveService:
                 for note_path in result.note_paths:
                     daily_path = self.daily_note_writer.append_note_embed(
                         received=message.received,
+                        note_path=note_path,
+                    )
+                    logger.info("updated daily note %s", daily_path)
+                for subject, note_path in result.todo_entries:
+                    daily_path = self.daily_note_writer.append_todo_embed(
+                        received=message.received,
+                        subject=subject,
                         note_path=note_path,
                     )
                     logger.info("updated daily note %s", daily_path)

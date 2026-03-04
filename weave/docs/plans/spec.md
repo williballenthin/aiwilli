@@ -38,6 +38,11 @@ Routing is hardcoded in code. The base mailbox comes from `WEAVE_BASE_EMAIL`; va
 - allowed sender: `my@remarkable.com`
 - output root: `<vault_root>/sink/`
 
+4.3 TODO route
+- to-address: `<WEAVE_BASE_EMAIL local-part>+todo@<WEAVE_BASE_EMAIL domain>`
+- allowed sender: `wilbal1087@gmail.com`
+- output root: `<vault_root>/sink/`
+
 5. Output behavior
 
 5.1 Voice handler output
@@ -52,7 +57,14 @@ Routing is hardcoded in code. The base mailbox comes from `WEAVE_BASE_EMAIL`; va
 - transcription is generated through the `llm` CLI against model `gemini/gemini-3-flash-preview`.
 - on transcription failure, Weave still writes an error note and marks the message as seen.
 
-5.3 Daily note embedding
+5.3 TODO handler output
+- note path: `<output>/<YYYY-MM-DD>/<HHMM> - <sanitized-subject>.md`
+- attachment path: `<output>/<YYYY-MM-DD>/_attachments/<HHMM> - <filename>`
+- subject is sanitized for filesystem safety (colons, quotes, slashes etc. replaced with dashes, trailing dashes stripped, max 100 chars).
+- note contains YAML frontmatter, a `## <subject>` heading, the email plain-text body, and Obsidian embed links for any attachments.
+- daily note line format: `- [ ] TODO: <subject> [[<vault-relative-note-path>]]` (wiki-link, not embed).
+
+5.4 Daily note embedding
 - for each newly written sink markdown note, Weave appends an embed line to the corresponding daily note.
 - daily note date uses the email received timestamp date.
 - appended line format: `- HH:MM ![[<vault-relative-note-path>]]`
@@ -66,6 +78,9 @@ Routing is hardcoded in code. The base mailbox comes from `WEAVE_BASE_EMAIL`; va
 - unrouted messages are left unread.
 - routed messages with disallowed senders are left unread.
 - reMarkable-routed messages without PDF attachments are left unread.
+
+- TODO handler daily note lines use `- [ ] TODO: <subject> [[path]]` instead of the standard embed format.
+- duplicate TODO lines are not appended.
 
 7. Future extension contract
 
