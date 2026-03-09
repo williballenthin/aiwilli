@@ -10,7 +10,10 @@
 vnote-pipe-obsidian: Capture emails to Obsidian markdown.
 
 Monitors an IMAP mailbox for emails from allowed senders,
-and saves the body text as markdown files.
+and saves the body text as markdown files. When multiple
+emails arrive in the same minute, each one is preserved in a
+separate note and deduplicated by IMAP UID instead of the
+timestamp-based filename alone.
 
 Required environment variables:
     IMAP_HOST                - IMAP server (e.g., imap.gmail.com)
@@ -276,28 +279,42 @@ class Writer:
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
 
-    def note_exists(self, received: datetime) -> bool:
-        date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        timestamp = received.strftime("%H%M")
-        filename = f"{timestamp} - transcription.md"
-        return (date_folder / filename).exists()
+    def note_exists(self, email_obj: IncomingEmail) -> bool:
+        existing_path = self._find_note_by_uid(email_obj)
+        if existing_path is not None:
+            logger.debug(f"Found existing note for UID {email_obj.uid}: {existing_path}")
+            return True
+
+        return False
+
+    def _find_note_by_uid(self, email_obj: IncomingEmail) -> Path | None:
+        date_folder = self.output_dir / email_obj.received.strftime("%Y-%m-%d")
+        if not date_folder.exists():
+            return None
+
+        uid_line = f"uid: {email_obj.uid}"
+        for md_path in sorted(date_folder.glob("*.md")):
+            lines = md_path.read_text(encoding="utf-8").splitlines()
+            if uid_line in lines[:10]:
+                return md_path
+
+        return None
 
     def write_note(self, email_obj: IncomingEmail) -> NoteResult:
         date_folder = self._ensure_date_folder(email_obj.received)
-        timestamp = email_obj.received.strftime("%H%M")
+        md_path = self._select_note_path(email_obj.received)
+        note_label = md_path.name.removesuffix(" - transcription.md")
 
         # Save attachments
         attachment_paths = []
         for attachment in email_obj.attachments:
-            att_path = self._save_attachment(date_folder, timestamp, attachment)
+            att_path = self._save_attachment(date_folder, note_label, attachment)
             attachment_paths.append(att_path)
             logger.debug(f"Saved attachment: {att_path}")
 
         # Write markdown
-        md_filename = f"{timestamp} - transcription.md"
-        md_path = date_folder / md_filename
         md_content = self._render_note(email_obj, attachment_paths)
-        md_path.write_text(md_content)
+        md_path.write_text(md_content, encoding="utf-8")
         logger.debug(f"Wrote note: {md_path}")
 
         return NoteResult(md_path=md_path, attachment_paths=attachment_paths)
@@ -308,8 +325,25 @@ class Writer:
         (date_folder / "_attachments").mkdir(exist_ok=True)
         return date_folder
 
-    def _save_attachment(self, date_folder: Path, timestamp: str, attachment: Attachment) -> Path:
-        att_filename = f"{timestamp} - {attachment.filename}"
+    def _select_note_path(self, received: datetime) -> Path:
+        date_folder = self._ensure_date_folder(received)
+        timestamp = received.strftime("%H%M")
+        suffix = 1
+
+        while True:
+            if suffix == 1:
+                filename = f"{timestamp} - transcription.md"
+            else:
+                filename = f"{timestamp}-{suffix} - transcription.md"
+
+            md_path = date_folder / filename
+            if not md_path.exists():
+                return md_path
+
+            suffix += 1
+
+    def _save_attachment(self, date_folder: Path, note_label: str, attachment: Attachment) -> Path:
+        att_filename = f"{note_label} - {attachment.filename}"
         att_path = date_folder / "_attachments" / att_filename
         att_path.write_bytes(attachment.content)
         return att_path
@@ -325,6 +359,7 @@ class Writer:
             attachment_links = "\n" + "\n".join(links) + "\n"
 
         return f"""---
+uid: {email_obj.uid}
 subject: "{email_obj.subject}"
 received: {received}
 saved: {now}
@@ -369,7 +404,7 @@ def process_batch(
 
     processed = 0
     for email_obj in emails:
-        if writer.note_exists(email_obj.received):
+        if writer.note_exists(email_obj):
             logger.debug(f"Skipping email from {email_obj.received} - already exists")
             monitor.mark_as_read(client, email_obj)
             continue
