@@ -1,17 +1,19 @@
 Weave design
 
 Status: draft
-Last updated: 2026-03-09
+Last updated: 2026-03-11
 
 1. Module layout
 
 - `src/weave/app.py`: all runtime logic for now.
-- `tests/test_app.py`: route, handler, daily-note writer, and calendar scraper tests.
+- `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and agent session tests.
 - `scripts/setup_google_credentials.py`: interactive OAuth setup for Google Calendar/Drive.
+- `scripts/parse_session.py`: standalone CLI for parsing/displaying agent session JSONL files.
+- `docs/research/agent-sessions.md`: research notes on Claude Code and Pi Agent JSONL formats.
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source` and `calendar_enabled` fields.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source`, `calendar_enabled`, and `agent_sessions_dir` fields.
 - `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
 - `get_variant_address(base_email, variant)`: derives `local+variant@domain` from `WEAVE_BASE_EMAIL`.
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.
@@ -74,7 +76,7 @@ Last updated: 2026-03-09
 - reads daily-note folder from `<vault_root>/.obsidian/daily-notes.json` key `folder`
 - falls back to vault root if config is missing/invalid
 - resolves daily note filename as `YYYY-MM-DD.md` from message received date
-- accepts an optional `NoteSummarizer` for generating three-sentence summaries
+- accepts an optional `NoteSummarizer` for generating one-sentence summaries
 - `append_note_entry(received, note_path, entry_type)` reads the note file, summarizes it, renders `- <type>: [[path]] - <summary> #weave`
 - `append_todo_entry(received, note_path)` renders `- [ ] todo: [[path]] - <summary> #weave`
 - all lines end with `#weave` tag for future regeneration of managed lines
@@ -82,9 +84,27 @@ Last updated: 2026-03-09
 - shared `append_line` method handles file I/O (exact-match dedup remains as a secondary guard)
 - `threading.Lock` protects `append_line` for concurrent access from IMAP and calendar threads
 
-5.6 `NoteSummarizer` / `LlmNoteSummarizer`
+5.6 `AgentSessionScraper`
+- initialized with `sessions_dir`, `output_dir`, and optional `NoteSummarizer`
+- `scrape_once()` finds all `.jsonl` files under `claude/` and `pi/` subdirectories (skipping `subagents/`)
+- parses each file via `parse_session()` which auto-detects Claude Code vs Pi Agent format
+- skips sessions with no user turns
+- uses file-existence check as cache to avoid re-processing
+- renders full session note via Jinja2 template with frontmatter, LLM-generated structured summary, metrics table, and conversation turns
+- returns `list[tuple[datetime, Path, str]]` for daily note embedding
+
+5.7 Session parsing
+- `SessionTurn`, `SessionTokenUsage`, `SessionData` dataclasses hold parsed session data
+- `detect_session_format()` reads the first JSONL line to distinguish Claude vs Pi format
+- `parse_claude_session()` handles streaming dedup (multiple records per `message.id`, take last for accurate `output_tokens`)
+- `parse_pi_session()` extracts cost data and tree-structured turns
+- `_is_human_user_msg()` filters out tool results and meta/system messages from Claude sessions
+- `render_session_turns()` produces markdown conversation output
+- `render_session_note()` produces the full markdown file with Jinja2 template
+
+5.8 `NoteSummarizer` / `LlmNoteSummarizer`
 - protocol: `NoteSummarizer.summarize(content) -> str`
-- concrete: `LlmNoteSummarizer` shells out to `llm` CLI with a prompt requesting three sentences for a daily index overview
+- concrete: `LlmNoteSummarizer` shells out to `llm` CLI with a prompt requesting one sentence for a daily index overview
 - on failure (process error, command not found), logs warning and returns empty string
 - tests use `StaticSummarizer` that returns predetermined text without mocks
 
@@ -103,11 +123,11 @@ Last updated: 2026-03-09
 8. Threading model
 
 - `WeaveService` owns a `threading.Event` (`_shutdown`) for coordinated shutdown.
-- In daemon mode, the calendar scraper runs in a daemon thread calling `run_calendar_loop()` with a 5-minute sleep via `_shutdown.wait(timeout=300)`.
+- In daemon mode, the calendar scraper and agent session scraper run in a daemon thread calling `run_calendar_loop()` with a 5-minute sleep via `_shutdown.wait(timeout=300)`. Both scrapers execute each iteration.
 - The IMAP loop runs on the main thread.
 - `DailyNoteWriter.append_line` is protected by a `threading.Lock` since both threads write daily notes.
 - Signal handlers (SIGINT, SIGTERM) set `_shutdown` before exiting.
-- In `--once` mode, calendar scrape runs synchronously after IMAP batch.
+- In `--once` mode, calendar scrape and agent session scrape run synchronously after IMAP batch.
 
 9. Credential setup
 

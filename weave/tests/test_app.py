@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from weave.app import (
+    AgentSessionScraper,
     CalendarScraper,
     ConfigError,
     DailyNoteWriter,
@@ -16,13 +17,23 @@ from weave.app import (
     RemarkableSnapshotHandler,
     RouteConfig,
     RouteResolver,
+    SessionData,
+    SessionTokenUsage,
+    SessionTurn,
     TodoHandler,
     TranscriptionError,
     VoiceNoteHandler,
+    _format_duration,
+    detect_session_format,
     extract_section_for_date,
     get_variant_address,
     is_gemini_notes,
     is_shared_notes,
+    parse_claude_session,
+    parse_pi_session,
+    parse_session,
+    render_session_note,
+    render_session_turns,
     sanitize_filename,
 )
 
@@ -512,3 +523,372 @@ def test_calendar_scraper_creates_nested_date_dirs(tmp_path: Path) -> None:
     assert day_dir == tmp_path / "2026" / "03" / "06"
     assert day_dir.exists()
     assert not (day_dir / "_attachments").exists()
+
+
+# --- Agent session parsing tests ---
+
+
+def _build_claude_session_jsonl() -> str:
+    base = {
+        "cwd": "/Users/user/code/myproject",
+        "sessionId": "abc-123",
+        "version": "2.1.50",
+        "gitBranch": "main",
+    }
+    usage_001a = {
+        "input_tokens": 100,
+        "cache_creation_input_tokens": 500,
+        "cache_read_input_tokens": 200,
+        "output_tokens": 10,
+    }
+    usage_001b = dict(usage_001a, output_tokens=50)
+    usage_002 = {
+        "input_tokens": 150,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 700,
+        "output_tokens": 30,
+    }
+    usage_003 = {
+        "input_tokens": 200,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 900,
+        "output_tokens": 40,
+    }
+    usage_004 = {
+        "input_tokens": 250,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 1100,
+        "output_tokens": 20,
+    }
+    lines = [
+        {**base, "type": "user", "parentUuid": None,
+         "message": {"role": "user", "content": "help me fix this bug"},
+         "uuid": "u1", "timestamp": "2026-03-04T11:00:00.000Z"},
+        {**base, "type": "assistant", "parentUuid": "u1",
+         "message": {"model": "claude-opus-4-6", "id": "msg_001",
+                     "role": "assistant",
+                     "content": [{"type": "thinking", "thinking": "Look."}],
+                     "stop_reason": None, "usage": usage_001a},
+         "uuid": "a1", "timestamp": "2026-03-04T11:00:05.000Z"},
+        {**base, "type": "assistant", "parentUuid": "a1",
+         "message": {"model": "claude-opus-4-6", "id": "msg_001",
+                     "role": "assistant",
+                     "content": [{"type": "tool_use", "id": "t1",
+                                  "name": "Read", "input": {}}],
+                     "stop_reason": None, "usage": usage_001b},
+         "uuid": "a2", "timestamp": "2026-03-04T11:00:06.000Z"},
+        {**base, "type": "user", "parentUuid": "a2",
+         "message": {"role": "user", "content": [
+             {"tool_use_id": "t1", "type": "tool_result",
+              "content": "file content"}]},
+         "uuid": "u2", "timestamp": "2026-03-04T11:00:06.100Z"},
+        {**base, "type": "assistant", "parentUuid": "u2",
+         "message": {"model": "claude-opus-4-6", "id": "msg_002",
+                     "role": "assistant",
+                     "content": [{"type": "text",
+                                  "text": "I found the bug in line 42."}],
+                     "stop_reason": "end_turn", "usage": usage_002},
+         "uuid": "a3", "timestamp": "2026-03-04T11:00:10.000Z"},
+        {**base, "type": "user", "parentUuid": "a3",
+         "message": {"role": "user", "content": "great, fix it"},
+         "uuid": "u3", "timestamp": "2026-03-04T11:01:00.000Z"},
+        {**base, "type": "assistant", "parentUuid": "u3",
+         "message": {"model": "claude-opus-4-6", "id": "msg_003",
+                     "role": "assistant",
+                     "content": [{"type": "tool_use", "id": "t2",
+                                  "name": "Edit", "input": {}}],
+                     "stop_reason": None, "usage": usage_003},
+         "uuid": "a4", "timestamp": "2026-03-04T11:01:05.000Z"},
+        {**base, "type": "user", "parentUuid": "a4",
+         "message": {"role": "user", "content": [
+             {"tool_use_id": "t2", "type": "tool_result",
+              "content": "edited"}]},
+         "uuid": "u4", "timestamp": "2026-03-04T11:01:05.100Z"},
+        {**base, "type": "assistant", "parentUuid": "u4",
+         "message": {"model": "claude-opus-4-6", "id": "msg_004",
+                     "role": "assistant",
+                     "content": [{"type": "text",
+                                  "text": "Fixed. Var was uninitialized."}],
+                     "stop_reason": "end_turn", "usage": usage_004},
+         "uuid": "a5", "timestamp": "2026-03-04T11:01:10.000Z"},
+    ]
+    return "\n".join(json.dumps(entry) for entry in lines) + "\n"
+
+
+def _build_pi_session_jsonl() -> str:
+    cost1 = {"input": 0.003, "output": 0.001,
+             "cacheRead": 0, "cacheWrite": 0, "total": 0.004}
+    cost2 = {"input": 0.005, "output": 0.002,
+             "cacheRead": 0.001, "cacheWrite": 0, "total": 0.008}
+    lines = [
+        {"type": "session", "version": 3, "id": "pi-sess-001",
+         "timestamp": "2026-03-03T16:00:00.000Z",
+         "cwd": "/Users/user/code/myproject"},
+        {"type": "model_change", "id": "mc1", "parentId": None,
+         "timestamp": "2026-03-03T16:00:00.000Z",
+         "provider": "anthropic", "modelId": "claude-sonnet-4-6"},
+        {"type": "message", "id": "m1", "parentId": "mc1",
+         "timestamp": "2026-03-03T16:00:10.000Z",
+         "message": {"role": "user", "content": [
+             {"type": "text", "text": "explore the codebase"}]}},
+        {"type": "message", "id": "m2", "parentId": "m1",
+         "timestamp": "2026-03-03T16:00:20.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "thinking", "thinking": "Let me look."},
+             {"type": "toolCall", "id": "tc1", "name": "bash",
+              "arguments": {"command": "ls"}}],
+             "usage": {"input": 1000, "output": 50,
+                       "cacheRead": 0, "cacheWrite": 0,
+                       "totalTokens": 1050, "cost": cost1}}},
+        {"type": "message", "id": "m3", "parentId": "m2",
+         "timestamp": "2026-03-03T16:00:25.000Z",
+         "message": {"role": "toolResult", "content": [
+             {"type": "text", "text": "file1.py file2.py"}]}},
+        {"type": "message", "id": "m4", "parentId": "m3",
+         "timestamp": "2026-03-03T16:00:30.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "thinking", "thinking": "Found two files."},
+             {"type": "text",
+              "text": "The project has two Python files."}],
+             "usage": {"input": 1500, "output": 80,
+                       "cacheRead": 500, "cacheWrite": 0,
+                       "totalTokens": 2080, "cost": cost2}}},
+    ]
+    return "\n".join(json.dumps(entry) for entry in lines) + "\n"
+
+
+@pytest.fixture
+def claude_session_file(tmp_path: Path) -> Path:
+    d = tmp_path / "claude" / "-Users-user-code-myproject"
+    d.mkdir(parents=True)
+    p = d / "abc-123.jsonl"
+    p.write_text(_build_claude_session_jsonl())
+    return p
+
+
+@pytest.fixture
+def pi_session_file(tmp_path: Path) -> Path:
+    d = tmp_path / "pi" / "--Users-user-code-myproject--"
+    d.mkdir(parents=True)
+    p = d / "2026-03-03T16-00-00-000Z_pi-sess-001.jsonl"
+    p.write_text(_build_pi_session_jsonl())
+    return p
+
+
+def test_detect_format_claude(claude_session_file: Path) -> None:
+    assert detect_session_format(claude_session_file) == "claude"
+
+
+def test_detect_format_pi(pi_session_file: Path) -> None:
+    assert detect_session_format(pi_session_file) == "pi"
+
+
+def test_parse_claude_session_metadata(claude_session_file: Path) -> None:
+    session = parse_claude_session(claude_session_file)
+    assert session.agent == "claude"
+    assert session.session_id == "abc-123"
+    assert session.project == "myproject"
+    assert session.cwd == "/Users/user/code/myproject"
+    assert session.git_branch == "main"
+    assert session.models == ["claude-opus-4-6"]
+    assert session.start_time is not None
+    assert session.end_time is not None
+    assert session.duration is not None
+
+
+def test_parse_claude_session_turns(claude_session_file: Path) -> None:
+    session = parse_claude_session(claude_session_file)
+    assert len(session.turns) == 2
+    assert session.turns[0].user_text == "help me fix this bug"
+    assert "bug" in session.turns[0].assistant_texts[0]
+    assert session.turns[0].tool_names == ["Read"]
+    assert session.turns[1].user_text == "great, fix it"
+    assert "uninitialized" in session.turns[1].assistant_texts[0]
+    assert session.turns[1].tool_names == ["Edit"]
+
+
+def test_parse_claude_session_tokens(claude_session_file: Path) -> None:
+    session = parse_claude_session(claude_session_file)
+    # msg_001 last record: input=100, cache_create=500, cache_read=200, output=50
+    # msg_002: input=150, cache_create=0, cache_read=700, output=30
+    # msg_003: input=200, cache_create=0, cache_read=900, output=40
+    # msg_004: input=250, cache_create=0, cache_read=1100, output=20
+    assert session.usage.input_tokens == 100 + 150 + 200 + 250
+    assert session.usage.output_tokens == 50 + 30 + 40 + 20
+    assert session.usage.cache_write_tokens == 500
+    assert session.usage.cache_read_tokens == 200 + 700 + 900 + 1100
+
+
+def test_parse_claude_session_tool_and_thinking_counts(claude_session_file: Path) -> None:
+    session = parse_claude_session(claude_session_file)
+    assert session.total_tool_calls == 2
+    assert session.total_thinking_blocks == 1
+
+
+def test_parse_pi_session_metadata(pi_session_file: Path) -> None:
+    session = parse_pi_session(pi_session_file)
+    assert session.agent == "pi"
+    assert session.session_id == "pi-sess-001"
+    assert session.project == "myproject"
+    assert session.cwd == "/Users/user/code/myproject"
+    assert session.models == ["anthropic/claude-sonnet-4-6"]
+
+
+def test_parse_pi_session_turns(pi_session_file: Path) -> None:
+    session = parse_pi_session(pi_session_file)
+    assert len(session.turns) == 1
+    assert session.turns[0].user_text == "explore the codebase"
+    assert "Python files" in session.turns[0].assistant_texts[0]
+    assert session.turns[0].tool_names == ["bash"]
+
+
+def test_parse_pi_session_tokens(pi_session_file: Path) -> None:
+    session = parse_pi_session(pi_session_file)
+    assert session.usage.input_tokens == 1000 + 1500
+    assert session.usage.output_tokens == 50 + 80
+    assert session.usage.cache_read_tokens == 500
+    assert session.usage.cost == pytest.approx(0.012)
+
+
+def test_parse_pi_session_counts(pi_session_file: Path) -> None:
+    session = parse_pi_session(pi_session_file)
+    assert session.total_tool_calls == 1
+    assert session.total_thinking_blocks == 2
+
+
+def test_parse_session_auto_detects(claude_session_file: Path, pi_session_file: Path) -> None:
+    claude = parse_session(claude_session_file)
+    assert claude.agent == "claude"
+    pi = parse_session(pi_session_file)
+    assert pi.agent == "pi"
+
+
+def test_render_session_turns_includes_user_and_assistant() -> None:
+    session = SessionData(
+        agent="claude", session_id="x", project="proj", cwd="/x",
+        turns=[SessionTurn(
+            user_text="do the thing",
+            assistant_texts=["done."],
+            tool_names=["Edit"],
+            timestamp=datetime(2026, 3, 4, 11, 0, tzinfo=UTC),
+        )],
+    )
+    rendered = render_session_turns(session)
+    assert "**USER:** do the thing" in rendered
+    assert "**ASSISTANT:** done." in rendered
+    assert "Edit" in rendered
+
+
+def test_render_session_note_has_frontmatter() -> None:
+    session = SessionData(
+        agent="pi", session_id="sess-abc", project="myproject", cwd="/x",
+        start_time=datetime(2026, 3, 3, 16, 0, tzinfo=UTC),
+        end_time=datetime(2026, 3, 3, 16, 5, tzinfo=UTC),
+        models=["anthropic/sonnet"],
+        usage=SessionTokenUsage(input_tokens=100, output_tokens=50),
+        turns=[SessionTurn(user_text="hi", assistant_texts=["hello"], tool_names=[])],
+        total_tool_calls=3,
+    )
+    note = render_session_note(session, "Built a thing.")
+    assert "type: agent_session" in note
+    assert "agent: pi" in note
+    assert 'project: "myproject"' in note
+    assert "Built a thing." in note
+    assert "**USER:** hi" in note
+
+
+def test_format_duration() -> None:
+    assert _format_duration(dt_mod.timedelta(seconds=45)) == "45s"
+    assert _format_duration(dt_mod.timedelta(minutes=3, seconds=19)) == "3m 19s"
+    assert _format_duration(dt_mod.timedelta(hours=2, minutes=5, seconds=1)) == "2h 5m 1s"
+
+
+def test_agent_session_scraper_writes_note(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / "sess-001.jsonl").write_text(
+        _build_claude_session_jsonl()
+    )
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+        summarizer=StaticSummarizer("Fixed a bug."),
+    )
+    results = scraper.scrape_once()
+
+    assert len(results) == 1
+    start_dt, note_path, entry_type = results[0]
+    assert entry_type == "agent session"
+    assert note_path.exists()
+    content = note_path.read_text()
+    assert "type: agent_session" in content
+    assert "Fixed a bug." in content
+    assert "help me fix this bug" in content
+
+
+def test_agent_session_scraper_skips_cached(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / "sess-001.jsonl").write_text(
+        _build_claude_session_jsonl()
+    )
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+        summarizer=StaticSummarizer("summary"),
+    )
+    results1 = scraper.scrape_once()
+    assert len(results1) == 1
+    note_path = results1[0][1]
+    original_content = note_path.read_text()
+
+    results2 = scraper.scrape_once()
+    assert len(results2) == 1
+    assert note_path.read_text() == original_content
+
+
+def test_agent_session_scraper_skips_empty_sessions(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    empty = '{"type":"file-history-snapshot","messageId":"x","snapshot":{}}\n'
+    (claude_dir / "empty.jsonl").write_text(empty)
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+    )
+    results = scraper.scrape_once()
+    assert len(results) == 0
+
+
+def test_agent_session_scraper_skips_subagents(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    subdir = sessions_dir / "claude" / "-proj" / "s1" / "subagents"
+    subdir.mkdir(parents=True)
+    (subdir / "agent-x.jsonl").write_text(
+        _build_claude_session_jsonl()
+    )
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+    )
+    results = scraper.scrape_once()
+    assert len(results) == 0

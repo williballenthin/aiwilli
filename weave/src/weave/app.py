@@ -107,10 +107,28 @@ Do not add any commentary, analysis, or text outside the code block."""
 
 SUMMARY_MODEL = "gemini/gemini-3-flash-preview"
 SUMMARY_PROMPT = (
-    "Summarize this document in exactly three sentences."
+    "Summarize this document in exactly one sentence."
     " This summary will appear in a daily index of notes and events."
-    " Provide a high-level overview so the reader can decide whether"
+    " Provide a high-impact overview so the reader can decide whether"
     " to click through to the full document."
+)
+
+AGENT_SESSION_SUMMARY_PROMPT = """\
+You are analyzing a software engineering agent session transcript.
+The transcript contains user messages (what the human said) and
+assistant responses (what the AI agent said back to the human).
+
+Provide a structured summary with:
+1. ONE SENTENCE describing the overall goal of the session.
+2. KEY DECISIONS made (bulleted list, skip if none).
+3. WORK COMPLETED (bulleted list of concrete outcomes).
+4. TOPICS covered (comma-separated tags).
+
+Be concise. Use plain text, no markdown headers."""
+
+AGENT_SESSION_ONELINER_PROMPT = (
+    "Summarize this agent session in exactly one sentence."
+    " Focus on what was accomplished. This appears in a daily index."
 )
 
 HANDLER_ENTRY_TYPES: dict[str, str] = {
@@ -262,6 +280,7 @@ class WeaveConfig(BaseModel):
     routes: tuple[RouteConfig, ...]
     calendar_source: str = "@hex-rays.com"
     calendar_enabled: bool = True
+    agent_sessions_dir: Path | None = None
 
     @classmethod
     def from_runtime(
@@ -270,6 +289,7 @@ class WeaveConfig(BaseModel):
         poll_interval_seconds: int,
         calendar_source: str = "@hex-rays.com",
         calendar_enabled: bool = True,
+        agent_sessions_dir: Path | None = None,
     ) -> WeaveConfig:
         """Build runtime configuration from args and environment.
 
@@ -282,6 +302,8 @@ class WeaveConfig(BaseModel):
             raise ConfigError(f"Missing required env vars: {', '.join(missing)}")
         base_email = os.environ[BASE_EMAIL_ENV]
         allowed_senders = _parse_senders("WEAVE_ALLOWED_SENDERS")
+        env_sessions = os.environ.get("WEAVE_AGENT_SESSIONS_DIR")
+        resolved_sessions = agent_sessions_dir or (Path(env_sessions) if env_sessions else None)
         try:
             return cls(
                 imap_host=os.environ["IMAP_HOST"],
@@ -291,6 +313,7 @@ class WeaveConfig(BaseModel):
                 poll_interval_seconds=poll_interval_seconds,
                 calendar_source=calendar_source,
                 calendar_enabled=calendar_enabled,
+                agent_sessions_dir=resolved_sessions,
                 routes=(
                     RouteConfig(
                         name="voice-notes",
@@ -972,6 +995,482 @@ class CalendarScraper:
         return results
 
 
+# --- Agent session parsing ---
+
+
+@dataclass
+class SessionTurn:
+    user_text: str
+    assistant_texts: list[str]
+    tool_names: list[str]
+    timestamp: datetime | None = None
+
+
+@dataclass
+class SessionTokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost: float | None = None
+
+
+@dataclass
+class SessionData:
+    agent: str
+    session_id: str
+    project: str
+    cwd: str
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    models: list[str] = field(default_factory=list)
+    git_branch: str = ""
+    usage: SessionTokenUsage = field(default_factory=SessionTokenUsage)
+    turns: list[SessionTurn] = field(default_factory=list)
+    total_tool_calls: int = 0
+    total_thinking_blocks: int = 0
+
+    @property
+    def duration(self) -> dt_mod.timedelta | None:
+        if self.start_time and self.end_time:
+            return self.end_time - self.start_time
+        return None
+
+
+def _parse_session_timestamp(ts: str) -> datetime:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def detect_session_format(path: Path) -> str:
+    with open(path) as f:
+        first_line = f.readline()
+    obj = json.loads(first_line)
+    if obj.get("type") == "session" and "version" in obj:
+        return "pi"
+    return "claude"
+
+
+def _is_human_user_msg(obj: dict[str, Any]) -> bool:
+    if obj.get("type") != "user":
+        return False
+    if obj.get("isMeta"):
+        return False
+    content = obj.get("message", {}).get("content", "")
+    if isinstance(content, list):
+        return False
+    if isinstance(content, str):
+        if content.startswith(("<bash-", "<local-command", "<task-notification")):
+            return False
+        return True
+    return False
+
+
+def _build_claude_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
+    turns: list[SessionTurn] = []
+    current_user_text: str | None = None
+    current_user_ts: datetime | None = None
+    current_assistant_texts: list[str] = []
+    current_tool_names: list[str] = []
+
+    for obj in messages:
+        if _is_human_user_msg(obj):
+            if current_user_text is not None:
+                turns.append(SessionTurn(
+                    user_text=current_user_text,
+                    assistant_texts=current_assistant_texts,
+                    tool_names=current_tool_names,
+                    timestamp=current_user_ts,
+                ))
+            current_user_text = obj.get("message", {}).get("content", "")
+            ts_str = obj.get("timestamp")
+            current_user_ts = _parse_session_timestamp(ts_str) if ts_str else None
+            current_assistant_texts = []
+            current_tool_names = []
+        elif obj.get("type") == "assistant" and current_user_text is not None:
+            for block in obj.get("message", {}).get("content", []):
+                bt = block.get("type")
+                if bt == "text":
+                    text = block.get("text", "").strip()
+                    if text and text != "No response requested.":
+                        current_assistant_texts.append(text)
+                elif bt == "tool_use":
+                    current_tool_names.append(block.get("name", "unknown"))
+
+    if current_user_text is not None:
+        turns.append(SessionTurn(
+            user_text=current_user_text,
+            assistant_texts=current_assistant_texts,
+            tool_names=current_tool_names,
+            timestamp=current_user_ts,
+        ))
+    return turns
+
+
+def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
+    turns: list[SessionTurn] = []
+    current_user_text: str | None = None
+    current_user_ts: datetime | None = None
+    current_assistant_texts: list[str] = []
+    current_tool_names: list[str] = []
+
+    for obj in messages:
+        msg = obj.get("message", {})
+        role = msg.get("role")
+        if role == "user":
+            if current_user_text is not None:
+                turns.append(SessionTurn(
+                    user_text=current_user_text,
+                    assistant_texts=current_assistant_texts,
+                    tool_names=current_tool_names,
+                    timestamp=current_user_ts,
+                ))
+            text_parts = []
+            for block in msg.get("content", []):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block["text"])
+            current_user_text = "\n".join(text_parts)
+            ts_str = obj.get("timestamp")
+            current_user_ts = _parse_session_timestamp(ts_str) if ts_str else None
+            current_assistant_texts = []
+            current_tool_names = []
+        elif role == "assistant" and current_user_text is not None:
+            for block in msg.get("content", []):
+                if isinstance(block, dict):
+                    bt = block.get("type")
+                    if bt == "text":
+                        text = block.get("text", "").strip()
+                        if text:
+                            current_assistant_texts.append(text)
+                    elif bt == "toolCall":
+                        current_tool_names.append(block.get("name", "unknown"))
+
+    if current_user_text is not None:
+        turns.append(SessionTurn(
+            user_text=current_user_text,
+            assistant_texts=current_assistant_texts,
+            tool_names=current_tool_names,
+            timestamp=current_user_ts,
+        ))
+    return turns
+
+
+def parse_claude_session(path: Path) -> SessionData:
+    lines: list[dict[str, Any]] = []
+    with open(path) as f:
+        for raw in f:
+            raw = raw.strip()
+            if raw:
+                lines.append(json.loads(raw))
+
+    session = SessionData(agent="claude", session_id="", project="", cwd="")
+    last_usage_by_msg_id: dict[str, dict[str, Any]] = {}
+    models: set[str] = set()
+    first_ts: datetime | None = None
+    last_ts: datetime | None = None
+    ordered_messages: list[dict[str, Any]] = []
+
+    for obj in lines:
+        ts_str = obj.get("timestamp")
+        if ts_str:
+            ts = _parse_session_timestamp(ts_str)
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+
+        if not session.session_id and obj.get("sessionId"):
+            session.session_id = obj["sessionId"]
+        if not session.cwd and obj.get("cwd"):
+            session.cwd = obj["cwd"]
+        if not session.git_branch and obj.get("gitBranch"):
+            session.git_branch = obj["gitBranch"]
+
+        if obj.get("type") in ("user", "assistant"):
+            ordered_messages.append(obj)
+
+        if obj.get("type") == "assistant":
+            msg = obj.get("message", {})
+            msg_id = msg.get("id")
+            model = msg.get("model")
+            if model and model != "<synthetic>":
+                models.add(model)
+            msg_usage = msg.get("usage")
+            if msg_id and msg_usage:
+                last_usage_by_msg_id[msg_id] = msg_usage
+            for block in msg.get("content", []):
+                bt = block.get("type")
+                if bt == "tool_use":
+                    session.total_tool_calls += 1
+                elif bt == "thinking":
+                    session.total_thinking_blocks += 1
+
+    for msg_usage in last_usage_by_msg_id.values():
+        session.usage.input_tokens += msg_usage.get("input_tokens", 0)
+        session.usage.output_tokens += msg_usage.get("output_tokens", 0)
+        session.usage.cache_read_tokens += msg_usage.get("cache_read_input_tokens", 0)
+        session.usage.cache_write_tokens += msg_usage.get("cache_creation_input_tokens", 0)
+
+    session.start_time = first_ts
+    session.end_time = last_ts
+    session.models = sorted(models)
+    session.project = Path(session.cwd).name if session.cwd else "unknown"
+    session.turns = _build_claude_turns(ordered_messages)
+    return session
+
+
+def parse_pi_session(path: Path) -> SessionData:
+    entries: list[dict[str, Any]] = []
+    with open(path) as f:
+        for raw in f:
+            raw = raw.strip()
+            if raw:
+                entries.append(json.loads(raw))
+
+    session = SessionData(agent="pi", session_id="", project="", cwd="")
+    total_cost = 0.0
+    models: set[str] = set()
+    first_ts: datetime | None = None
+    last_ts: datetime | None = None
+    ordered_messages: list[dict[str, Any]] = []
+
+    for obj in entries:
+        ts_str = obj.get("timestamp")
+        if ts_str:
+            ts = _parse_session_timestamp(ts_str)
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+
+        entry_type = obj.get("type")
+        if entry_type == "session":
+            session.session_id = obj.get("id", "")
+            session.cwd = obj.get("cwd", "")
+        elif entry_type == "model_change":
+            model_id = obj.get("modelId", "")
+            provider = obj.get("provider", "")
+            if model_id:
+                models.add(f"{provider}/{model_id}" if provider else model_id)
+        elif entry_type == "message":
+            ordered_messages.append(obj)
+            msg = obj.get("message", {})
+            if msg.get("role") == "assistant":
+                msg_usage = msg.get("usage")
+                if msg_usage:
+                    session.usage.input_tokens += msg_usage.get("input", 0)
+                    session.usage.output_tokens += msg_usage.get("output", 0)
+                    session.usage.cache_read_tokens += msg_usage.get("cacheRead", 0)
+                    session.usage.cache_write_tokens += msg_usage.get("cacheWrite", 0)
+                    total_cost += msg_usage.get("cost", {}).get("total", 0)
+                for block in msg.get("content", []):
+                    if isinstance(block, dict):
+                        bt = block.get("type")
+                        if bt == "toolCall":
+                            session.total_tool_calls += 1
+                        elif bt == "thinking":
+                            session.total_thinking_blocks += 1
+
+    session.usage.cost = total_cost if total_cost > 0 else None
+    session.start_time = first_ts
+    session.end_time = last_ts
+    session.models = sorted(models)
+    session.project = Path(session.cwd).name if session.cwd else "unknown"
+    session.turns = _build_pi_turns(ordered_messages)
+    return session
+
+
+def parse_session(path: Path) -> SessionData:
+    fmt = detect_session_format(path)
+    if fmt == "pi":
+        return parse_pi_session(path)
+    return parse_claude_session(path)
+
+
+def _format_duration(td: dt_mod.timedelta) -> str:
+    total_secs = int(td.total_seconds())
+    hours, remainder = divmod(total_secs, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def render_session_turns(session: SessionData) -> str:
+    parts: list[str] = []
+    for i, turn in enumerate(session.turns, 1):
+        ts = turn.timestamp.strftime("%H:%M:%S") if turn.timestamp else "??:??"
+        parts.append(f"### Turn {i} [{ts}]")
+        parts.append("")
+        parts.append(f"**USER:** {turn.user_text}")
+        parts.append("")
+        if turn.tool_names:
+            parts.append(f"*tools: {', '.join(turn.tool_names)}*")
+            parts.append("")
+        for text in turn.assistant_texts:
+            parts.append(f"**ASSISTANT:** {text}")
+            parts.append("")
+    return "\n".join(parts)
+
+
+AGENT_SESSION_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
+    """---
+type: agent_session
+agent: {{ agent }}
+project: "{{ project }}"
+session_id: "{{ session_id }}"
+start: {{ start }}
+end: {{ end }}
+duration: "{{ duration }}"
+models:
+{% for m in models %}
+  - "{{ m }}"
+{% endfor %}
+{% if git_branch %}
+git_branch: "{{ git_branch }}"
+{% endif %}
+input_tokens: {{ input_tokens }}
+output_tokens: {{ output_tokens }}
+total_tokens: {{ total_tokens }}
+{% if cost %}
+cost: {{ cost }}
+{% endif %}
+user_turns: {{ user_turns }}
+tool_calls: {{ tool_calls }}
+---
+
+## Summary
+
+{{ summary }}
+
+## Metrics
+
+| Metric | Value |
+|--------|-------|
+| Agent | {{ agent }} |
+| Project | {{ project }} |
+| Duration | {{ duration }} |
+| Model(s) | {{ models_str }} |
+| Input tokens | {{ input_tokens_fmt }} |
+| Output tokens | {{ output_tokens_fmt }} |
+| Cache read | {{ cache_read_fmt }} |
+| Cache write | {{ cache_write_fmt }} |
+| Total tokens | {{ total_tokens_fmt }} |
+{% if cost %}
+| Cost | ${{ cost }} |
+{% endif %}
+| User turns | {{ user_turns }} |
+| Tool calls | {{ tool_calls }} |
+
+## Conversation
+
+{{ conversation }}
+""")
+
+
+def render_session_note(session: SessionData, summary: str) -> str:
+    usage = session.usage
+    total = (
+        usage.input_tokens + usage.output_tokens
+        + usage.cache_read_tokens + usage.cache_write_tokens
+    )
+    return AGENT_SESSION_TEMPLATE.render(
+        agent=session.agent,
+        project=session.project,
+        session_id=session.session_id,
+        start=session.start_time.isoformat(timespec="seconds") if session.start_time else "",
+        end=session.end_time.isoformat(timespec="seconds") if session.end_time else "",
+        duration=_format_duration(session.duration) if session.duration else "unknown",
+        models=session.models,
+        models_str=", ".join(session.models) or "unknown",
+        git_branch=session.git_branch,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=total,
+        input_tokens_fmt=f"{usage.input_tokens:,}",
+        output_tokens_fmt=f"{usage.output_tokens:,}",
+        cache_read_fmt=f"{usage.cache_read_tokens:,}",
+        cache_write_fmt=f"{usage.cache_write_tokens:,}",
+        total_tokens_fmt=f"{total:,}",
+        cost=f"{usage.cost:.4f}" if usage.cost else None,
+        user_turns=len(session.turns),
+        tool_calls=session.total_tool_calls,
+        summary=summary,
+        conversation=render_session_turns(session),
+    )
+
+
+class AgentSessionScraper:
+    def __init__(
+        self,
+        sessions_dir: Path,
+        output_dir: Path,
+        summarizer: NoteSummarizer | None = None,
+    ):
+        self.sessions_dir = sessions_dir
+        self.output_dir = output_dir
+        self.summarizer = summarizer
+
+    def scrape_once(self) -> list[tuple[datetime, Path, str]]:
+        results: list[tuple[datetime, Path, str]] = []
+        for jsonl_path in self._find_session_files():
+            try:
+                result = self._process_session(jsonl_path)
+            except Exception as exc:
+                logger.warning("failed to process session %s: %s", jsonl_path.name, exc)
+                continue
+            if result is not None:
+                results.append(result)
+        return results
+
+    def _find_session_files(self) -> list[Path]:
+        paths: list[Path] = []
+        for agent_dir in ("claude", "pi"):
+            agent_path = self.sessions_dir / agent_dir
+            if not agent_path.is_dir():
+                continue
+            for jsonl in agent_path.rglob("*.jsonl"):
+                if "/subagents/" in str(jsonl):
+                    continue
+                paths.append(jsonl)
+        return paths
+
+    def _output_path_for_session(self, session: SessionData) -> Path | None:
+        if session.start_time is None:
+            return None
+        day_dir = get_date_folder(self.output_dir, session.start_time)
+        time_prefix = session.start_time.strftime("%H%M")
+        slug = sanitize_filename(f"{session.agent} - {session.project}")
+        name = f"{time_prefix} - {slug} ({session.session_id[:8]})"
+        return day_dir / f"{name}.md"
+
+    def _process_session(self, jsonl_path: Path) -> tuple[datetime, Path, str] | None:
+        session = parse_session(jsonl_path)
+        if not session.turns or session.start_time is None:
+            return None
+
+        out_path = self._output_path_for_session(session)
+        if out_path is None:
+            return None
+
+        start_time = session.start_time
+
+        if out_path.exists():
+            logger.debug("agent session cached: %s", out_path)
+            return (start_time, out_path, "agent session")
+
+        summary = ""
+        if self.summarizer:
+            turns_text = render_session_turns(session)
+            summary = self.summarizer.summarize(turns_text)
+
+        content = render_session_note(session, summary)
+        out_path.write_text(content)
+        logger.info("wrote agent session: %s", out_path)
+        return (start_time, out_path, "agent session")
+
+
 class DailyNoteWriter:
     def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
         self.vault_root = vault_root
@@ -1082,6 +1581,21 @@ class WeaveService:
         self.calendar_scraper: CalendarScraper | None = None
         if config.calendar_enabled:
             self._init_calendar_scraper(config)
+        self.agent_session_scraper: AgentSessionScraper | None = None
+        if config.agent_sessions_dir:
+            self._init_agent_session_scraper(config)
+
+    def _init_agent_session_scraper(self, config: WeaveConfig) -> None:
+        if config.agent_sessions_dir and not config.agent_sessions_dir.is_dir():
+            raise ConfigError(
+                f"Agent sessions directory not found: {config.agent_sessions_dir}"
+            )
+        output_dir = config.vault_root / SINK_RELATIVE_PATH
+        self.agent_session_scraper = AgentSessionScraper(
+            sessions_dir=config.agent_sessions_dir,  # type: ignore[arg-type]
+            output_dir=output_dir,
+            summarizer=LlmNoteSummarizer(),
+        )
 
     def _init_calendar_scraper(self, config: WeaveConfig) -> None:
         if not GOOGLE_TOKEN_PATH.exists():
@@ -1130,18 +1644,38 @@ class WeaveService:
             )
         return len(results)
 
+    def run_agent_session_scrape(self) -> int:
+        if self.agent_session_scraper is None:
+            return 0
+        try:
+            results = self.agent_session_scraper.scrape_once()
+        except Exception as exc:
+            logger.warning("agent session scrape failed: %s", exc)
+            return 0
+        for session_start, note_path, entry_type in results:
+            self.daily_note_writer.append_note_entry(
+                received=session_start,
+                note_path=note_path,
+                entry_type=entry_type,
+            )
+        return len(results)
+
     def run_calendar_loop(self, interval: int = 300) -> None:
         while not self._shutdown.is_set():
             count = self.run_calendar_scrape()
             if count > 0:
                 logger.info("calendar scrape: %d note(s)", count)
+            count = self.run_agent_session_scrape()
+            if count > 0:
+                logger.info("agent session scrape: %d note(s)", count)
             self._shutdown.wait(timeout=interval)
 
     def run_single_batch(self) -> int:
         with self.monitor.connect() as client:
             email_count = self.get_processed_count(client)
         cal_count = self.run_calendar_scrape()
-        return email_count + cal_count
+        session_count = self.run_agent_session_scrape()
+        return email_count + cal_count + session_count
 
     def get_processed_count(self, client: IMAPClient) -> int:
         messages = self.monitor.get_unseen_messages(client)
@@ -1263,6 +1797,12 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quiet", action="store_true", help="Only show errors")
     parser.add_argument("--source", default="@hex-rays.com", help="Calendar source tag")
     parser.add_argument("--no-calendar", action="store_true", help="Disable calendar scraping")
+    parser.add_argument(
+        "--agent-sessions",
+        type=Path,
+        default=None,
+        help="Directory containing agent session JSONL files (or set WEAVE_AGENT_SESSIONS_DIR)",
+    )
     return parser.parse_args(argv)
 
 
@@ -1278,6 +1818,7 @@ def main(argv: list[str] | None = None) -> None:
             poll_interval_seconds=args.poll_interval,
             calendar_source=args.source,
             calendar_enabled=not args.no_calendar,
+            agent_sessions_dir=args.agent_sessions,
         )
     except ConfigError as exc:
         logger.error("configuration error: %s", exc)
