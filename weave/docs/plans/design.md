@@ -67,18 +67,25 @@ Last updated: 2026-03-09
 - downloads chat transcripts via `DriveExporter.get_media()`
 - for shared notes (title starts with "Notes - "), extracts only the section matching the event date using `extract_section_for_date()`
 - uses file-existence check as cache to avoid re-exporting
-- returns `list[tuple[datetime, Path]]` for daily note embedding
+- returns `list[tuple[datetime, Path, str]]` for daily note embedding (datetime, path, entry_type)
 - helper predicates: `is_gemini_notes()`, `is_shared_notes()`
 
 5.5 `DailyNoteWriter`
 - reads daily-note folder from `<vault_root>/.obsidian/daily-notes.json` key `folder`
 - falls back to vault root if config is missing/invalid
 - resolves daily note filename as `YYYY-MM-DD.md` from message received date
-- appends `- HH:MM ![[<vault-relative-note-path>]]` at end of daily note
-- deduplicates exact embed lines
-- `append_todo_embed` renders `- [ ] TODO: <subject> [[path]]` for todo handler entries
-- shared `append_line` method handles file I/O and dedup for both embed styles
+- accepts an optional `NoteSummarizer` for generating three-sentence summaries
+- `append_note_entry(received, note_path, entry_type)` reads the note file, summarizes it, renders `- <type>: [[path]] - <summary> #weave`
+- `append_todo_entry(received, note_path)` renders `- [ ] todo: [[path]] - <summary> #weave`
+- all lines end with `#weave` tag for future regeneration of managed lines
+- shared `append_line` method handles file I/O and dedup
 - `threading.Lock` protects `append_line` for concurrent access from IMAP and calendar threads
+
+5.6 `NoteSummarizer` / `LlmNoteSummarizer`
+- protocol: `NoteSummarizer.summarize(content) -> str`
+- concrete: `LlmNoteSummarizer` shells out to `llm` CLI with a prompt requesting three sentences for a daily index overview
+- on failure (process error, command not found), logs warning and returns empty string
+- tests use `StaticSummarizer` that returns predetermined text without mocks
 
 6. Transcription abstraction
 

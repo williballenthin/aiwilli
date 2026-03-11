@@ -122,14 +122,15 @@ def test_daily_note_writer_uses_obsidian_daily_folder(tmp_path: Path) -> None:
     note_path.write_text("content")
 
     writer = DailyNoteWriter(vault_root=vault_root)
-    writer.append_note_embed(
+    writer.append_note_entry(
         received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
         note_path=note_path,
+        entry_type="transcript",
     )
 
     daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
     assert daily_path.exists()
-    assert daily_path.read_text() == "- 13:45 ![[sink/2026/03/01/1345 - transcription.md]]\n"
+    assert daily_path.read_text() == "- transcript: [[sink/2026/03/01/1345 - transcription.md]] #weave\n"
 
 
 def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
@@ -145,17 +146,19 @@ def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
     daily_path.write_text("seed\n")
 
     writer = DailyNoteWriter(vault_root=vault_root)
-    writer.append_note_embed(
+    writer.append_note_entry(
         received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
         note_path=note_path,
+        entry_type="transcript",
     )
-    writer.append_note_embed(
+    writer.append_note_entry(
         received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
         note_path=note_path,
+        entry_type="transcript",
     )
 
     content = daily_path.read_text()
-    assert content.count("![[sink/2026/03/01/1345 - transcription.md]]") == 1
+    assert content.count("[[sink/2026/03/01/1345 - transcription.md]]") == 1
 
 
 def test_voice_handler_writes_markdown_and_attachment(tmp_path: Path) -> None:
@@ -241,7 +244,6 @@ def test_todo_handler_skips_existing_note(tmp_path: Path) -> None:
     message = build_incoming(raw, subject="Buy groceries")
     date_folder = tmp_path / "2026/03/01"
     date_folder.mkdir(parents=True)
-    (date_folder / "_attachments").mkdir()
     (date_folder / "1345 - Buy groceries.md").write_text("existing")
 
     result = handler.handle_message(message)
@@ -261,16 +263,68 @@ def test_daily_note_writer_appends_todo_embed(tmp_path: Path) -> None:
     note_path.write_text("content")
 
     writer = DailyNoteWriter(vault_root=vault_root)
-    writer.append_todo_embed(
+    writer.append_todo_entry(
         received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
-        subject="Buy groceries",
         note_path=note_path,
     )
 
     daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
     assert daily_path.exists()
     assert daily_path.read_text() == (
-        "- [ ] TODO: Buy groceries [[sink/2026/03/01/1345 - Buy groceries.md]]\n"
+        "- [ ] todo: [[sink/2026/03/01/1345 - Buy groceries.md]] #weave\n"
+    )
+
+
+class StaticSummarizer:
+    def __init__(self, summary: str = "A brief summary."):
+        self.summary = summary
+
+    def summarize(self, content: str) -> str:
+        return self.summary
+
+
+def test_daily_note_writer_includes_summary_when_summarizer_provided(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("Some voice note content here.")
+
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=StaticSummarizer("Voice memo about project planning."))
+    writer.append_note_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+        entry_type="transcript",
+    )
+
+    daily_path = vault_root / "daily" / "2026-03-01.md"
+    assert daily_path.read_text() == (
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]]"
+        " - Voice memo about project planning. #weave\n"
+    )
+
+
+def test_daily_note_writer_todo_includes_summary(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - Fix bug.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("Fix the login bug.")
+
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=StaticSummarizer("Bug fix for login flow."))
+    writer.append_todo_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+    )
+
+    daily_path = vault_root / "daily" / "2026-03-01.md"
+    assert daily_path.read_text() == (
+        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]]"
+        " - Bug fix for login flow. #weave\n"
     )
 
 
@@ -379,7 +433,6 @@ def test_calendar_scraper_writes_doc_note(tmp_path: Path) -> None:
 def test_calendar_scraper_skips_existing_files(tmp_path: Path) -> None:
     day_dir = tmp_path / "2026" / "03" / "06"
     day_dir.mkdir(parents=True)
-    (day_dir / "_attachments").mkdir()
     existing = day_dir / "1000 - Team Sync.md"
     existing.write_text("already here")
 
@@ -395,4 +448,4 @@ def test_calendar_scraper_creates_nested_date_dirs(tmp_path: Path) -> None:
 
     assert day_dir == tmp_path / "2026" / "03" / "06"
     assert day_dir.exists()
-    assert (day_dir / "_attachments").exists()
+    assert not (day_dir / "_attachments").exists()

@@ -91,6 +91,8 @@ saved: {{ saved }}
 """
 )
 
+WEAVE_TAG = "#weave"
+
 RM2_MODEL = "gemini/gemini-3-flash-preview"
 RM2_PROMPT = """Transcribe this handwritten note verbatim. Output ONLY a single markdown
 code block containing the transcription. Preserve the structure including:
@@ -102,6 +104,20 @@ Its ok to rejoin/wrap lines if it appears the original text was wrapping, but
 maintain line breaks if they indicate structure or format.
 
 Do not add any commentary, analysis, or text outside the code block."""
+
+SUMMARY_MODEL = "gemini/gemini-3-flash-preview"
+SUMMARY_PROMPT = (
+    "Summarize this document in exactly three sentences."
+    " This summary will appear in a daily index of notes and events."
+    " Provide a high-level overview so the reader can decide whether"
+    " to click through to the full document."
+)
+
+HANDLER_ENTRY_TYPES: dict[str, str] = {
+    "voice": "transcript",
+    "rm2": "handwriting",
+    "todo": "todo",
+}
 
 BASE_EMAIL_ENV = "WEAVE_BASE_EMAIL"
 VOICE_VARIANT = "+vnote"
@@ -174,7 +190,6 @@ def get_variant_address(base_email: str, variant: str) -> str:
 def get_date_folder(output_dir: Path, received: datetime) -> Path:
     date_folder = output_dir / received.strftime("%Y/%m/%d")
     date_folder.mkdir(parents=True, exist_ok=True)
-    (date_folder / "_attachments").mkdir(exist_ok=True)
     return date_folder
 
 
@@ -443,6 +458,30 @@ class LlmPdfTranscriber:
         return match.group(1).strip()
 
 
+class NoteSummarizer(Protocol):
+    def summarize(self, content: str) -> str:
+        """Return a brief summary of the given content."""
+
+
+class LlmNoteSummarizer:
+    def __init__(self, model: str = SUMMARY_MODEL):
+        self.model = model
+
+    def summarize(self, content: str) -> str:
+        try:
+            result = subprocess.run(
+                ["llm", "-m", self.model, SUMMARY_PROMPT],
+                input=content,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            logger.warning("summarization failed: %s", exc)
+            return ""
+        return result.stdout.strip()
+
+
 class VoiceNoteHandler:
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
@@ -460,6 +499,7 @@ class VoiceNoteHandler:
         attachment_paths: list[Path] = []
         for attachment in attachments:
             path = date_folder / "_attachments" / f"{timestamp} - {attachment.filename}"
+            path.parent.mkdir(exist_ok=True)
             path.write_bytes(attachment.content)
             attachment_paths.append(path)
         attachment_links = "\n".join(f"![[_attachments/{path.name}]]" for path in attachment_paths)
@@ -542,6 +582,7 @@ class TodoHandler:
         attachment_paths: list[Path] = []
         for attachment in attachments:
             path = date_folder / "_attachments" / f"{timestamp} - {attachment.filename}"
+            path.parent.mkdir(exist_ok=True)
             path.write_bytes(attachment.content)
             attachment_paths.append(path)
         attachment_links = "\n".join(
@@ -633,6 +674,7 @@ class RemarkableSnapshotHandler:
             pdf_filename = f"{timestamp} - {stem}.pdf"
             pdf_path = date_folder / "_attachments" / pdf_filename
             if not pdf_path.exists():
+                pdf_path.parent.mkdir(exist_ok=True)
                 pdf_path.write_bytes(attachment.content)
                 created_paths.append(pdf_path)
             with show_spinner(f"Transcribing {pdf_filename}"):
@@ -788,7 +830,7 @@ class CalendarScraper:
             GOOGLE_TOKEN_PATH.write_text(creds.to_json())
         return creds
 
-    def scrape_once(self) -> list[tuple[datetime, Path]]:
+    def scrape_once(self) -> list[tuple[datetime, Path, str]]:
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
 
@@ -813,7 +855,7 @@ class CalendarScraper:
         )
         logger.info("found %d calendar events", len(events))
 
-        results: list[tuple[datetime, Path]] = []
+        results: list[tuple[datetime, Path, str]] = []
         for event in events:
             self_attendee = next(
                 (a for a in event.get("attendees", []) if a.get("self")),
@@ -860,7 +902,7 @@ class CalendarScraper:
                 out_path = day_dir / f"{name}.md"
                 if out_path.exists():
                     logger.debug("calendar note cached: %s", out_path)
-                    results.append((start_dt, out_path))
+                    results.append((start_dt, out_path, "meeting notes"))
                     continue
 
                 try:
@@ -894,7 +936,7 @@ class CalendarScraper:
                 )
                 out_path.write_bytes(front_matter.encode() + content)
                 logger.info("wrote calendar note: %s", out_path)
-                results.append((start_dt, out_path))
+                results.append((start_dt, out_path, "meeting notes"))
 
             for att in chat_attachments:
                 file_id = att["fileId"]
@@ -903,7 +945,7 @@ class CalendarScraper:
 
                 if out_path.exists():
                     logger.debug("calendar chat cached: %s", out_path)
-                    results.append((start_dt, out_path))
+                    results.append((start_dt, out_path, "meeting chat"))
                     continue
 
                 try:
@@ -925,14 +967,15 @@ class CalendarScraper:
                 )
                 out_path.write_bytes(front_matter.encode() + chat_content)
                 logger.info("wrote calendar chat: %s", out_path)
-                results.append((start_dt, out_path))
+                results.append((start_dt, out_path, "meeting chat"))
 
         return results
 
 
 class DailyNoteWriter:
-    def __init__(self, vault_root: Path):
+    def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
         self.vault_root = vault_root
+        self.summarizer = summarizer
         self._lock = threading.Lock()
 
     def append_line(self, received: datetime, line: str) -> Path:
@@ -950,13 +993,24 @@ class DailyNoteWriter:
             daily_path.write_text(f"{line}\n")
             return daily_path
 
-    def append_note_embed(self, received: datetime, note_path: Path) -> Path:
-        embed_line = self.render_embed_line(received, note_path)
-        return self.append_line(received, embed_line)
-
-    def append_todo_embed(self, received: datetime, subject: str, note_path: Path) -> Path:
-        line = self.render_todo_line(subject, note_path)
+    def append_note_entry(self, received: datetime, note_path: Path, entry_type: str) -> Path:
+        summary = self._summarize_file(note_path)
+        line = self.render_entry_line(entry_type, note_path, summary)
         return self.append_line(received, line)
+
+    def append_todo_entry(self, received: datetime, note_path: Path) -> Path:
+        summary = self._summarize_file(note_path)
+        line = self.render_todo_line(note_path, summary)
+        return self.append_line(received, line)
+
+    def _summarize_file(self, note_path: Path) -> str:
+        if self.summarizer is None:
+            return ""
+        try:
+            content = note_path.read_text()
+        except OSError:
+            return ""
+        return self.summarizer.summarize(content)
 
     def get_daily_note_path(self, received: datetime) -> Path:
         folder = self.get_daily_notes_folder()
@@ -975,20 +1029,27 @@ class DailyNoteWriter:
             return self.vault_root / Path(folder)
         return self.vault_root
 
-    def render_embed_line(self, received: datetime, note_path: Path) -> str:
+    def _get_relative_path(self, note_path: Path) -> Path:
         try:
-            relative_note_path = note_path.relative_to(self.vault_root)
+            return note_path.relative_to(self.vault_root)
         except ValueError:
-            relative_note_path = note_path
-        timestamp = received.strftime("%H:%M")
-        return f"- {timestamp} ![[{relative_note_path.as_posix()}]]"
+            return note_path
 
-    def render_todo_line(self, subject: str, note_path: Path) -> str:
-        try:
-            relative_note_path = note_path.relative_to(self.vault_root)
-        except ValueError:
-            relative_note_path = note_path
-        return f"- [ ] TODO: {subject} [[{relative_note_path.as_posix()}]]"
+    def render_entry_line(self, entry_type: str, note_path: Path, summary: str = "") -> str:
+        relative = self._get_relative_path(note_path)
+        parts = [f"- {entry_type}: [[{relative.as_posix()}]]"]
+        if summary:
+            parts.append(f"- {summary}")
+        parts.append(WEAVE_TAG)
+        return " ".join(parts)
+
+    def render_todo_line(self, note_path: Path, summary: str = "") -> str:
+        relative = self._get_relative_path(note_path)
+        parts = [f"- [ ] todo: [[{relative.as_posix()}]]"]
+        if summary:
+            parts.append(f"- {summary}")
+        parts.append(WEAVE_TAG)
+        return " ".join(parts)
 
 
 class WeaveService:
@@ -997,7 +1058,10 @@ class WeaveService:
         self.monitor = MailboxMonitor(config)
         self.route_resolver = RouteResolver(config.routes)
         self.handlers = self.get_handlers(config)
-        self.daily_note_writer = DailyNoteWriter(vault_root=config.vault_root)
+        self.daily_note_writer = DailyNoteWriter(
+            vault_root=config.vault_root,
+            summarizer=LlmNoteSummarizer(),
+        )
         self._shutdown = threading.Event()
         self.calendar_scraper: CalendarScraper | None = None
         if config.calendar_enabled:
@@ -1042,10 +1106,11 @@ class WeaveService:
         except Exception as exc:
             logger.warning("calendar scrape failed: %s", exc)
             return 0
-        for event_start, note_path in results:
-            self.daily_note_writer.append_note_embed(
+        for event_start, note_path, entry_type in results:
+            self.daily_note_writer.append_note_entry(
                 received=event_start,
                 note_path=note_path,
+                entry_type=entry_type,
             )
         return len(results)
 
@@ -1082,16 +1147,17 @@ class WeaveService:
                 logger.warning("failed processing uid %s: %s", message.uid, exc)
                 continue
             if result.handled:
+                entry_type = HANDLER_ENTRY_TYPES.get(route.handler_key, "note")
                 for note_path in result.note_paths:
-                    daily_path = self.daily_note_writer.append_note_embed(
+                    daily_path = self.daily_note_writer.append_note_entry(
                         received=message.received,
                         note_path=note_path,
+                        entry_type=entry_type,
                     )
                     logger.info("updated daily note %s", daily_path)
-                for subject, note_path in result.todo_entries:
-                    daily_path = self.daily_note_writer.append_todo_embed(
+                for _subject, note_path in result.todo_entries:
+                    daily_path = self.daily_note_writer.append_todo_entry(
                         received=message.received,
-                        subject=subject,
                         note_path=note_path,
                     )
                     logger.info("updated daily note %s", daily_path)
