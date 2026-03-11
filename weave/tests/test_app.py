@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import datetime as dt_mod
 import json
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -23,9 +24,12 @@ from weave.app import (
     TodoHandler,
     TranscriptionError,
     VoiceNoteHandler,
+    WeaveConfig,
+    WeaveService,
     _format_duration,
     detect_session_format,
     extract_section_for_date,
+    get_agent_session_manifest_path,
     get_variant_address,
     is_gemini_notes,
     is_shared_notes,
@@ -445,6 +449,123 @@ def test_daily_note_writer_uses_stored_frontmatter_summary(tmp_path: Path) -> No
         "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Stored summary. #weave\n"
     )
     assert summarizer.call_count == 0
+
+
+def test_daily_note_writer_syncs_managed_lines_from_note_summary(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        "---\n"
+        'summary: "Updated summary."\n'
+        "---\n"
+        "Body\n"
+    )
+    daily_path = vault_root / "daily" / "2026-03-01.md"
+    daily_path.parent.mkdir(parents=True)
+    daily_path.write_text(
+        "intro\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Old summary. #weave\n"
+        "tail\n"
+    )
+
+    writer = DailyNoteWriter(vault_root=vault_root)
+
+    assert writer.sync_all_daily_notes() == 1
+    assert daily_path.read_text() == (
+        "intro\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Updated summary. #weave\n"
+        "tail\n"
+    )
+
+
+def test_daily_note_writer_syncs_todo_lines_without_resummarizing(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - Fix bug.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        "---\n"
+        'summary: ""\n'
+        "---\n"
+        "Body\n"
+    )
+    daily_path = vault_root / "daily" / "2026-03-01.md"
+    daily_path.parent.mkdir(parents=True)
+    daily_path.write_text(
+        "seed\n"
+        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]] - Old summary. #weave\n"
+        "leave me alone #weave\n"
+    )
+
+    writer = DailyNoteWriter(vault_root=vault_root)
+
+    assert writer.sync_all_daily_notes() == 1
+    assert daily_path.read_text() == (
+        "seed\n"
+        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]] #weave\n"
+        "leave me alone #weave\n"
+    )
+
+
+def test_weave_service_runs_daily_note_sync_once_per_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        "---\n"
+        'summary: "First summary."\n'
+        "---\n"
+        "Body\n"
+    )
+    daily_path = vault_root / "daily" / "2026-03-01.md"
+    daily_path.parent.mkdir(parents=True)
+    daily_path.write_text(
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Stale summary. #weave\n"
+    )
+    monkeypatch.setattr(WeaveService, "_init_calendar_scraper", lambda self, config: None)
+    config = WeaveConfig(
+        imap_host="imap.example.com",
+        imap_user="user",
+        imap_password="password",
+        vault_root=vault_root,
+        poll_interval_seconds=300,
+        routes=(),
+    )
+    service = WeaveService(config)
+
+    assert service.run_daily_note_sync(sync_date=dt_mod.date(2026, 3, 1)) == 1
+    assert daily_path.read_text() == (
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - First summary. #weave\n"
+    )
+
+    note_path.write_text(
+        "---\n"
+        'summary: "Second summary."\n'
+        "---\n"
+        "Body\n"
+    )
+
+    assert service.run_daily_note_sync(sync_date=dt_mod.date(2026, 3, 1)) == 0
+    assert daily_path.read_text() == (
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - First summary. #weave\n"
+    )
+
+    assert service.run_daily_note_sync(sync_date=dt_mod.date(2026, 3, 2)) == 1
+    assert daily_path.read_text() == (
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Second summary. #weave\n"
+    )
 
 
 # --- Calendar scraper tests ---
@@ -955,7 +1076,11 @@ def test_render_session_note_has_frontmatter() -> None:
         turns=[SessionTurn(user_text="hi", assistant_texts=["hello"], tool_names=[])],
         total_tool_calls=3,
     )
-    note = render_session_note(session, "Built a thing.")
+    note = render_session_note(
+        session,
+        "Built a thing.",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
     assert "type: agent_session" in note
     assert "agent: pi" in note
     assert 'project: "myproject"' in note
@@ -969,7 +1094,8 @@ def test_format_duration() -> None:
     assert _format_duration(dt_mod.timedelta(hours=2, minutes=5, seconds=1)) == "2h 5m 1s"
 
 
-def test_agent_session_scraper_writes_note(tmp_path: Path) -> None:
+def test_agent_session_scraper_writes_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
@@ -983,19 +1109,136 @@ def test_agent_session_scraper_writes_note(tmp_path: Path) -> None:
         output_dir=output_dir,
         summarizer=StaticSummarizer("Fixed a bug."),
     )
-    results = scraper.scrape_once()
+    run = scraper.scrape_once()
 
-    assert len(results) == 1
-    start_dt, note_path, entry_type = results[0]
-    assert entry_type == "agent session"
+    assert run.report.scanned == 1
+    assert run.report.imported == 1
+    assert len(run.results) == 1
+    result = run.results[0]
+    assert result.entry_type == "agent session"
+    note_path = result.note_path
     assert note_path.exists()
+    assert note_path.name == "abc-123.md"
     content = note_path.read_text()
     assert "type: agent_session" in content
+    assert 'session_id: "abc-123"' in content
+    assert "session_sha256:" in content
     assert "Fixed a bug." in content
     assert "help me fix this bug" in content
 
 
-def test_agent_session_scraper_skips_cached(tmp_path: Path) -> None:
+def test_agent_session_scraper_uses_manifest_for_unchanged_mutable_sessions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    session_path = claude_dir / "sess-001.jsonl"
+    session_path.write_text(_build_claude_session_jsonl())
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+        summarizer=StaticSummarizer("summary"),
+    )
+    run1 = scraper.scrape_once()
+    note_path = run1.results[0].note_path
+    original_content = note_path.read_text()
+
+    run2 = scraper.scrape_once()
+    assert run2.report.imported == 0
+    assert run2.report.updated == 0
+    assert run2.report.unchanged == 1
+    assert run2.results == []
+    assert note_path.read_text() == original_content
+
+
+def test_agent_session_scraper_updates_changed_mutable_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    session_path = claude_dir / "sess-001.jsonl"
+    session_path.write_text(_build_claude_session_jsonl())
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+        summarizer=StaticSummarizer("summary"),
+    )
+    first_run = scraper.scrape_once()
+    note_path = first_run.results[0].note_path
+    first_content = note_path.read_text()
+
+    updated_jsonl = _build_claude_session_jsonl().replace(
+        "help me fix this bug",
+        "help me fix this other bug",
+    )
+    session_path.write_text(updated_jsonl)
+
+    second_run = scraper.scrape_once()
+    assert second_run.report.updated == 1
+    assert len(second_run.results) == 1
+    assert second_run.results[0].note_path == note_path
+    second_content = note_path.read_text()
+    assert "help me fix this other bug" in second_content
+    assert second_content != first_content
+
+    manifest = json.loads(get_agent_session_manifest_path().read_text())
+    entry = manifest["sessions"][str(session_path.resolve())]
+    assert entry["session_id"] == "abc-123"
+    assert entry["session_sha256"] in second_content
+
+
+def test_agent_session_scraper_skips_immutable_sessions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    session_path = claude_dir / "sess-001.jsonl"
+    session_path.write_text(_build_claude_session_jsonl())
+
+    old_ts = (datetime.now(tz=UTC) - timedelta(days=8)).timestamp()
+    os.utime(session_path, (old_ts, old_ts))
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+    )
+    first_run = scraper.scrape_once()
+    assert first_run.report.imported == 1
+
+    second_run = scraper.scrape_once()
+    assert second_run.report.skipped_immutable == 1
+    assert second_run.results == []
+
+
+def test_agent_session_scraper_recovers_from_malformed_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    manifest_path = get_agent_session_manifest_path()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("not-json")
+
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
@@ -1007,19 +1250,18 @@ def test_agent_session_scraper_skips_cached(tmp_path: Path) -> None:
     scraper = AgentSessionScraper(
         sessions_dir=sessions_dir,
         output_dir=output_dir,
-        summarizer=StaticSummarizer("summary"),
     )
-    results1 = scraper.scrape_once()
-    assert len(results1) == 1
-    note_path = results1[0][1]
-    original_content = note_path.read_text()
-
-    results2 = scraper.scrape_once()
-    assert len(results2) == 1
-    assert note_path.read_text() == original_content
+    run = scraper.scrape_once()
+    assert run.report.imported == 1
+    saved_manifest = json.loads(manifest_path.read_text())
+    assert saved_manifest["version"] == 1
 
 
-def test_agent_session_scraper_skips_empty_sessions(tmp_path: Path) -> None:
+def test_agent_session_scraper_skips_empty_sessions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
@@ -1033,11 +1275,16 @@ def test_agent_session_scraper_skips_empty_sessions(tmp_path: Path) -> None:
         sessions_dir=sessions_dir,
         output_dir=output_dir,
     )
-    results = scraper.scrape_once()
-    assert len(results) == 0
+    run = scraper.scrape_once()
+    assert run.report.skipped_empty == 1
+    assert run.results == []
 
 
-def test_agent_session_scraper_skips_subagents(tmp_path: Path) -> None:
+def test_agent_session_scraper_skips_subagents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     sessions_dir = tmp_path / "sessions"
     subdir = sessions_dir / "claude" / "-proj" / "s1" / "subagents"
     subdir.mkdir(parents=True)
@@ -1050,5 +1297,6 @@ def test_agent_session_scraper_skips_subagents(tmp_path: Path) -> None:
         sessions_dir=sessions_dir,
         output_dir=output_dir,
     )
-    results = scraper.scrape_once()
-    assert len(results) == 0
+    run = scraper.scrape_once()
+    assert run.report.scanned == 0
+    assert run.results == []

@@ -6,10 +6,14 @@ Last updated: 2026-03-11
 1. Module layout
 
 - `src/weave/app.py`: all runtime logic for now.
+- `src/weave/github_activity.py`: standalone GitHub activity timeline prototype; fetches recent user events via `gh`, expands pull requests and pushes, normalizes them, and renders a grouped markdown-like report.
 - `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and agent session tests.
+- `tests/test_github_activity.py`: GitHub activity normalization and rendering tests.
 - `scripts/setup_google_credentials.py`: interactive OAuth setup for Google Calendar/Drive.
 - `scripts/parse_session.py`: standalone CLI for parsing/displaying agent session JSONL files.
+- `scripts/render_github_activity.py`: standalone CLI for rendering grouped GitHub activity from the recent user events feed.
 - `docs/research/agent-sessions.md`: research notes on Claude Code and Pi Agent JSONL formats.
+- `docs/research/github-activity.md`: GitHub activity API research and design constraints.
 
 2. Core types
 
@@ -37,7 +41,7 @@ Last updated: 2026-03-11
 7. Dispatch to handler by `handler_key`.
 8. For each created sink note path, append a timestamped embed line to that day's daily note.
 9. If handler result says handled and daily-note updates succeeded, mark message as seen.
-10. In daemon mode, enter IMAP IDLE and repeat on notifications; calendar scraper runs in a background thread.
+10. In daemon mode, enter IMAP IDLE and repeat on notifications; a background maintenance thread handles calendar scraping, agent session scraping, and once-per-day daily-note sync.
 
 5. Handler implementations
 
@@ -83,6 +87,10 @@ Last updated: 2026-03-11
 - helper functions `split_front_matter()`, `get_note_summary()`, and `set_note_summary()` implement minimal summary-field parsing/updating without adding a YAML dependency
 - if a note already has a non-empty `summary` field, Weave reuses it and skips the LLM call
 - if a note lacks frontmatter entirely, `set_note_summary()` prepends a minimal frontmatter block containing only `summary`
+- `sync_all_daily_notes()` scans `YYYY-MM-DD.md` files in the configured daily-note folder and calls `sync_daily_note()` on each
+- `sync_daily_note()` rewrites only managed lines that exactly match the note/todo `#weave` formats; unmanaged lines are preserved verbatim
+- sync resolves the linked path back to a vault file, reads its current frontmatter `summary`, and re-renders the managed line without invoking the summarizer
+- if the linked note is missing or unreadable during sync, the original daily-note line is left untouched
 - all lines end with `#weave` tag for future regeneration of managed lines
 - deduplication happens in `append_note_entry`/`append_todo_entry` before summarization: checks if a line containing the same `[[link]]` and `#weave` tag already exists in the daily note, skipping both the LLM call and the write. This handles non-deterministic summaries correctly.
 - shared `append_line` method handles file I/O (exact-match dedup remains as a secondary guard)
@@ -129,11 +137,13 @@ Last updated: 2026-03-11
 8. Threading model
 
 - `WeaveService` owns a `threading.Event` (`_shutdown`) for coordinated shutdown.
-- In daemon mode, the calendar scraper and agent session scraper run in a daemon thread calling `run_calendar_loop()` with a 5-minute sleep via `_shutdown.wait(timeout=300)`. Both scrapers execute each iteration.
+- In daemon mode, a maintenance thread runs `run_background_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`.
+- Each maintenance iteration runs calendar scrape, agent session scrape, and a once-per-day `run_daily_note_sync()` pass.
+- `run_daily_note_sync()` uses `WeaveService._last_daily_note_sync_on` to ensure at most one sync pass per local calendar day.
 - The IMAP loop runs on the main thread.
 - `DailyNoteWriter` uses a `threading.RLock` across summary backfill and daily-note writes since both threads can touch the same notes.
 - Signal handlers (SIGINT, SIGTERM) set `_shutdown` before exiting.
-- In `--once` mode, calendar scrape and agent session scrape run synchronously after IMAP batch.
+- In `--once` mode, calendar scrape, agent session scrape, and one daily-note sync pass run synchronously after the IMAP batch.
 
 9. Credential setup
 

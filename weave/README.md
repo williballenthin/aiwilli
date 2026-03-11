@@ -8,7 +8,7 @@ Routes:
 - `+rm2` — reMarkable snapshots: saves PDF attachment, generates transcription via `llm` CLI, writes embed note.
 - `+todo` — TODO items: saves note with subject heading, body, and attachment embeds. Appends a `- [ ] TODO` line to the daily note.
 
-All handlers write into `sink/<YYYY-MM-DD>/` with binary files in `_attachments/`. Generated markdown notes include a `summary` frontmatter property; daily note entries read or backfill that property so one note has one reusable summary.
+All handlers write into `sink/<YYYY-MM-DD>/` with binary files in `_attachments/`. Generated markdown notes include a `summary` frontmatter property; daily note entries read or backfill that property so one note has one reusable summary. Managed `#weave` lines in daily notes are resynced from linked note summaries once per day.
 
 Required environment variables:
 
@@ -29,6 +29,12 @@ Run daemon:
 ```bash
 uv --directory weave run weave /path/to/obsidian-vault
 ```
+
+Agent session imports are cached via a JSON manifest at
+`$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`
+(falling back to `~/.cache/...`). Session notes are named with the session ID,
+store `session_id` and `session_sha256` in front matter, and treat source files
+modified within the last 7 days as mutable.
 
 Development checks:
 

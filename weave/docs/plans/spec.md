@@ -13,8 +13,8 @@ Command:
 - `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--no-calendar] [--agent-sessions DIR]`
 
 Behavior:
-- `--once` processes one unread batch plus one calendar scrape plus one agent session scan, then exits.
-- default mode stays connected and loops with IMAP IDLE; calendar scraper and agent session scraper run in a background thread every 5 minutes.
+- `--once` processes one unread batch plus one calendar scrape plus one agent session scan, runs one daily-note sync pass, then exits.
+- default mode stays connected and loops with IMAP IDLE; a background maintenance thread runs every 5 minutes for calendar scraping, agent session scraping, and once-per-day daily-note sync.
 - `<vault_root>` must exist.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
 - `--no-calendar` disables the calendar scraper entirely.
@@ -105,6 +105,8 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - daily note folder is loaded from `<vault_root>/.obsidian/daily-notes.json` key `folder`.
 - if the daily-notes config file is missing/invalid or folder is empty, Weave uses `<vault_root>/` as daily note folder.
 - duplicate entries are detected by matching the `[[link]]` destination and `#weave` tag, not by exact line match. This means a note that was already linked won't be re-summarized or re-appended even if the configured prompt later changes.
+- once per day, Weave scans `YYYY-MM-DD.md` files in the configured daily-note folder and rewrites managed `#weave` lines from the linked note's current frontmatter `summary` value, without calling the summarizer again.
+- if a managed daily-note line points at a missing/unreadable note, Weave leaves that line unchanged during sync.
 - daily note file I/O is thread-safe (calendar thread and IMAP thread share the writer).
 
 5.6 Agent session scraper output

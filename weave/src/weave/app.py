@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt_mod
 import email
+import hashlib
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ from typing import Any, Protocol
 
 from imapclient import IMAPClient
 from jinja2 import Environment
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 from rich.live import Live
 from rich.logging import RichHandler
@@ -96,6 +97,12 @@ saved: {{ saved }}
 )
 
 WEAVE_TAG = "#weave"
+MANAGED_NOTE_LINE_RE = re.compile(
+    r"^- (?P<entry_type>[^:]+): \[\[(?P<link>[^\]]+)\]\](?: - (?P<summary>.*?))? #weave$"
+)
+MANAGED_TODO_LINE_RE = re.compile(
+    r"^- \[ \] todo: \[\[(?P<link>[^\]]+)\]\](?: - (?P<summary>.*?))? #weave$"
+)
 
 RM2_MODEL = "gemini/gemini-3-flash-preview"
 RM2_PROMPT = """Transcribe this handwritten note verbatim. Output ONLY a single markdown
@@ -151,6 +158,8 @@ GOOGLE_CONFIG_DIR = (
 )
 GOOGLE_CREDENTIALS_PATH = GOOGLE_CONFIG_DIR / "credentials.json"
 GOOGLE_TOKEN_PATH = GOOGLE_CONFIG_DIR / "token.json"
+AGENT_SESSION_MUTABLE_DAYS = 7
+AGENT_SESSION_MANIFEST_VERSION = 1
 
 MONTHS: dict[str, int] = {
     "Jan": 1,
@@ -289,7 +298,6 @@ class WeaveConfig(BaseModel):
     poll_interval_seconds: int
     routes: tuple[RouteConfig, ...]
     calendar_source: str = "@hex-rays.com"
-    calendar_enabled: bool = True
     agent_sessions_dir: Path | None = None
 
     @classmethod
@@ -298,7 +306,6 @@ class WeaveConfig(BaseModel):
         vault_root: Path,
         poll_interval_seconds: int,
         calendar_source: str = "@hex-rays.com",
-        calendar_enabled: bool = True,
         agent_sessions_dir: Path | None = None,
     ) -> WeaveConfig:
         """Build runtime configuration from args and environment.
@@ -328,7 +335,6 @@ class WeaveConfig(BaseModel):
                 vault_root=vault_root,
                 poll_interval_seconds=poll_interval_seconds,
                 calendar_source=calendar_source,
-                calendar_enabled=calendar_enabled,
                 agent_sessions_dir=resolved_sessions,
                 routes=(
                     RouteConfig(
@@ -356,6 +362,47 @@ class WeaveConfig(BaseModel):
             )
         except ValidationError as exc:
             raise ConfigError(str(exc)) from exc
+
+
+class AgentSessionManifestEntry(BaseModel):
+    session_id: str
+    session_sha256: str
+    sink_path: str
+    source_mtime_ns: int
+
+
+class AgentSessionManifest(BaseModel):
+    version: int = AGENT_SESSION_MANIFEST_VERSION
+    sessions: dict[str, AgentSessionManifestEntry] = Field(default_factory=dict)
+
+
+class AgentSessionSyncReport(BaseModel):
+    manifest_path: str
+    scanned: int = 0
+    imported: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    skipped_immutable: int = 0
+    skipped_empty: int = 0
+    failed: int = 0
+
+    @property
+    def changed_count(self) -> int:
+        return self.imported + self.updated
+
+
+@dataclass(frozen=True)
+class AgentSessionScrapeResult:
+    received: datetime
+    note_path: Path
+    entry_type: str
+    action: str
+
+
+@dataclass(frozen=True)
+class AgentSessionScrapeRun:
+    report: AgentSessionSyncReport
+    results: list[AgentSessionScrapeResult]
 
 
 class RouteResolver:
@@ -1054,6 +1101,33 @@ def _parse_session_timestamp(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+def get_agent_session_manifest_path() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "wballethin" / "weave" / "agent-session-manifest.json"
+
+
+def get_session_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def get_session_id(path: Path) -> str:
+    stem = path.stem
+    if detect_session_format(path) == "pi" and "_" in stem:
+        return stem.split("_", 1)[1]
+    if stem:
+        return stem
+    with path.open() as f:
+        first_line = f.readline()
+    obj = json.loads(first_line)
+    if obj.get("type") == "session":
+        return str(obj.get("id", ""))
+    return str(obj.get("sessionId", ""))
+
+
 def detect_session_format(path: Path) -> str:
     with open(path) as f:
         first_line = f.readline()
@@ -1342,6 +1416,7 @@ summary: ""
 agent: {{ agent }}
 project: "{{ project }}"
 session_id: "{{ session_id }}"
+session_sha256: "{{ session_sha256 }}"
 start: {{ start }}
 end: {{ end }}
 duration: "{{ duration }}"
@@ -1392,7 +1467,7 @@ tool_calls: {{ tool_calls }}
 )
 
 
-def render_session_note(session: SessionData, summary: str) -> str:
+def render_session_note(session: SessionData, summary: str, session_sha256: str) -> str:
     usage = session.usage
     total = (
         usage.input_tokens
@@ -1404,6 +1479,7 @@ def render_session_note(session: SessionData, summary: str) -> str:
         agent=session.agent,
         project=session.project,
         session_id=session.session_id,
+        session_sha256=session_sha256,
         start=session.start_time.isoformat(timespec="seconds") if session.start_time else "",
         end=session.end_time.isoformat(timespec="seconds") if session.end_time else "",
         duration=_format_duration(session.duration) if session.duration else "unknown",
@@ -1437,17 +1513,54 @@ class AgentSessionScraper:
         self.output_dir = output_dir
         self.summarizer = summarizer
 
-    def scrape_once(self) -> list[tuple[datetime, Path, str]]:
-        results: list[tuple[datetime, Path, str]] = []
+    def scrape_once(self) -> AgentSessionScrapeRun:
+        manifest_path = get_agent_session_manifest_path()
+        manifest = self._load_manifest(manifest_path)
+        report = AgentSessionSyncReport(manifest_path=str(manifest_path))
+        results: list[AgentSessionScrapeResult] = []
+        now = datetime.now(tz=UTC)
+        seen_sources: set[str] = set()
+
         for jsonl_path in self._find_session_files():
+            source_key = str(jsonl_path.resolve())
+            seen_sources.add(source_key)
+            report.scanned += 1
             try:
-                result = self._process_session(jsonl_path)
+                result = self._sync_session(
+                    jsonl_path=jsonl_path,
+                    source_key=source_key,
+                    manifest=manifest,
+                    now=now,
+                )
             except Exception as exc:
+                report.failed += 1
                 logger.warning("failed to process session %s: %s", jsonl_path.name, exc)
                 continue
-            if result is not None:
-                results.append(result)
-        return results
+
+            if result is None:
+                report.skipped_empty += 1
+                continue
+
+            status, note_result = result
+            if status == "imported":
+                report.imported += 1
+            elif status == "updated":
+                report.updated += 1
+            elif status == "unchanged":
+                report.unchanged += 1
+            elif status == "skipped_immutable":
+                report.skipped_immutable += 1
+            elif status == "skipped_empty":
+                report.skipped_empty += 1
+
+            if note_result is not None:
+                results.append(note_result)
+
+        stale_sources = set(manifest.sessions) - seen_sources
+        for source_key in stale_sources:
+            del manifest.sessions[source_key]
+        self._save_manifest(manifest_path, manifest)
+        return AgentSessionScrapeRun(report=report, results=results)
 
     def _find_session_files(self) -> list[Path]:
         paths: list[Path] = []
@@ -1461,39 +1574,98 @@ class AgentSessionScraper:
                 paths.append(jsonl)
         return paths
 
+    def _load_manifest(self, manifest_path: Path) -> AgentSessionManifest:
+        if not manifest_path.exists():
+            return AgentSessionManifest()
+        try:
+            return AgentSessionManifest.model_validate_json(manifest_path.read_text())
+        except (OSError, ValidationError, json.JSONDecodeError) as exc:
+            logger.warning("agent session manifest invalid, rebuilding: %s", exc)
+            return AgentSessionManifest()
+
+    def _save_manifest(self, manifest_path: Path, manifest: AgentSessionManifest) -> None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
+
+    def _is_mutable(self, source_mtime: datetime, now: datetime) -> bool:
+        return source_mtime >= now - dt_mod.timedelta(days=AGENT_SESSION_MUTABLE_DAYS)
+
     def _output_path_for_session(self, session: SessionData) -> Path | None:
-        if session.start_time is None:
+        if session.start_time is None or not session.session_id:
             return None
         day_dir = get_date_folder(self.output_dir, session.start_time)
-        time_prefix = session.start_time.strftime("%H%M")
-        slug = sanitize_filename(f"{session.agent} - {session.project}")
-        name = f"{time_prefix} - {slug} ({session.session_id[:8]})"
+        name = sanitize_filename(session.session_id)
         return day_dir / f"{name}.md"
 
-    def _process_session(self, jsonl_path: Path) -> tuple[datetime, Path, str] | None:
+    def _sync_session(
+        self,
+        jsonl_path: Path,
+        source_key: str,
+        manifest: AgentSessionManifest,
+        now: datetime,
+    ) -> tuple[str, AgentSessionScrapeResult | None] | None:
+        stat = jsonl_path.stat()
+        source_mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+        source_mtime_ns = stat.st_mtime_ns
+        entry = manifest.sessions.get(source_key)
+        sink_path = Path(entry.sink_path) if entry else None
+        sink_exists = sink_path.exists() if sink_path else False
+
+        if entry and sink_exists and not self._is_mutable(source_mtime, now):
+            return ("skipped_immutable", None)
+
+        if entry and sink_exists and entry.source_mtime_ns == source_mtime_ns:
+            return ("unchanged", None)
+
+        session_sha256 = get_session_sha256(jsonl_path)
+        if entry and sink_exists and entry.session_sha256 == session_sha256:
+            manifest.sessions[source_key] = AgentSessionManifestEntry(
+                session_id=entry.session_id,
+                session_sha256=entry.session_sha256,
+                sink_path=entry.sink_path,
+                source_mtime_ns=source_mtime_ns,
+            )
+            return ("unchanged", None)
+
         session = parse_session(jsonl_path)
-        if not session.turns or session.start_time is None:
+        session.session_id = session.session_id or get_session_id(jsonl_path)
+        if not session.turns or session.start_time is None or not session.session_id:
             return None
 
         out_path = self._output_path_for_session(session)
         if out_path is None:
             return None
 
-        start_time = session.start_time
-
-        if out_path.exists():
-            logger.debug("agent session cached: %s", out_path)
-            return (start_time, out_path, "agent session")
+        if entry and entry.sink_path != str(out_path.resolve()):
+            old_path = Path(entry.sink_path)
+            if old_path.exists():
+                old_path.unlink()
 
         summary = ""
         if self.summarizer:
             turns_text = render_session_turns(session)
             summary = self.summarizer.summarize(turns_text)
 
-        content = render_session_note(session, summary)
+        content = render_session_note(session, summary, session_sha256)
         out_path.write_text(content)
         logger.info("wrote agent session: %s", out_path)
-        return (start_time, out_path, "agent session")
+
+        manifest.sessions[source_key] = AgentSessionManifestEntry(
+            session_id=session.session_id,
+            session_sha256=session_sha256,
+            sink_path=str(out_path.resolve()),
+            source_mtime_ns=source_mtime_ns,
+        )
+        action = "updated" if entry else "imported"
+        return (
+            action,
+            AgentSessionScrapeResult(
+                received=session.start_time,
+                note_path=out_path,
+                entry_type="agent session",
+                action=action,
+            ),
+        )
 
 
 def split_front_matter(content: str) -> tuple[str, str] | None:
@@ -1578,29 +1750,104 @@ class DailyNoteWriter:
         with self._lock:
             daily_path = self.get_daily_note_path(received)
             link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
-            if self._entry_exists(daily_path, link):
-                return daily_path
             summary = self._get_or_create_summary(note_path)
             line = self.render_entry_line(entry_type, note_path, summary)
-            return self.append_line(received, line)
+            return self._upsert_line(daily_path, link, line)
 
     def append_todo_entry(self, received: datetime, note_path: Path) -> Path:
         with self._lock:
             daily_path = self.get_daily_note_path(received)
             link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
-            if self._entry_exists(daily_path, link):
-                return daily_path
             summary = self._get_or_create_summary(note_path)
             line = self.render_todo_line(note_path, summary)
-            return self.append_line(received, line)
+            return self._upsert_line(daily_path, link, line)
 
-    def _entry_exists(self, daily_path: Path, link: str) -> bool:
+    def sync_all_daily_notes(self) -> int:
+        with self._lock:
+            daily_folder = self.get_daily_notes_folder()
+            if not daily_folder.exists():
+                return 0
+            updated_count = 0
+            for daily_path in sorted(daily_folder.glob("????-??-??.md")):
+                if self.sync_daily_note(daily_path):
+                    updated_count += 1
+            return updated_count
+
+    def sync_daily_note(self, daily_path: Path) -> bool:
+        with self._lock:
+            if not daily_path.exists():
+                return False
+            content = daily_path.read_text()
+            lines = content.splitlines()
+            updated_lines: list[str] = []
+            changed = False
+            for line in lines:
+                updated_line = self._sync_managed_line(line)
+                if updated_line != line:
+                    changed = True
+                updated_lines.append(updated_line)
+            if not changed:
+                return False
+            trailing_newline = "\n" if content.endswith("\n") else ""
+            daily_path.write_text("\n".join(updated_lines) + trailing_newline)
+            return True
+
+    def _sync_managed_line(self, line: str) -> str:
+        parsed = self._parse_managed_line(line)
+        if parsed is None:
+            return line
+        is_todo, entry_type, note_path = parsed
+        summary = self._get_summary_for_sync(note_path)
+        if summary is None:
+            return line
+        if is_todo:
+            return self.render_todo_line(note_path, summary)
+        return self.render_entry_line(entry_type, note_path, summary)
+
+    def _parse_managed_line(self, line: str) -> tuple[bool, str, Path] | None:
+        todo_match = MANAGED_TODO_LINE_RE.match(line)
+        if todo_match is not None:
+            return True, "todo", self._resolve_note_path(todo_match.group("link"))
+        note_match = MANAGED_NOTE_LINE_RE.match(line)
+        if note_match is None:
+            return None
+        return (
+            False,
+            note_match.group("entry_type"),
+            self._resolve_note_path(note_match.group("link")),
+        )
+
+    def _resolve_note_path(self, link: str) -> Path:
+        link_path = Path(link)
+        if link_path.is_absolute():
+            return link_path
+        return self.vault_root / link_path
+
+    def _upsert_line(self, daily_path: Path, link: str, line: str) -> Path:
+        daily_path.parent.mkdir(parents=True, exist_ok=True)
         if not daily_path.exists():
-            return False
-        for line in daily_path.read_text().splitlines():
-            if link in line and WEAVE_TAG in line:
-                return True
-        return False
+            daily_path.write_text(f"{line}\n")
+            return daily_path
+        content = daily_path.read_text()
+        lines = content.splitlines()
+        for index, existing_line in enumerate(lines):
+            if link in existing_line and WEAVE_TAG in existing_line:
+                if existing_line == line:
+                    return daily_path
+                lines[index] = line
+                trailing_newline = "\n" if content.endswith("\n") else ""
+                daily_path.write_text("\n".join(lines) + trailing_newline)
+                return daily_path
+        separator = "" if content.endswith("\n") or content == "" else "\n"
+        daily_path.write_text(f"{content}{separator}{line}\n")
+        return daily_path
+
+    def _get_summary_for_sync(self, note_path: Path) -> str | None:
+        try:
+            content = note_path.read_text()
+        except OSError:
+            return None
+        return get_note_summary(content)
 
     def _get_or_create_summary(self, note_path: Path) -> str:
         try:
@@ -1668,10 +1915,10 @@ class WeaveService:
             vault_root=config.vault_root,
             summarizer=LlmNoteSummarizer(prompt=SUMMARY_PROMPT),
         )
+        self._last_daily_note_sync_on: dt_mod.date | None = None
         self._shutdown = threading.Event()
         self.calendar_scraper: CalendarScraper | None = None
-        if config.calendar_enabled:
-            self._init_calendar_scraper(config)
+        self._init_calendar_scraper(config)
         self.agent_session_scraper: AgentSessionScraper | None = None
         if config.agent_sessions_dir:
             self._init_agent_session_scraper(config)
@@ -1737,19 +1984,31 @@ class WeaveService:
         if self.agent_session_scraper is None:
             return 0
         try:
-            results = self.agent_session_scraper.scrape_once()
+            run = self.agent_session_scraper.scrape_once()
         except Exception as exc:
             logger.warning("agent session scrape failed: %s", exc)
             return 0
-        for session_start, note_path, entry_type in results:
+        for result in run.results:
             self.daily_note_writer.append_note_entry(
-                received=session_start,
-                note_path=note_path,
-                entry_type=entry_type,
+                received=result.received,
+                note_path=result.note_path,
+                entry_type=result.entry_type,
             )
-        return len(results)
+        return run.report.changed_count
 
-    def run_calendar_loop(self, interval: int = 300) -> None:
+    def run_daily_note_sync(self, sync_date: dt_mod.date | None = None) -> int:
+        current_date = sync_date or dt_mod.date.today()
+        if self._last_daily_note_sync_on == current_date:
+            return 0
+        try:
+            count = self.daily_note_writer.sync_all_daily_notes()
+        except Exception as exc:
+            logger.warning("daily note sync failed: %s", exc)
+            return 0
+        self._last_daily_note_sync_on = current_date
+        return count
+
+    def run_background_loop(self, interval: int = 300) -> None:
         while not self._shutdown.is_set():
             count = self.run_calendar_scrape()
             if count > 0:
@@ -1757,6 +2016,9 @@ class WeaveService:
             count = self.run_agent_session_scrape()
             if count > 0:
                 logger.info("agent session scrape: %d note(s)", count)
+            count = self.run_daily_note_sync()
+            if count > 0:
+                logger.info("daily note sync: %d daily note(s)", count)
             self._shutdown.wait(timeout=interval)
 
     def run_single_batch(self) -> int:
@@ -1764,6 +2026,7 @@ class WeaveService:
             email_count = self.get_processed_count(client)
         cal_count = self.run_calendar_scrape()
         session_count = self.run_agent_session_scrape()
+        self.run_daily_note_sync()
         return email_count + cal_count + session_count
 
     def get_processed_count(self, client: IMAPClient) -> int:
@@ -1808,12 +2071,13 @@ class WeaveService:
 
     def run_daemon(self) -> None:
         self.register_signal_handlers()
-        if self.calendar_scraper is not None:
-            cal_thread = threading.Thread(
-                target=self.run_calendar_loop, daemon=True, name="calendar-scraper"
-            )
-            cal_thread.start()
-            logger.info("started calendar scraper thread")
+        maintenance_thread = threading.Thread(
+            target=self.run_background_loop,
+            daemon=True,
+            name="maintenance",
+        )
+        maintenance_thread.start()
+        logger.info("started maintenance thread")
         idle_chunk = min(self.config.poll_interval_seconds, 30)
         while not self._shutdown.is_set():
             try:
@@ -1885,7 +2149,6 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--quiet", action="store_true", help="Only show errors")
     parser.add_argument("--source", default="@hex-rays.com", help="Calendar source tag")
-    parser.add_argument("--no-calendar", action="store_true", help="Disable calendar scraping")
     parser.add_argument(
         "--agent-sessions",
         type=Path,
@@ -1906,7 +2169,6 @@ def main(argv: list[str] | None = None) -> None:
             vault_root=args.vault_root,
             poll_interval_seconds=args.poll_interval,
             calendar_source=args.source,
-            calendar_enabled=not args.no_calendar,
             agent_sessions_dir=args.agent_sessions,
         )
     except ConfigError as exc:
