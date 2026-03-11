@@ -161,6 +161,69 @@ def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
     assert content.count("[[sink/2026/03/01/1345 - transcription.md]]") == 1
 
 
+class CallCountSummarizer:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def summarize(self, content: str) -> str:
+        self.call_count += 1
+        return f"summary attempt {self.call_count}"
+
+
+def test_daily_note_writer_deduplicates_by_link_ignoring_summary(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("content")
+
+    summarizer = CallCountSummarizer()
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=summarizer)
+    writer.append_note_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+        entry_type="transcript",
+    )
+    writer.append_note_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+        entry_type="transcript",
+    )
+
+    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    content = daily_path.read_text()
+    assert content.count("[[sink/2026/03/01/1345 - transcription.md]]") == 1
+    assert summarizer.call_count == 1
+
+
+def test_daily_note_writer_deduplicates_todo_by_link(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - buy-milk.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("content")
+
+    summarizer = CallCountSummarizer()
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=summarizer)
+    writer.append_todo_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+    )
+    writer.append_todo_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+    )
+
+    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    content = daily_path.read_text()
+    assert content.count("[[sink/2026/03/01/1345 - buy-milk.md]]") == 1
+    assert summarizer.call_count == 1
+
+
 def test_voice_handler_writes_markdown_and_attachment(tmp_path: Path) -> None:
     handler = VoiceNoteHandler(output_dir=tmp_path)
     message = build_incoming(build_message_with_body_and_attachment(), subject="Voice note")

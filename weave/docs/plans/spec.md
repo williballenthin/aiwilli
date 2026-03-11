@@ -98,7 +98,7 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - if summarization fails or no summarizer is configured, the summary is omitted and the line still contains type, link, and tag.
 - daily note folder is loaded from `<vault_root>/.obsidian/daily-notes.json` key `folder`.
 - if the daily-notes config file is missing/invalid or folder is empty, Weave uses `<vault_root>/` as daily note folder.
-- duplicate entry lines are not appended.
+- duplicate entries are detected by matching the `[[link]]` destination and `#weave` tag, not by exact line match. This means a note that was already linked won't be re-summarized or re-appended even if the LLM would produce a different summary.
 - daily note file I/O is thread-safe (calendar thread and IMAP thread share the writer).
 
 6. Message visibility behavior

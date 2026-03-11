@@ -78,7 +78,8 @@ Last updated: 2026-03-09
 - `append_note_entry(received, note_path, entry_type)` reads the note file, summarizes it, renders `- <type>: [[path]] - <summary> #weave`
 - `append_todo_entry(received, note_path)` renders `- [ ] todo: [[path]] - <summary> #weave`
 - all lines end with `#weave` tag for future regeneration of managed lines
-- shared `append_line` method handles file I/O and dedup
+- deduplication happens in `append_note_entry`/`append_todo_entry` before summarization: checks if a line containing the same `[[link]]` and `#weave` tag already exists in the daily note, skipping both the LLM call and the write. This handles non-deterministic summaries correctly.
+- shared `append_line` method handles file I/O (exact-match dedup remains as a secondary guard)
 - `threading.Lock` protects `append_line` for concurrent access from IMAP and calendar threads
 
 5.6 `NoteSummarizer` / `LlmNoteSummarizer`

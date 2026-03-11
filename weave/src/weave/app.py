@@ -994,14 +994,30 @@ class DailyNoteWriter:
             return daily_path
 
     def append_note_entry(self, received: datetime, note_path: Path, entry_type: str) -> Path:
+        daily_path = self.get_daily_note_path(received)
+        link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
+        if self._entry_exists(daily_path, link):
+            return daily_path
         summary = self._summarize_file(note_path)
         line = self.render_entry_line(entry_type, note_path, summary)
         return self.append_line(received, line)
 
     def append_todo_entry(self, received: datetime, note_path: Path) -> Path:
+        daily_path = self.get_daily_note_path(received)
+        link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
+        if self._entry_exists(daily_path, link):
+            return daily_path
         summary = self._summarize_file(note_path)
         line = self.render_todo_line(note_path, summary)
         return self.append_line(received, line)
+
+    def _entry_exists(self, daily_path: Path, link: str) -> bool:
+        if not daily_path.exists():
+            return False
+        for line in daily_path.read_text().splitlines():
+            if link in line and WEAVE_TAG in line:
+                return True
+        return False
 
     def _summarize_file(self, note_path: Path) -> str:
         if self.summarizer is None:
