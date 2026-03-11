@@ -10,3 +10,4 @@ transcribe/VoxtralDictate
 /scripts/__pycache__
 .direnv
 .env
+secrets.env
