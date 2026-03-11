@@ -1,30 +1,22 @@
 weave
 
-Weave is a single-process email ingress tool for an Obsidian vault.
+Weave is a single-process email ingress tool for an Obsidian vault. It monitors one IMAP inbox and routes unread emails to handler logic based on the recipient address.
 
-It replaces two standalone scripts:
-- `scripts/vnote-pipe-obsidian.py`
-- `scripts/rm2-pipe-obsidian.py`
+Routes:
 
-Current handlers:
-- voice note transcription emails to `<base-local>+vnote@<domain>`
-- reMarkable snapshot emails to `<base-local>+rm2@<domain>`
+- `+vnote` — voice note transcription: saves note with frontmatter and plain-text body, plus audio attachments.
+- `+rm2` — reMarkable snapshots: saves PDF attachment, generates transcription via `llm` CLI, writes embed note.
+- `+todo` — TODO items: saves note with subject heading, body, and attachment embeds. Appends a `- [ ] TODO` line to the daily note.
 
-Both handlers write into the vault at `sink/<YYYY-MM-DD>/` and use `_attachments/` for binary files.
-
-For each created sink note, Weave appends an embed entry to the corresponding daily note using the email received timestamp:
-- daily note path: `<daily-folder>/<YYYY-MM-DD>.md`
-- appended line: `- HH:MM ![[sink/.../<note>.md]]`
-
-`<daily-folder>` is read from `.obsidian/daily-notes.json` (`folder`) and falls back to vault root when unset.
-
-The routing variants are hardcoded in `src/weave/app.py`. This is intentional for personal use.
+All handlers write into `sink/<YYYY-MM-DD>/` with binary files in `_attachments/`. Each created note gets an embed line appended to the corresponding Obsidian daily note.
 
 Required environment variables:
+
 - `IMAP_HOST`
 - `IMAP_USER`
 - `IMAP_PASSWORD`
-- `WEAVE_BASE_EMAIL`
+- `WEAVE_BASE_EMAIL` — base mailbox address (e.g. `name@example.com`)
+- `WEAVE_ALLOWED_SENDERS` — comma-separated list of allowed sender addresses
 
 Run once:
 
