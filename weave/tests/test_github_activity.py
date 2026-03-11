@@ -198,26 +198,48 @@ def test_render_activity_report_formats_supported_events() -> None:
     assert "# GitHub activity for tester" in report
     assert "## 2026-03-11" in report
     assert "### acme/app" in report
-    assert "#### Created refs" in report
-    assert "- 08:30:00 created branch feature/demo" in report
-    assert "#### Pushes" in report
-    assert "- 09:00:00 pushed 2 commits to main" in report
-    assert "commit: abc1234 Fix parser crash" in report
-    assert "commit: def6789 Add regression test" in report
-    assert "#### Pull requests" in report
-    assert "- 10:00:00 opened PR #42: Add activity renderer" in report
-    assert "#### Issue and PR comments" in report
-    assert "- 11:00:00 commented on issue #9: Parser crashes on empty input" in report
-    assert "comment: I think this needs one more test case." in report
-    assert "#### Pull request reviews" in report
-    assert "- 12:00:00 submitted approved review on PR #42: Add activity renderer" in report
-    assert "review: looks good to me" in report
-    assert "#### Review comments" in report
-    assert "- 12:30:00 left review comment on PR #42: Add activity renderer" in report
-    assert "path: src/app.py" in report
+    assert "#### " not in report
+    assert (
+        "- [08:30:00](https://github.com/acme/app/tree/feature/demo) "
+        "created branch feature/demo" in report
+    )
+    assert (
+        "- [09:00:00](https://github.com/acme/app/compare/aaaa1111...bbbb2222) "
+        "pushed 2 commits to main" in report
+    )
+    assert (
+        "  - [abc1234](https://github.com/acme/app/commit/abc12345) Fix parser crash"
+        in report
+    )
+    assert (
+        "  - [def6789](https://github.com/acme/app/commit/def67890) Add regression test"
+        in report
+    )
+    assert (
+        "- [10:00:00](https://github.com/acme/app/pull/42) opened PR #42: Add activity renderer"
+        in report
+    )
+    assert (
+        "- [11:00:00](https://github.com/acme/app/issues/9#issuecomment-1) "
+        "commented on issue #9: I think this needs one more test case."
+        in report
+    )
+    assert (
+        "- [12:00:00](https://github.com/acme/app/pull/42#pullrequestreview-7) "
+        "submitted approved review on PR #42: looks good to me"
+        in report
+    )
+    assert (
+        "- [12:30:00](https://github.com/acme/app/pull/42#discussion_r1) "
+        "left review comment on PR #42 in src/app.py: can we extract this into a helper?"
+        in report
+    )
     assert "### acme/lib" in report
-    assert "#### Stars" in report
-    assert "- 13:30:00 starred this repository" in report
+    assert (
+        "- [13:30:00](https://github.com/acme/lib) starred the repository "
+        "[acme/lib](https://github.com/acme/lib)"
+        in report
+    )
 
 
 def test_render_activity_report_uses_timezone_for_local_day() -> None:
@@ -227,8 +249,11 @@ def test_render_activity_report_uses_timezone_for_local_day() -> None:
             event_type="PushEvent",
             repo="acme/app",
             occurred_at=datetime(2026, 3, 11, 1, 15, tzinfo=UTC),
+            url="https://github.com/acme/app/compare/aaaa1111...bbbb2222",
             summary="pushed 1 commit to main",
-            details=("commit: abc1234 Fix parser crash",),
+            details=(
+                "[abc1234](https://github.com/acme/app/commit/abc12345) Fix parser crash",
+            ),
         )
     ]
 
@@ -240,7 +265,10 @@ def test_render_activity_report_uses_timezone_for_local_day() -> None:
     )
 
     assert "## 2026-03-10" in report
-    assert "- 21:15:00 pushed 1 commit to main" in report
+    assert (
+        "- [21:15:00](https://github.com/acme/app/compare/aaaa1111...bbbb2222) "
+        "pushed 1 commit to main" in report
+    )
 
 
 def test_static_client_satisfies_protocol() -> None:

@@ -24,26 +24,6 @@ logger = logging.getLogger(__name__)
 STDOUT_CONSOLE = Console()
 STDERR_CONSOLE = Console(stderr=True)
 
-EVENT_TYPE_LABELS: dict[str, str] = {
-    "CreateEvent": "Created refs",
-    "PushEvent": "Pushes",
-    "PullRequestEvent": "Pull requests",
-    "IssueCommentEvent": "Issue and PR comments",
-    "PullRequestReviewEvent": "Pull request reviews",
-    "PullRequestReviewCommentEvent": "Review comments",
-    "WatchEvent": "Stars",
-}
-
-EVENT_TYPE_ORDER: dict[str, int] = {
-    "CreateEvent": 10,
-    "PushEvent": 20,
-    "PullRequestEvent": 30,
-    "IssueCommentEvent": 40,
-    "PullRequestReviewEvent": 50,
-    "PullRequestReviewCommentEvent": 60,
-    "WatchEvent": 70,
-}
-
 
 class GitHubActivityError(Exception):
     """Raised when GitHub activity collection fails."""
@@ -87,6 +67,7 @@ class ActivityRecord:
     event_type: str
     repo: str
     occurred_at: datetime
+    url: str | None
     summary: str
     details: tuple[str, ...] = ()
 
@@ -182,6 +163,7 @@ def show_spinner(message: str) -> Generator[None, None, None]:
         yield
 
 
+
 def setup_logging(verbose: bool, quiet: bool) -> None:
     """Configure logging for the standalone script."""
     level = logging.INFO
@@ -197,12 +179,14 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
     )
 
 
+
 def get_default_timezone_name() -> str:
     """Return the local timezone name when available."""
     local_tz = datetime.now().astimezone().tzinfo
     if isinstance(local_tz, ZoneInfo):
         return local_tz.key
     return "UTC"
+
 
 
 def get_timezone(name: str) -> tzinfo:
@@ -215,6 +199,7 @@ def get_timezone(name: str) -> tzinfo:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError as exc:
         raise GitHubActivityError(f"unknown timezone: {name}") from exc
+
 
 
 def fetch_user_events(
@@ -235,6 +220,7 @@ def fetch_user_events(
     return events
 
 
+
 def collect_activity_records(
     events: Sequence[GitHubEventModel],
     client: GitHubTimelineClient,
@@ -242,6 +228,7 @@ def collect_activity_records(
 ) -> list[ActivityRecord]:
     """Normalize raw GitHub events into renderable records."""
     return [build_activity_record(event=event, client=client, enrich=enrich) for event in events]
+
 
 
 def build_activity_record(
@@ -269,8 +256,10 @@ def build_activity_record(
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        summary=f"{event.type}",
+        url=get_repo_url(event.repo.name),
+        summary=event.type,
     )
+
 
 
 def build_push_record(
@@ -281,6 +270,8 @@ def build_push_record(
     """Render a push event, optionally expanding commit details."""
     payload = event.payload
     branch = get_branch_name(payload.get("ref"))
+    repo_url = get_repo_url(event.repo.name)
+    url = repo_url
     summary = f"pushed to {branch}"
     details: list[str] = []
 
@@ -294,30 +285,32 @@ def build_push_record(
             logger.warning("compare failed for %s: %s", event.repo.name, exc)
         else:
             commits = compare.get("commits")
+            compare_url = get_str(compare.get("html_url"))
+            if compare_url:
+                url = compare_url
             if isinstance(commits, list):
                 count = len(commits)
                 noun = "commit" if count == 1 else "commits"
                 summary = f"pushed {count} {noun} to {branch}"
-                compare_url = compare.get("html_url")
-                if isinstance(compare_url, str) and compare_url:
-                    details.append(f"compare: {compare_url}")
                 for commit in commits:
                     if not isinstance(commit, dict):
                         continue
-                    details.append(f"commit: {render_commit_detail(commit)}")
+                    details.append(render_commit_detail(commit))
 
     if summary == f"pushed to {branch}" and isinstance(head, str) and head:
-        short_head = head[:7]
-        summary = f"pushed to {branch} ({short_head})"
+        summary = f"pushed to {branch} ({head[:7]})"
+        url = get_commit_url(event.repo.name, head)
 
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
+        url=url,
         summary=summary,
         details=tuple(details),
     )
+
 
 
 def build_pull_request_record(
@@ -339,21 +332,24 @@ def build_pull_request_record(
             number=number,
         )
 
+    if number is not None and url is None:
+        url = get_pull_request_url(event.repo.name, number)
+
     summary = f"{action} pull request"
     if number is not None:
         summary = f"{action} PR #{number}"
     if title:
         summary = f"{summary}: {title}"
 
-    details = build_url_details(url)
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
+        url=url,
         summary=summary,
-        details=details,
     )
+
 
 
 def build_issue_comment_record(event: GitHubEventModel) -> ActivityRecord:
@@ -362,10 +358,9 @@ def build_issue_comment_record(event: GitHubEventModel) -> ActivityRecord:
     comment = payload.get("comment", {})
     issue = payload.get("issue", {})
     number = get_number(issue.get("number"))
-    title = get_str(issue.get("title"))
     issue_url = get_str(issue.get("html_url"))
     comment_url = get_str(comment.get("html_url"))
-    body = get_str(comment.get("body"))
+    body = compact_text(get_str(comment.get("body")) or "commented")
 
     subject = "item"
     if issue_url and "/pull/" in issue_url:
@@ -374,24 +369,19 @@ def build_issue_comment_record(event: GitHubEventModel) -> ActivityRecord:
         subject = "issue"
 
     if number is None:
-        summary = f"commented on {subject}"
+        summary = f"commented on {subject}: {body}"
     else:
-        summary = f"commented on {subject} #{number}"
-    if title:
-        summary = f"{summary}: {title}"
-
-    details = list(build_url_details(comment_url))
-    if body:
-        details.append(f"comment: {compact_text(body)}")
+        summary = f"commented on {subject} #{number}: {body}"
 
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
+        url=comment_url,
         summary=summary,
-        details=tuple(details),
     )
+
 
 
 def build_pull_request_review_record(
@@ -411,27 +401,30 @@ def build_pull_request_review_record(
             number=number,
         )
 
-    state = get_str(review.get("state")) or str(payload.get("action", "reviewed"))
-    state = state.lower()
-    summary = f"submitted {state} review"
-    if number is not None:
-        summary = f"submitted {state} review on PR #{number}"
-    if title:
-        summary = f"{summary}: {title}"
-
-    details = list(build_url_details(get_str(review.get("html_url"))))
+    state = (get_str(review.get("state")) or str(payload.get("action", "reviewed"))).lower()
     body = get_str(review.get("body"))
     if body:
-        details.append(f"review: {compact_text(body)}")
+        suffix = compact_text(body)
+    elif title:
+        suffix = title
+    else:
+        suffix = "review"
+
+    summary = f"submitted {state} review"
+    if number is not None:
+        summary = f"submitted {state} review on PR #{number}: {suffix}"
+    else:
+        summary = f"submitted {state} review: {suffix}"
 
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
+        url=get_str(review.get("html_url")),
         summary=summary,
-        details=tuple(details),
     )
+
 
 
 def build_pull_request_review_comment_record(
@@ -451,28 +444,29 @@ def build_pull_request_review_comment_record(
             number=number,
         )
 
-    summary = "left review comment"
-    if number is not None:
-        summary = f"left review comment on PR #{number}"
-    if title:
-        summary = f"{summary}: {title}"
-
-    details = list(build_url_details(get_str(comment.get("html_url"))))
+    body = compact_text(get_str(comment.get("body")) or "review comment")
     path = get_str(comment.get("path"))
+    subject = "left review comment on pull request"
+    if number is not None:
+        subject = f"left review comment on PR #{number}"
     if path:
-        details.append(f"path: {path}")
-    body = get_str(comment.get("body"))
-    if body:
-        details.append(f"comment: {compact_text(body)}")
+        summary = f"{subject} in {path}: {body}"
+    elif title:
+        summary = f"{subject}: {title}"
+    else:
+        summary = f"{subject}: {body}"
+    if path is None and body != "review comment" and title is not None:
+        summary = f"{subject}: {body}"
 
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
+        url=get_str(comment.get("html_url")),
         summary=summary,
-        details=tuple(details),
     )
+
 
 
 def build_create_record(event: GitHubEventModel) -> ActivityRecord:
@@ -480,32 +474,30 @@ def build_create_record(event: GitHubEventModel) -> ActivityRecord:
     payload = event.payload
     ref_type = get_str(payload.get("ref_type")) or "ref"
     ref = get_str(payload.get("ref")) or "unknown"
-    summary = f"created {ref_type} {ref}"
-
-    details: list[str] = []
-    full_ref = get_str(payload.get("full_ref"))
-    if full_ref:
-        details.append(f"ref: {full_ref}")
-
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        summary=summary,
-        details=tuple(details),
+        url=get_ref_url(event.repo.name, ref_type, ref),
+        summary=f"created {ref_type} {ref}",
     )
+
 
 
 def build_watch_record(event: GitHubEventModel) -> ActivityRecord:
     """Render a repository star event."""
+    repo_url = get_repo_url(event.repo.name)
+    summary = f"starred the repository {render_link(event.repo.name, repo_url)}"
     return ActivityRecord(
         event_id=event.id,
         event_type=event.type,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        summary="starred this repository",
+        url=repo_url,
+        summary=summary,
     )
+
 
 
 def get_pull_request_metadata(
@@ -524,9 +516,8 @@ def get_pull_request_metadata(
     except GitHubActivityError as exc:
         logger.warning("pull request lookup failed for %s#%s: %s", repo_name, number, exc)
         return None, None
-    title = get_str(data.get("title"))
-    url = get_str(data.get("html_url"))
-    return title, url
+    return get_str(data.get("title")), get_str(data.get("html_url"))
+
 
 
 def split_repo_name(name: str) -> tuple[str, str]:
@@ -541,24 +532,15 @@ def split_repo_name(name: str) -> tuple[str, str]:
     return owner, repo
 
 
+
 def render_commit_detail(commit: dict[str, Any]) -> str:
     """Render one commit from a compare response."""
     sha = get_str(commit.get("sha")) or "unknown"
-    short_sha = sha[:7]
+    url = get_str(commit.get("html_url")) or ""
     message = commit.get("commit", {}).get("message", "")
     headline = compact_text(get_str(message) or "")
-    url = get_str(commit.get("html_url"))
-    detail = f"{short_sha} {headline}".strip()
-    if url:
-        detail = f"{detail} ({url})"
-    return detail
+    return f"{render_link(sha[:7], url)} {headline}".strip()
 
-
-def build_url_details(url: str | None) -> tuple[str, ...]:
-    """Return a detail line for a URL when present."""
-    if not url:
-        return ()
-    return (f"url: {url}",)
 
 
 def get_branch_name(ref: Any) -> str:
@@ -568,6 +550,7 @@ def get_branch_name(ref: Any) -> str:
     if text.startswith(prefix):
         return text[len(prefix) :]
     return text
+
 
 
 def get_event_number(number: Any, pull_request: Any) -> int | None:
@@ -580,9 +563,11 @@ def get_event_number(number: Any, pull_request: Any) -> int | None:
     return None
 
 
+
 def get_number(value: Any) -> int | None:
     """Return an integer when the input is an int."""
     return value if isinstance(value, int) else None
+
 
 
 def get_str(value: Any) -> str | None:
@@ -592,12 +577,51 @@ def get_str(value: Any) -> str | None:
     return None
 
 
-def compact_text(text: str, limit: int = 100) -> str:
+
+def compact_text(text: str, limit: int = 80) -> str:
     """Collapse whitespace and truncate long text snippets."""
     collapsed = " ".join(text.split())
     if len(collapsed) <= limit:
         return collapsed
     return f"{collapsed[: limit - 1].rstrip()}…"
+
+
+
+def get_repo_url(repo_name: str) -> str:
+    """Return the GitHub HTML URL for a repository."""
+    return f"https://github.com/{repo_name}"
+
+
+
+def get_pull_request_url(repo_name: str, number: int) -> str:
+    """Return the GitHub HTML URL for a pull request."""
+    return f"{get_repo_url(repo_name)}/pull/{number}"
+
+
+
+def get_commit_url(repo_name: str, sha: str) -> str:
+    """Return the GitHub HTML URL for a commit."""
+    return f"{get_repo_url(repo_name)}/commit/{sha}"
+
+
+
+def get_ref_url(repo_name: str, ref_type: str, ref: str) -> str:
+    """Return the best HTML URL for a created ref."""
+    repo_url = get_repo_url(repo_name)
+    if ref_type == "branch":
+        return f"{repo_url}/tree/{ref}"
+    if ref_type == "tag":
+        return f"{repo_url}/releases/tag/{ref}"
+    return repo_url
+
+
+
+def render_link(text: str, url: str | None) -> str:
+    """Render a markdown link when a URL is available."""
+    if not url:
+        return text
+    return f"[{text}]({url})"
+
 
 
 def render_activity_report(
@@ -606,17 +630,14 @@ def render_activity_report(
     timezone: tzinfo,
     fetched_at: datetime | None = None,
 ) -> str:
-    """Render activity records as a markdown-like grouped report."""
+    """Render activity records as a grouped markdown report."""
     generated_at = fetched_at or datetime.now(tz=UTC)
-    grouped: dict[str, dict[str, dict[str, list[ActivityRecord]]]] = defaultdict(
-        lambda: defaultdict(lambda: defaultdict(list))
-    )
+    grouped: dict[str, dict[str, list[ActivityRecord]]] = defaultdict(lambda: defaultdict(list))
 
     for record in records:
         local_dt = record.occurred_at.astimezone(timezone)
         date_key = local_dt.strftime("%Y-%m-%d")
-        label = EVENT_TYPE_LABELS.get(record.event_type, record.event_type)
-        grouped[date_key][record.repo][label].append(record)
+        grouped[date_key][record.repo].append(record)
 
     lines: list[str] = [
         f"# GitHub activity for {username}",
@@ -632,39 +653,20 @@ def render_activity_report(
         for repo_name in sorted(grouped[date_key].keys()):
             lines.append("")
             lines.append(f"### {repo_name}")
-            type_groups = grouped[date_key][repo_name]
-            ordered_labels = sorted(
-                type_groups.keys(),
-                key=lambda label: (
-                    EVENT_TYPE_ORDER.get(get_event_type_for_label(label), 999),
-                    label,
-                ),
+            events = sorted(
+                grouped[date_key][repo_name],
+                key=lambda record: (record.occurred_at.astimezone(timezone), record.event_id),
             )
-            for label in ordered_labels:
-                lines.append("")
-                lines.append(f"#### {label}")
-                events = sorted(
-                    type_groups[label],
-                    key=lambda record: (
-                        record.occurred_at.astimezone(timezone),
-                        record.event_id,
-                    ),
+            for record in events:
+                local_dt = record.occurred_at.astimezone(timezone)
+                lines.append(
+                    f"- {render_link(local_dt.strftime('%H:%M:%S'), record.url)} {record.summary}"
                 )
-                for record in events:
-                    local_dt = record.occurred_at.astimezone(timezone)
-                    lines.append(f"- {local_dt.strftime('%H:%M:%S')} {record.summary}")
-                    for detail in record.details:
-                        lines.append(f"  - {detail}")
+                for detail in record.details:
+                    lines.append(f"  - {detail}")
 
     return "\n".join(lines) + "\n"
 
-
-def get_event_type_for_label(label: str) -> str:
-    """Recover the event type key for a rendered label."""
-    for event_type, mapped_label in EVENT_TYPE_LABELS.items():
-        if mapped_label == label:
-            return event_type
-    return label
 
 
 def get_timezone_label(timezone: tzinfo) -> str:
@@ -674,6 +676,7 @@ def get_timezone_label(timezone: tzinfo) -> str:
     return str(timezone)
 
 
+
 def output_report(console: Console, report: str, output_path: Path | None) -> None:
     """Write the rendered report to stdout or a file."""
     if output_path is not None:
@@ -681,6 +684,7 @@ def output_report(console: Console, report: str, output_path: Path | None) -> No
         output_path.write_text(report)
         return
     console.file.write(report)
+
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -722,6 +726,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--quiet", action="store_true", help="Only show errors on stderr")
     return parser.parse_args(argv)
+
 
 
 def main(argv: Sequence[str] | None = None) -> int:

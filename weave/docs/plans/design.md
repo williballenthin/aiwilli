@@ -6,7 +6,7 @@ Last updated: 2026-03-11
 1. Module layout
 
 - `src/weave/app.py`: all runtime logic for now.
-- `src/weave/github_activity.py`: standalone GitHub activity timeline prototype; fetches recent user events via `gh`, expands pull requests and pushes, normalizes them, and renders a grouped markdown-like report.
+- `src/weave/github_activity.py`: standalone GitHub activity timeline prototype; fetches recent user events via `gh`, expands pull requests and pushes, normalizes them, and renders a grouped markdown report organized by day and repository.
 - `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and agent session tests.
 - `tests/test_github_activity.py`: GitHub activity normalization and rendering tests.
 - `scripts/setup_google_credentials.py`: interactive OAuth setup for Google Calendar/Drive.
@@ -29,6 +29,15 @@ Last updated: 2026-03-11
 
 - `get_date_folder(output_dir, received)`: module-level function that creates `YYYY/MM/DD` nested directory with `_attachments` subfolder. Used by all handlers and the calendar scraper.
 - `sanitize_filename(name)`: strips filesystem-unsafe characters from names.
+
+3.1 GitHub activity prototype rendering
+
+- `scripts/render_github_activity.py` is intentionally standalone and does not write vault notes.
+- output grouping is `date -> repository -> chronological events`; there are no per-type subheadings inside a repository section.
+- most events render as a single markdown bullet line whose timestamp is also the primary link target, e.g. `[10:28:20](...) pushed 4 commits to main`.
+- push events may include nested commit bullets under the top-level push line, each rendered as `[sha](commit-url) headline`.
+- issue comments, review submissions, and review comments render the comment/review body snippet inline on the main bullet line.
+- star events render both the timestamp link and the repository name link to the repository HTML URL.
 
 4. Runtime flow
 
