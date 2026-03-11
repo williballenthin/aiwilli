@@ -50,7 +50,7 @@ Last updated: 2026-03-11
 7. Dispatch to handler by `handler_key`.
 8. For each created sink note path, append a timestamped embed line to that day's daily note.
 9. If handler result says handled and daily-note updates succeeded, mark message as seen.
-10. In daemon mode, enter IMAP IDLE and repeat on notifications; a background maintenance thread handles calendar scraping, agent session scraping, and once-per-day daily-note sync.
+10. In daemon mode, enter IMAP IDLE and repeat on notifications; separate daemon threads handle calendar scraping, agent session scraping, and once-per-day daily-note sync.
 
 5. Handler implementations
 
@@ -147,11 +147,11 @@ Last updated: 2026-03-11
 8. Threading model
 
 - `WeaveService` owns a `threading.Event` (`_shutdown`) for coordinated shutdown.
-- In daemon mode, a maintenance thread runs `run_background_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`.
-- Each maintenance iteration runs calendar scrape, agent session scrape, and a once-per-day `run_daily_note_sync()` pass.
-- `run_daily_note_sync()` uses `WeaveService._last_daily_note_sync_on` to ensure at most one sync pass per local calendar day.
-- The IMAP loop runs on the main thread.
-- `DailyNoteWriter` uses a `threading.RLock` across summary backfill and daily-note writes since both threads can touch the same notes.
+- In daemon mode, the IMAP loop runs on the main thread.
+- A dedicated calendar thread runs `run_calendar_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`.
+- A dedicated agent-session thread runs `run_agent_session_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`. This avoids long agent-session imports blocking calendar scraping.
+- A dedicated daily-note thread runs `run_daily_note_sync_loop()` every 5 minutes; `run_daily_note_sync()` uses `WeaveService._last_daily_note_sync_on` to ensure at most one sync pass per local calendar day.
+- `DailyNoteWriter` uses a `threading.RLock` across summary backfill and daily-note writes since IMAP, calendar, and agent-session activity can all touch the same daily notes.
 - Signal handlers (SIGINT, SIGTERM) set `_shutdown` before exiting.
 - In `--once` mode, calendar scrape, agent session scrape, and one daily-note sync pass run synchronously after the IMAP batch.
 

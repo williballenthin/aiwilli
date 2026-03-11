@@ -14,7 +14,9 @@ Command:
 
 Behavior:
 - `--once` processes one unread batch plus one calendar scrape plus one agent session scan, runs one daily-note sync pass, then exits.
-- default mode stays connected and loops with IMAP IDLE; a background maintenance thread runs immediately at startup and then every 5 minutes for calendar scraping, agent session scraping, and once-per-day daily-note sync.
+- default mode stays connected and loops with IMAP IDLE; background maintenance starts immediately at startup.
+- calendar scraping, agent session scraping, and daily-note sync each run in their own daemon thread.
+- calendar scraping and agent session scraping repeat every 5 minutes while the process is running; daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
 - `<vault_root>` must exist.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
 - calendar scraping is always enabled.

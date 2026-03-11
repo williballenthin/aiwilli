@@ -1520,6 +1520,7 @@ class AgentSessionScraper:
         results: list[AgentSessionScrapeResult] = []
         now = datetime.now(tz=UTC)
         seen_sources: set[str] = set()
+        manifest_dirty = False
 
         for jsonl_path in self._find_session_files():
             source_key = str(jsonl_path.resolve())
@@ -1541,7 +1542,7 @@ class AgentSessionScraper:
                 report.skipped_empty += 1
                 continue
 
-            status, note_result = result
+            status, note_result, manifest_changed = result
             if status == "imported":
                 report.imported += 1
             elif status == "updated":
@@ -1555,11 +1556,18 @@ class AgentSessionScraper:
 
             if note_result is not None:
                 results.append(note_result)
+            if manifest_changed:
+                manifest_dirty = True
+            if manifest_dirty:
+                self._save_manifest(manifest_path, manifest)
+                manifest_dirty = False
 
         stale_sources = set(manifest.sessions) - seen_sources
         for source_key in stale_sources:
             del manifest.sessions[source_key]
-        self._save_manifest(manifest_path, manifest)
+            manifest_dirty = True
+        if manifest_dirty or not manifest_path.exists():
+            self._save_manifest(manifest_path, manifest)
         return AgentSessionScrapeRun(report=report, results=results)
 
     def _find_session_files(self) -> list[Path]:
@@ -1603,7 +1611,7 @@ class AgentSessionScraper:
         source_key: str,
         manifest: AgentSessionManifest,
         now: datetime,
-    ) -> tuple[str, AgentSessionScrapeResult | None] | None:
+    ) -> tuple[str, AgentSessionScrapeResult | None, bool] | None:
         stat = jsonl_path.stat()
         source_mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
         source_mtime_ns = stat.st_mtime_ns
@@ -1612,10 +1620,10 @@ class AgentSessionScraper:
         sink_exists = sink_path.exists() if sink_path else False
 
         if entry and sink_exists and not self._is_mutable(source_mtime, now):
-            return ("skipped_immutable", None)
+            return ("skipped_immutable", None, False)
 
         if entry and sink_exists and entry.source_mtime_ns == source_mtime_ns:
-            return ("unchanged", None)
+            return ("unchanged", None, False)
 
         session_sha256 = get_session_sha256(jsonl_path)
         if entry and sink_exists and entry.session_sha256 == session_sha256:
@@ -1625,7 +1633,7 @@ class AgentSessionScraper:
                 sink_path=entry.sink_path,
                 source_mtime_ns=source_mtime_ns,
             )
-            return ("unchanged", None)
+            return ("unchanged", None, True)
 
         session = parse_session(jsonl_path)
         session.session_id = session.session_id or get_session_id(jsonl_path)
@@ -1665,6 +1673,7 @@ class AgentSessionScraper:
                 entry_type="agent session",
                 action=action,
             ),
+            True,
         )
 
 
@@ -1932,6 +1941,7 @@ class WeaveService:
             output_dir=output_dir,
             summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_SUMMARY_PROMPT),
         )
+        logger.info("agent session scraper enabled: %s", config.agent_sessions_dir)
 
     def _init_calendar_scraper(self, config: WeaveConfig) -> None:
         if not GOOGLE_TOKEN_PATH.exists():
@@ -1988,6 +1998,18 @@ class WeaveService:
         except Exception as exc:
             logger.warning("agent session scrape failed: %s", exc)
             return 0
+        logger.info(
+            "agent session sync: scanned=%d imported=%d updated=%d "
+            "unchanged=%d skipped_immutable=%d skipped_empty=%d failed=%d",
+            run.report.scanned,
+            run.report.imported,
+            run.report.updated,
+            run.report.unchanged,
+            run.report.skipped_immutable,
+            run.report.skipped_empty,
+            run.report.failed,
+        )
+        print(run.report.model_dump_json())
         for result in run.results:
             self.daily_note_writer.append_note_entry(
                 received=result.received,
@@ -2008,14 +2030,22 @@ class WeaveService:
         self._last_daily_note_sync_on = current_date
         return count
 
-    def run_background_loop(self, interval: int = 300) -> None:
+    def run_calendar_loop(self, interval: int = 300) -> None:
         while not self._shutdown.is_set():
             count = self.run_calendar_scrape()
             if count > 0:
                 logger.info("calendar scrape: %d note(s)", count)
+            self._shutdown.wait(timeout=interval)
+
+    def run_agent_session_loop(self, interval: int = 300) -> None:
+        while not self._shutdown.is_set():
             count = self.run_agent_session_scrape()
             if count > 0:
                 logger.info("agent session scrape: %d note(s)", count)
+            self._shutdown.wait(timeout=interval)
+
+    def run_daily_note_sync_loop(self, interval: int = 300) -> None:
+        while not self._shutdown.is_set():
             count = self.run_daily_note_sync()
             if count > 0:
                 logger.info("daily note sync: %d daily note(s)", count)
@@ -2071,13 +2101,28 @@ class WeaveService:
 
     def run_daemon(self) -> None:
         self.register_signal_handlers()
-        maintenance_thread = threading.Thread(
-            target=self.run_background_loop,
+        calendar_thread = threading.Thread(
+            target=self.run_calendar_loop,
             daemon=True,
-            name="maintenance",
+            name="calendar-maintenance",
         )
-        maintenance_thread.start()
-        logger.info("started maintenance thread")
+        calendar_thread.start()
+        logger.info("started calendar maintenance thread")
+        if self.agent_session_scraper is not None:
+            agent_thread = threading.Thread(
+                target=self.run_agent_session_loop,
+                daemon=True,
+                name="agent-session-maintenance",
+            )
+            agent_thread.start()
+            logger.info("started agent session maintenance thread")
+        daily_note_thread = threading.Thread(
+            target=self.run_daily_note_sync_loop,
+            daemon=True,
+            name="daily-note-maintenance",
+        )
+        daily_note_thread.start()
+        logger.info("started daily note maintenance thread")
         idle_chunk = min(self.config.poll_interval_seconds, 30)
         while not self._shutdown.is_set():
             try:
