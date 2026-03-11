@@ -17,7 +17,7 @@ Last updated: 2026-03-11
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source`, `calendar_enabled`, and `agent_sessions_dir` fields.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source` and `agent_sessions_dir` fields.
 - `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
 - `get_variant_address(base_email, variant)`: derives `local+variant@domain` from `WEAVE_BASE_EMAIL`.
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.

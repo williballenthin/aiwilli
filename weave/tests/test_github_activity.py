@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from weave.github_activity import (
+    ActivityRecord,
+    GitHubEventModel,
+    GitHubTimelineClient,
+    collect_activity_records,
+    render_activity_report,
+)
+
+
+class StaticGitHubTimelineClient:
+    def __init__(
+        self,
+        pull_requests: dict[tuple[str, str, int], dict[str, Any]] | None = None,
+        compares: dict[tuple[str, str, str, str], dict[str, Any]] | None = None,
+    ) -> None:
+        self.pull_requests = pull_requests or {}
+        self.compares = compares or {}
+
+    def get_authenticated_login(self) -> str:
+        return "tester"
+
+    def get_user_events(self, username: str, page: int, per_page: int) -> list[dict[str, Any]]:
+        raise AssertionError("not used in unit tests")
+
+    def get_pull_request(self, owner: str, repo: str, number: int) -> dict[str, Any]:
+        return self.pull_requests[(owner, repo, number)]
+
+    def compare_commits(self, owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
+        return self.compares[(owner, repo, base, head)]
+
+
+def build_event(
+    *,
+    event_id: str,
+    event_type: str,
+    repo: str,
+    created_at: str,
+    payload: dict[str, Any],
+) -> GitHubEventModel:
+    return GitHubEventModel.model_validate(
+        {
+            "id": event_id,
+            "type": event_type,
+            "actor": {"login": "tester"},
+            "repo": {"name": repo},
+            "public": True,
+            "created_at": created_at,
+            "payload": payload,
+        }
+    )
+
+
+def test_render_activity_report_formats_supported_events() -> None:
+    events = [
+        build_event(
+            event_id="1",
+            event_type="CreateEvent",
+            repo="acme/app",
+            created_at="2026-03-11T08:30:00Z",
+            payload={
+                "ref_type": "branch",
+                "ref": "feature/demo",
+                "full_ref": "refs/heads/feature/demo",
+            },
+        ),
+        build_event(
+            event_id="2",
+            event_type="PushEvent",
+            repo="acme/app",
+            created_at="2026-03-11T09:00:00Z",
+            payload={
+                "before": "aaaa1111",
+                "head": "bbbb2222",
+                "ref": "refs/heads/main",
+            },
+        ),
+        build_event(
+            event_id="3",
+            event_type="PullRequestEvent",
+            repo="acme/app",
+            created_at="2026-03-11T10:00:00Z",
+            payload={
+                "action": "opened",
+                "number": 42,
+                "pull_request": {
+                    "number": 42,
+                    "url": "https://api.github.com/repos/acme/app/pulls/42",
+                    "head": {"ref": "feature/demo", "sha": "bbbb2222"},
+                    "base": {"ref": "main", "sha": "aaaa1111"},
+                },
+            },
+        ),
+        build_event(
+            event_id="4",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-11T11:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-1",
+                    "body": "I think this needs one more test case.",
+                },
+                "issue": {
+                    "number": 9,
+                    "title": "Parser crashes on empty input",
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        ),
+        build_event(
+            event_id="5",
+            event_type="PullRequestReviewEvent",
+            repo="acme/app",
+            created_at="2026-03-11T12:00:00Z",
+            payload={
+                "action": "created",
+                "pull_request": {"number": 42},
+                "review": {
+                    "state": "approved",
+                    "body": "looks good to me",
+                    "html_url": "https://github.com/acme/app/pull/42#pullrequestreview-7",
+                },
+            },
+        ),
+        build_event(
+            event_id="6",
+            event_type="PullRequestReviewCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-11T12:30:00Z",
+            payload={
+                "action": "created",
+                "pull_request": {"number": 42},
+                "comment": {
+                    "html_url": "https://github.com/acme/app/pull/42#discussion_r1",
+                    "body": "can we extract this into a helper?",
+                    "path": "src/app.py",
+                },
+            },
+        ),
+        build_event(
+            event_id="7",
+            event_type="WatchEvent",
+            repo="acme/lib",
+            created_at="2026-03-11T13:30:00Z",
+            payload={"action": "started"},
+        ),
+    ]
+    client = StaticGitHubTimelineClient(
+        pull_requests={
+            (
+                "acme",
+                "app",
+                42,
+            ): {
+                "title": "Add activity renderer",
+                "html_url": "https://github.com/acme/app/pull/42",
+            },
+        },
+        compares={
+            (
+                "acme",
+                "app",
+                "aaaa1111",
+                "bbbb2222",
+            ): {
+                "html_url": "https://github.com/acme/app/compare/aaaa1111...bbbb2222",
+                "commits": [
+                    {
+                        "sha": "abc12345",
+                        "html_url": "https://github.com/acme/app/commit/abc12345",
+                        "commit": {"message": "Fix parser crash\n\nExtra detail"},
+                    },
+                    {
+                        "sha": "def67890",
+                        "html_url": "https://github.com/acme/app/commit/def67890",
+                        "commit": {"message": "Add regression test"},
+                    },
+                ],
+            },
+        },
+    )
+
+    records = collect_activity_records(events=events, client=client, enrich=True)
+    report = render_activity_report(
+        records=records,
+        username="tester",
+        timezone=ZoneInfo("UTC"),
+        fetched_at=datetime(2026, 3, 11, 14, 0, tzinfo=UTC),
+    )
+
+    assert "# GitHub activity for tester" in report
+    assert "## 2026-03-11" in report
+    assert "### acme/app" in report
+    assert "#### Created refs" in report
+    assert "- 08:30:00 created branch feature/demo" in report
+    assert "#### Pushes" in report
+    assert "- 09:00:00 pushed 2 commits to main" in report
+    assert "commit: abc1234 Fix parser crash" in report
+    assert "commit: def6789 Add regression test" in report
+    assert "#### Pull requests" in report
+    assert "- 10:00:00 opened PR #42: Add activity renderer" in report
+    assert "#### Issue and PR comments" in report
+    assert "- 11:00:00 commented on issue #9: Parser crashes on empty input" in report
+    assert "comment: I think this needs one more test case." in report
+    assert "#### Pull request reviews" in report
+    assert "- 12:00:00 submitted approved review on PR #42: Add activity renderer" in report
+    assert "review: looks good to me" in report
+    assert "#### Review comments" in report
+    assert "- 12:30:00 left review comment on PR #42: Add activity renderer" in report
+    assert "path: src/app.py" in report
+    assert "### acme/lib" in report
+    assert "#### Stars" in report
+    assert "- 13:30:00 starred this repository" in report
+
+
+def test_render_activity_report_uses_timezone_for_local_day() -> None:
+    records = [
+        ActivityRecord(
+            event_id="1",
+            event_type="PushEvent",
+            repo="acme/app",
+            occurred_at=datetime(2026, 3, 11, 1, 15, tzinfo=UTC),
+            summary="pushed 1 commit to main",
+            details=("commit: abc1234 Fix parser crash",),
+        )
+    ]
+
+    report = render_activity_report(
+        records=records,
+        username="tester",
+        timezone=ZoneInfo("America/New_York"),
+        fetched_at=datetime(2026, 3, 11, 2, 0, tzinfo=UTC),
+    )
+
+    assert "## 2026-03-10" in report
+    assert "- 21:15:00 pushed 1 commit to main" in report
+
+
+def test_static_client_satisfies_protocol() -> None:
+    client: GitHubTimelineClient = StaticGitHubTimelineClient()
+    assert client.get_authenticated_login() == "tester"
