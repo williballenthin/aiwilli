@@ -153,6 +153,7 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - event lines are markdown bullets whose timestamp is the primary link target.
 - push events are commit-centric when compare expansion succeeds: each pushed commit becomes its own bullet line, with the timestamp linked to the compare view and the commit SHA linked to the commit.
 - if compare expansion fails, Weave falls back to a single push line.
+- issue lifecycle events render as issue-centric lines, linking to the issue and including the action, issue number, and title. Label changes also include the label name.
 - comment, review, and review-comment lines include compact inline body snippets.
 - Weave never imports the current local day.
 - Weave only imports a completed day once that day has passed a 6-hour stabilization window in the configured local timezone. Concretely, a day becomes eligible at `06:00` on the following local day.

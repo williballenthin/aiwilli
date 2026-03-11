@@ -38,6 +38,7 @@ Last updated: 2026-03-11
 - most events render as a single markdown bullet line whose timestamp is also the primary link target.
 - push expansion is commit-centric: when compare data is available, each pushed commit becomes its own top-level event line and the timestamp links to the compare view while the commit SHA in the summary links to the individual commit.
 - if compare expansion is unavailable, the renderer falls back to a single push line.
+- issue lifecycle events render a single line linking to the issue, including the action, issue number, and title; label changes also include the label name.
 - issue comments, review submissions, and review comments render compact body snippets inline on the main bullet line.
 - leading quote markers are stripped from comment snippets and snippet limits are intentionally short to keep the report scan-friendly.
 - star events render both the timestamp link and the repository name link to the repository HTML URL.

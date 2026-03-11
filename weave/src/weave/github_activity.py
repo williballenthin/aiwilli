@@ -26,6 +26,7 @@ STDERR_CONSOLE = Console(stderr=True)
 
 COMMENT_SNIPPET_LIMIT = 68
 COMMIT_SNIPPET_LIMIT = 72
+ISSUE_TITLE_LIMIT = 72
 
 
 class GitHubActivityError(Exception):
@@ -245,6 +246,8 @@ def build_activity_records(
         return build_push_records(event=event, client=client, enrich=enrich)
     if event.type == "PullRequestEvent":
         return [build_pull_request_record(event=event, client=client, enrich=enrich)]
+    if event.type == "IssuesEvent":
+        return [build_issue_record(event=event)]
     if event.type == "IssueCommentEvent":
         return [build_issue_comment_record(event=event)]
     if event.type == "PullRequestReviewEvent":
@@ -383,6 +386,39 @@ def build_pull_request_record(
         repo=event.repo.name,
         occurred_at=event.created_at,
         url=url,
+        summary=summary,
+    )
+
+
+
+def build_issue_record(event: GitHubEventModel) -> ActivityRecord:
+    """Render an issue lifecycle event."""
+    payload = event.payload
+    issue = payload.get("issue", {})
+    action = get_str(payload.get("action")) or "updated"
+    number = get_number(issue.get("number"))
+    title = clean_snippet(
+        get_str(issue.get("title")) or "issue",
+        limit=ISSUE_TITLE_LIMIT,
+    )
+    label = payload.get("label", {})
+    label_name = get_str(label.get("name")) if isinstance(label, dict) else None
+
+    subject = "issue"
+    if number is not None:
+        subject = f"issue #{number}"
+
+    summary = f"{action} {subject}"
+    if label_name is not None:
+        summary = f"{summary} ({label_name})"
+    if title != "issue":
+        summary = f"{summary}: {title}"
+
+    return ActivityRecord(
+        event_id=event.id,
+        repo=event.repo.name,
+        occurred_at=event.created_at,
+        url=get_str(issue.get("html_url")),
         summary=summary,
     )
 

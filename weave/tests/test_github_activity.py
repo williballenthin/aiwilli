@@ -234,6 +234,64 @@ def test_render_activity_report_formats_supported_events() -> None:
     )
 
 
+def test_render_activity_report_formats_issues_events() -> None:
+    events = [
+        build_event(
+            event_id="1",
+            event_type="IssuesEvent",
+            repo="acme/app",
+            created_at="2026-03-11T15:00:00Z",
+            payload={
+                "action": "opened",
+                "issue": {
+                    "number": 17,
+                    "title": "Document IssuesEvent rendering",
+                    "html_url": "https://github.com/acme/app/issues/17",
+                },
+            },
+        ),
+        build_event(
+            event_id="2",
+            event_type="IssuesEvent",
+            repo="acme/app",
+            created_at="2026-03-11T16:00:00Z",
+            payload={
+                "action": "labeled",
+                "label": {"name": "bug"},
+                "issue": {
+                    "number": 17,
+                    "title": "Document IssuesEvent rendering",
+                    "html_url": "https://github.com/acme/app/issues/17",
+                },
+            },
+        ),
+    ]
+
+    records = collect_activity_records(
+        events=events,
+        client=StaticGitHubTimelineClient(),
+        enrich=True,
+    )
+    report = render_activity_report(
+        records=records,
+        username="tester",
+        timezone=ZoneInfo("UTC"),
+        fetched_at=datetime(2026, 3, 11, 17, 0, tzinfo=UTC),
+        source_event_count=len(events),
+    )
+
+    assert "Rendered items: 2" in report
+    assert (
+        "- [15:00:00](https://github.com/acme/app/issues/17) "
+        "opened issue #17: Document IssuesEvent rendering" in report
+    )
+    assert (
+        "- [16:00:00](https://github.com/acme/app/issues/17) "
+        "labeled issue #17 (bug): Document IssuesEvent rendering" in report
+    )
+
+
+
 def test_render_activity_report_uses_timezone_for_local_day() -> None:
     records = [
         ActivityRecord(
