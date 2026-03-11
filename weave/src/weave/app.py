@@ -11,7 +11,7 @@ import re
 import signal
 import subprocess
 import threading
-from collections.abc import Generator, Iterable
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1521,7 +1521,10 @@ class AgentSessionScraper:
         self.output_dir = output_dir
         self.summarizer = summarizer
 
-    def scrape_once(self) -> AgentSessionScrapeRun:
+    def scrape_once(
+        self,
+        on_result: Callable[[AgentSessionScrapeResult], None] | None = None,
+    ) -> AgentSessionScrapeRun:
         manifest_path = get_agent_session_manifest_path()
         manifest = self._load_manifest(manifest_path)
         report = AgentSessionSyncReport(manifest_path=str(manifest_path))
@@ -1564,6 +1567,8 @@ class AgentSessionScraper:
 
             if note_result is not None:
                 results.append(note_result)
+                if on_result is not None:
+                    on_result(note_result)
             if manifest_changed:
                 manifest_dirty = True
             if manifest_dirty:
@@ -1626,6 +1631,8 @@ class AgentSessionScraper:
         now: datetime,
     ) -> tuple[str, AgentSessionScrapeResult | None, bool] | None:
         stat = jsonl_path.stat()
+        if stat.st_size == 0:
+            return ("skipped_empty", None, False)
         source_mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
         source_mtime_ns = stat.st_mtime_ns
         entry = manifest.sessions.get(source_key)
@@ -2006,8 +2013,15 @@ class WeaveService:
     def run_agent_session_scrape(self) -> int:
         if self.agent_session_scraper is None:
             return 0
+        def handle_result(result: AgentSessionScrapeResult) -> None:
+            self.daily_note_writer.append_note_entry(
+                received=result.received,
+                note_path=result.note_path,
+                entry_type=result.entry_type,
+            )
+
         try:
-            run = self.agent_session_scraper.scrape_once()
+            run = self.agent_session_scraper.scrape_once(on_result=handle_result)
         except Exception as exc:
             logger.warning("agent session scrape failed: %s", exc)
             return 0
@@ -2023,12 +2037,6 @@ class WeaveService:
             run.report.failed,
         )
         print(run.report.model_dump_json())
-        for result in run.results:
-            self.daily_note_writer.append_note_entry(
-                received=result.received,
-                note_path=result.note_path,
-                entry_type=result.entry_type,
-            )
         return run.report.changed_count
 
     def run_daily_note_sync(self, sync_date: dt_mod.date | None = None) -> int:

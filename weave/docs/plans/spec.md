@@ -129,6 +129,8 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - on each scan, agent session files modified within the last 7 days are treated as mutable and are checked against the manifest. Older files are treated as immutable once they have a manifest entry and an existing sink note.
 - the manifest stores per-source-file session ID, SHA-256, sink path, and source mtime for incremental sync.
 - if a mutable file's SHA-256 changes, Weave rewrites the sink note and updates the managed daily-note line.
+- changed agent-session notes are linked into daily notes incrementally as each note is written, rather than only after the entire scan finishes.
+- zero-byte session files are treated as empty inputs and skipped without warning spam.
 - each agent-session scan emits a JSON sync report to stdout summarizing scanned, imported, updated, unchanged, immutable-skipped, empty-skipped, and failed sessions.
 - daily note entry type: `agent session`.
 - agent session note body summary and frontmatter/daily-note summary are separate outputs with separate prompts.

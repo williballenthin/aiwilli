@@ -1105,12 +1105,14 @@ def test_agent_session_scraper_writes_note(tmp_path: Path, monkeypatch: pytest.M
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
 
+    seen: list[Path] = []
+
     scraper = AgentSessionScraper(
         sessions_dir=sessions_dir,
         output_dir=output_dir,
         summarizer=StaticSummarizer("Fixed a bug."),
     )
-    run = scraper.scrape_once()
+    run = scraper.scrape_once(on_result=lambda result: seen.append(result.note_path))
 
     assert run.report.scanned == 1
     assert run.report.imported == 1
@@ -1120,6 +1122,7 @@ def test_agent_session_scraper_writes_note(tmp_path: Path, monkeypatch: pytest.M
     note_path = result.note_path
     assert note_path.exists()
     assert note_path.name == "abc-123.md"
+    assert seen == [note_path]
     content = note_path.read_text()
     assert "type: agent_session" in content
     assert 'session_id: "abc-123"' in content

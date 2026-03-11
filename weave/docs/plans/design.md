@@ -117,7 +117,9 @@ Last updated: 2026-03-11
 - session note filenames are the session ID (`<YYYY>/<MM>/<DD>/<session-id>.md`) rather than a project/time slug
 - rendered session notes include frontmatter `summary: ""`, `session_id`, and `session_sha256`, plus the structured LLM summary section, metrics table, and conversation turns
 - `WeaveService` wires the agent-session note-body summarizer to `AGENT_SESSION_SUMMARY_PROMPT`, distinct from the generic daily-index/frontmatter summary prompt
-- `scrape_once()` returns both changed-note results for daily-note updates and an `AgentSessionSyncReport`; `WeaveService.run_agent_session_scrape()` prints that report as JSON to stdout
+- `scrape_once(on_result=...)` accepts an optional callback invoked for each changed note as soon as it is written; `WeaveService.run_agent_session_scrape()` uses this to update daily notes incrementally during long scans
+- zero-byte session files are short-circuited as `skipped_empty` before hashing or parsing
+- `scrape_once()` returns both changed-note results and an `AgentSessionSyncReport`; `WeaveService.run_agent_session_scrape()` prints that report as JSON to stdout
 
 5.7 Session parsing
 - `SessionTurn`, `SessionTokenUsage`, `SessionData` dataclasses hold parsed session data
