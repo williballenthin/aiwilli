@@ -8,7 +8,7 @@ Routes:
 - `+rm2` — reMarkable snapshots: saves PDF attachment, generates transcription via `llm` CLI, writes embed note.
 - `+todo` — TODO items: saves note with subject heading, body, and attachment embeds. Appends a `- [ ] TODO` line to the daily note.
 
-All handlers write into `sink/<YYYY-MM-DD>/` with binary files in `_attachments/`. Each created note gets an embed line appended to the corresponding Obsidian daily note.
+All handlers write into `sink/<YYYY-MM-DD>/` with binary files in `_attachments/`. Generated markdown notes include a `summary` frontmatter property; daily note entries read or backfill that property so one note has one reusable summary.
 
 Required environment variables:
 

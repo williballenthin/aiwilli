@@ -19,7 +19,7 @@ Last updated: 2026-03-11
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.
 - `Attachment` (dataclass): decoded email attachment.
 - `HandlerResult` (dataclass): whether the message was handled, all created paths, and created sink note paths.
-- `DailyNoteWriter`: resolves daily-note folder and appends timestamped embed lines. Thread-safe via `threading.Lock`.
+- `DailyNoteWriter`: resolves daily-note folder, appends timestamped embed lines, and backfills note `summary` frontmatter. Thread-safe via `threading.RLock`.
 
 3. Shared utilities
 
@@ -45,13 +45,13 @@ Last updated: 2026-03-11
 - extracts text/plain body from multipart email
 - extracts all attachment parts marked `attachment`
 - writes date folder + `_attachments` via shared `get_date_folder`
-- writes one markdown note with YAML frontmatter and Obsidian attachment embeds
+- writes one markdown note with YAML frontmatter, including `summary: ""`, and Obsidian attachment embeds
 
 5.2 `RemarkableSnapshotHandler`
 - extracts `application/pdf` attachments
 - writes each PDF file under `_attachments`
 - asks `PdfTranscriber` for markdown transcription
-- writes markdown note with embed and transcription
+- writes markdown note with frontmatter, including `summary: ""`, plus embed and transcription
 - writes failure note when transcription throws `TranscriptionError`
 
 5.3 `TodoHandler`
@@ -59,7 +59,7 @@ Last updated: 2026-03-11
 - extracts all attachment parts marked `attachment`
 - sanitizes subject for use as filename (`sanitize_filename`)
 - writes date folder + `_attachments` via shared `get_date_folder`
-- writes one markdown note with YAML frontmatter, `## <subject>` heading, body text, and Obsidian attachment embeds
+- writes one markdown note with YAML frontmatter, including `summary: ""`, a `## <subject>` heading, body text, and Obsidian attachment embeds
 - returns `todo_entries` on `HandlerResult` instead of `note_paths`, which triggers a `- [ ] TODO:` checkbox line on the daily note
 
 5.4 `CalendarScraper`
@@ -68,6 +68,7 @@ Last updated: 2026-03-11
 - exports Google Docs as markdown via `DriveExporter.export_document()`
 - downloads chat transcripts via `DriveExporter.get_media()`
 - for shared notes (title starts with "Notes - "), extracts only the section matching the event date using `extract_section_for_date()`
+- writes calendar/chat frontmatter with an empty `summary` field so later summary backfills have a stable location
 - uses file-existence check as cache to avoid re-exporting
 - returns `list[tuple[datetime, Path, str]]` for daily note embedding (datetime, path, entry_type)
 - helper predicates: `is_gemini_notes()`, `is_shared_notes()`
@@ -77,12 +78,15 @@ Last updated: 2026-03-11
 - falls back to vault root if config is missing/invalid
 - resolves daily note filename as `YYYY-MM-DD.md` from message received date
 - accepts an optional `NoteSummarizer` for generating one-sentence summaries
-- `append_note_entry(received, note_path, entry_type)` reads the note file, summarizes it, renders `- <type>: [[path]] - <summary> #weave`
-- `append_todo_entry(received, note_path)` renders `- [ ] todo: [[path]] - <summary> #weave`
+- `append_note_entry(received, note_path, entry_type)` checks for an existing managed line, then reads or backfills the note's frontmatter `summary`, then renders `- <type>: [[path]] - <summary> #weave`
+- `append_todo_entry(received, note_path)` follows the same summary/backfill path and renders `- [ ] todo: [[path]] - <summary> #weave`
+- helper functions `split_front_matter()`, `get_note_summary()`, and `set_note_summary()` implement minimal summary-field parsing/updating without adding a YAML dependency
+- if a note already has a non-empty `summary` field, Weave reuses it and skips the LLM call
+- if a note lacks frontmatter entirely, `set_note_summary()` prepends a minimal frontmatter block containing only `summary`
 - all lines end with `#weave` tag for future regeneration of managed lines
 - deduplication happens in `append_note_entry`/`append_todo_entry` before summarization: checks if a line containing the same `[[link]]` and `#weave` tag already exists in the daily note, skipping both the LLM call and the write. This handles non-deterministic summaries correctly.
 - shared `append_line` method handles file I/O (exact-match dedup remains as a secondary guard)
-- `threading.Lock` protects `append_line` for concurrent access from IMAP and calendar threads
+- `threading.RLock` protects the full append path, including summary backfill and daily-note write, for concurrent access from IMAP and calendar threads
 
 5.6 `AgentSessionScraper`
 - initialized with `sessions_dir`, `output_dir`, and optional `NoteSummarizer`
@@ -90,7 +94,8 @@ Last updated: 2026-03-11
 - parses each file via `parse_session()` which auto-detects Claude Code vs Pi Agent format
 - skips sessions with no user turns
 - uses file-existence check as cache to avoid re-processing
-- renders full session note via Jinja2 template with frontmatter, LLM-generated structured summary, metrics table, and conversation turns
+- renders full session note via Jinja2 template with frontmatter, including `summary: ""`, structured LLM summary section, metrics table, and conversation turns
+- `WeaveService` wires the agent-session note-body summarizer to `AGENT_SESSION_SUMMARY_PROMPT`, distinct from the generic daily-index/frontmatter summary prompt
 - returns `list[tuple[datetime, Path, str]]` for daily note embedding
 
 5.7 Session parsing
@@ -104,7 +109,8 @@ Last updated: 2026-03-11
 
 5.8 `NoteSummarizer` / `LlmNoteSummarizer`
 - protocol: `NoteSummarizer.summarize(content) -> str`
-- concrete: `LlmNoteSummarizer` shells out to `llm` CLI with a prompt requesting one sentence for a daily index overview
+- concrete: `LlmNoteSummarizer(prompt=..., model=...)` shells out to `llm` CLI with a caller-supplied prompt
+- current prompt wiring uses `SUMMARY_PROMPT` for frontmatter/daily-note summaries and `AGENT_SESSION_SUMMARY_PROMPT` for the agent-session note body summary
 - on failure (process error, command not found), logs warning and returns empty string
 - tests use `StaticSummarizer` that returns predetermined text without mocks
 
@@ -125,7 +131,7 @@ Last updated: 2026-03-11
 - `WeaveService` owns a `threading.Event` (`_shutdown`) for coordinated shutdown.
 - In daemon mode, the calendar scraper and agent session scraper run in a daemon thread calling `run_calendar_loop()` with a 5-minute sleep via `_shutdown.wait(timeout=300)`. Both scrapers execute each iteration.
 - The IMAP loop runs on the main thread.
-- `DailyNoteWriter.append_line` is protected by a `threading.Lock` since both threads write daily notes.
+- `DailyNoteWriter` uses a `threading.RLock` across summary backfill and daily-note writes since both threads can touch the same notes.
 - Signal handlers (SIGINT, SIGTERM) set `_shutdown` before exiting.
 - In `--once` mode, calendar scrape and agent session scrape run synchronously after IMAP batch.
 

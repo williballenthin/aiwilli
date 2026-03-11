@@ -35,6 +35,7 @@ STDERR_CONSOLE = Console(stderr=True)
 VOICE_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 subject: \"{{ subject }}\"
+summary: ""
 received: {{ received }}
 saved: {{ saved }}
 ---
@@ -49,6 +50,7 @@ saved: {{ saved }}
 RM2_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 subject: \"{{ subject }}\"
+summary: ""
 attachment: \"{{ attachment_filename }}\"
 received: {{ received }}
 transcribed: {{ transcribed }}
@@ -63,6 +65,7 @@ transcribed: {{ transcribed }}
 RM2_ERROR_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 subject: \"{{ subject }}\"
+summary: ""
 attachment: \"{{ attachment_filename }}\"
 received: {{ received }}
 error: \"{{ error }}\"
@@ -77,6 +80,7 @@ error: \"{{ error }}\"
 TODO_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 subject: \"{{ subject }}\"
+summary: ""
 received: {{ received }}
 saved: {{ saved }}
 ---
@@ -126,11 +130,6 @@ Provide a structured summary with:
 
 Be concise. Use plain text, no markdown headers."""
 
-AGENT_SESSION_ONELINER_PROMPT = (
-    "Summarize this agent session in exactly one sentence."
-    " Focus on what was accomplished. This appears in a daily index."
-)
-
 HANDLER_ENTRY_TYPES: dict[str, str] = {
     "voice": "transcript",
     "rm2": "handwriting",
@@ -154,14 +153,25 @@ GOOGLE_CREDENTIALS_PATH = GOOGLE_CONFIG_DIR / "credentials.json"
 GOOGLE_TOKEN_PATH = GOOGLE_CONFIG_DIR / "token.json"
 
 MONTHS: dict[str, int] = {
-    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
 }
 SECTION_DATE_RE = re.compile(r"^## (\w{3}) (\d{1,2}), (\d{4})")
 
 CALENDAR_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 source: "{{ source }}"
+summary: ""
 type: {{ doc_type }}
 calendar: primary
 event: "{{ event_name }}"
@@ -212,7 +222,7 @@ def get_date_folder(output_dir: Path, received: datetime) -> Path:
 
 
 def sanitize_filename(name: str) -> str:
-    sanitized = re.sub(r'[/\\:*?"<>|]', '-', name)
+    sanitized = re.sub(r'[/\\:*?"<>|]', "-", name)
     sanitized = sanitized.strip(" -")
     return sanitized[:100] if sanitized else "untitled"
 
@@ -296,7 +306,13 @@ class WeaveConfig(BaseModel):
         Raises:
             ConfigError: If required environment variables are missing.
         """
-        required = ("IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD", BASE_EMAIL_ENV, "WEAVE_ALLOWED_SENDERS")
+        required = (
+            "IMAP_HOST",
+            "IMAP_USER",
+            "IMAP_PASSWORD",
+            BASE_EMAIL_ENV,
+            "WEAVE_ALLOWED_SENDERS",
+        )
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             raise ConfigError(f"Missing required env vars: {', '.join(missing)}")
@@ -487,13 +503,14 @@ class NoteSummarizer(Protocol):
 
 
 class LlmNoteSummarizer:
-    def __init__(self, model: str = SUMMARY_MODEL):
+    def __init__(self, prompt: str = SUMMARY_PROMPT, model: str = SUMMARY_MODEL):
+        self.prompt = prompt
         self.model = model
 
     def summarize(self, content: str) -> str:
         try:
             result = subprocess.run(
-                ["llm", "-m", self.model, SUMMARY_PROMPT],
+                ["llm", "-m", self.model, self.prompt],
                 input=content,
                 capture_output=True,
                 text=True,
@@ -608,9 +625,7 @@ class TodoHandler:
             path.parent.mkdir(exist_ok=True)
             path.write_bytes(attachment.content)
             attachment_paths.append(path)
-        attachment_links = "\n".join(
-            f"![[_attachments/{path.name}]]" for path in attachment_paths
-        )
+        attachment_links = "\n".join(f"![[_attachments/{path.name}]]" for path in attachment_paths)
         content = TODO_TEMPLATE.render(
             subject=message.subject,
             received=message.received.isoformat(timespec="seconds"),
@@ -784,9 +799,7 @@ def extract_section_for_date(md_text: str, target_date: dt_mod.date) -> str | No
 
 
 def is_gemini_notes(att_title: str) -> bool:
-    return att_title.lower().startswith("notes by gemini") or (
-        " - Notes by Gemini" in att_title
-    )
+    return att_title.lower().startswith("notes by gemini") or (" - Notes by Gemini" in att_title)
 
 
 def is_shared_notes(att_title: str) -> bool:
@@ -816,9 +829,9 @@ class GoogleDriveExporter:
         self.service = build("drive", "v3", credentials=credentials)
 
     def export_document(self, file_id: str) -> bytes:
-        result: bytes = self.service.files().export(
-            fileId=file_id, mimeType="text/markdown"
-        ).execute()
+        result: bytes = (
+            self.service.files().export(fileId=file_id, mimeType="text/markdown").execute()
+        )
         return result
 
     def get_media(self, file_id: str) -> bytes:
@@ -897,11 +910,13 @@ class CalendarScraper:
             all_attachments: list[dict[str, str]] = event.get("attachments", [])
 
             doc_attachments = [
-                a for a in all_attachments
+                a
+                for a in all_attachments
                 if a.get("mimeType") == "application/vnd.google-apps.document"
             ]
             chat_attachments = [
-                a for a in all_attachments
+                a
+                for a in all_attachments
                 if a.get("mimeType") == "text/plain" and a.get("title", "").endswith("- Chat")
             ]
 
@@ -940,9 +955,7 @@ class CalendarScraper:
                         md_bytes.decode("utf-8", errors="replace"), start_dt.date()
                     )
                     if section is None:
-                        logger.warning(
-                            "no section for %s in %s", start_dt.date(), out_path.name
-                        )
+                        logger.warning("no section for %s in %s", start_dt.date(), out_path.name)
                         continue
                     content = section.encode("utf-8")
 
@@ -1075,12 +1088,14 @@ def _build_claude_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
     for obj in messages:
         if _is_human_user_msg(obj):
             if current_user_text is not None:
-                turns.append(SessionTurn(
-                    user_text=current_user_text,
-                    assistant_texts=current_assistant_texts,
-                    tool_names=current_tool_names,
-                    timestamp=current_user_ts,
-                ))
+                turns.append(
+                    SessionTurn(
+                        user_text=current_user_text,
+                        assistant_texts=current_assistant_texts,
+                        tool_names=current_tool_names,
+                        timestamp=current_user_ts,
+                    )
+                )
             current_user_text = obj.get("message", {}).get("content", "")
             ts_str = obj.get("timestamp")
             current_user_ts = _parse_session_timestamp(ts_str) if ts_str else None
@@ -1097,12 +1112,14 @@ def _build_claude_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                     current_tool_names.append(block.get("name", "unknown"))
 
     if current_user_text is not None:
-        turns.append(SessionTurn(
-            user_text=current_user_text,
-            assistant_texts=current_assistant_texts,
-            tool_names=current_tool_names,
-            timestamp=current_user_ts,
-        ))
+        turns.append(
+            SessionTurn(
+                user_text=current_user_text,
+                assistant_texts=current_assistant_texts,
+                tool_names=current_tool_names,
+                timestamp=current_user_ts,
+            )
+        )
     return turns
 
 
@@ -1118,12 +1135,14 @@ def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
         role = msg.get("role")
         if role == "user":
             if current_user_text is not None:
-                turns.append(SessionTurn(
-                    user_text=current_user_text,
-                    assistant_texts=current_assistant_texts,
-                    tool_names=current_tool_names,
-                    timestamp=current_user_ts,
-                ))
+                turns.append(
+                    SessionTurn(
+                        user_text=current_user_text,
+                        assistant_texts=current_assistant_texts,
+                        tool_names=current_tool_names,
+                        timestamp=current_user_ts,
+                    )
+                )
             text_parts = []
             for block in msg.get("content", []):
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -1145,12 +1164,14 @@ def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                         current_tool_names.append(block.get("name", "unknown"))
 
     if current_user_text is not None:
-        turns.append(SessionTurn(
-            user_text=current_user_text,
-            assistant_texts=current_assistant_texts,
-            tool_names=current_tool_names,
-            timestamp=current_user_ts,
-        ))
+        turns.append(
+            SessionTurn(
+                user_text=current_user_text,
+                assistant_texts=current_assistant_texts,
+                tool_names=current_tool_names,
+                timestamp=current_user_ts,
+            )
+        )
     return turns
 
 
@@ -1317,6 +1338,7 @@ def render_session_turns(session: SessionData) -> str:
 AGENT_SESSION_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 type: agent_session
+summary: ""
 agent: {{ agent }}
 project: "{{ project }}"
 session_id: "{{ session_id }}"
@@ -1366,14 +1388,17 @@ tool_calls: {{ tool_calls }}
 ## Conversation
 
 {{ conversation }}
-""")
+"""
+)
 
 
 def render_session_note(session: SessionData, summary: str) -> str:
     usage = session.usage
     total = (
-        usage.input_tokens + usage.output_tokens
-        + usage.cache_read_tokens + usage.cache_write_tokens
+        usage.input_tokens
+        + usage.output_tokens
+        + usage.cache_read_tokens
+        + usage.cache_write_tokens
     )
     return AGENT_SESSION_TEMPLATE.render(
         agent=session.agent,
@@ -1471,11 +1496,68 @@ class AgentSessionScraper:
         return (start_time, out_path, "agent session")
 
 
+def split_front_matter(content: str) -> tuple[str, str] | None:
+    match = re.match(r"\A---\n(?P<front>.*?)\n---\n?(?P<body>.*)\Z", content, re.DOTALL)
+    if match is None:
+        return None
+    return match.group("front"), match.group("body")
+
+
+def parse_front_matter_scalar(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    if stripped.startswith('"'):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped.strip('"')
+        return parsed if isinstance(parsed, str) else stripped
+    if stripped.startswith("'") and stripped.endswith("'"):
+        return stripped[1:-1].replace("''", "'")
+    return stripped
+
+
+def get_note_summary(content: str) -> str:
+    parts = split_front_matter(content)
+    if parts is None:
+        return ""
+    front_matter, _ = parts
+    for line in front_matter.splitlines():
+        if not line.startswith("summary:"):
+            continue
+        _, _, value = line.partition(":")
+        return parse_front_matter_scalar(value)
+    return ""
+
+
+def set_note_summary(content: str, summary: str) -> str:
+    summary_line = f"summary: {json.dumps(summary)}"
+    parts = split_front_matter(content)
+    if parts is None:
+        return f"---\n{summary_line}\n---\n{content}"
+    front_matter, body = parts
+    lines = front_matter.splitlines()
+    updated_lines: list[str] = []
+    replaced = False
+    for line in lines:
+        if line.startswith("summary:"):
+            if not replaced:
+                updated_lines.append(summary_line)
+                replaced = True
+            continue
+        updated_lines.append(line)
+    if not replaced:
+        updated_lines.append(summary_line)
+    updated_front_matter = "\n".join(updated_lines)
+    return f"---\n{updated_front_matter}\n---\n{body}"
+
+
 class DailyNoteWriter:
     def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
         self.vault_root = vault_root
         self.summarizer = summarizer
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def append_line(self, received: datetime, line: str) -> Path:
         with self._lock:
@@ -1493,22 +1575,24 @@ class DailyNoteWriter:
             return daily_path
 
     def append_note_entry(self, received: datetime, note_path: Path, entry_type: str) -> Path:
-        daily_path = self.get_daily_note_path(received)
-        link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
-        if self._entry_exists(daily_path, link):
-            return daily_path
-        summary = self._summarize_file(note_path)
-        line = self.render_entry_line(entry_type, note_path, summary)
-        return self.append_line(received, line)
+        with self._lock:
+            daily_path = self.get_daily_note_path(received)
+            link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
+            if self._entry_exists(daily_path, link):
+                return daily_path
+            summary = self._get_or_create_summary(note_path)
+            line = self.render_entry_line(entry_type, note_path, summary)
+            return self.append_line(received, line)
 
     def append_todo_entry(self, received: datetime, note_path: Path) -> Path:
-        daily_path = self.get_daily_note_path(received)
-        link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
-        if self._entry_exists(daily_path, link):
-            return daily_path
-        summary = self._summarize_file(note_path)
-        line = self.render_todo_line(note_path, summary)
-        return self.append_line(received, line)
+        with self._lock:
+            daily_path = self.get_daily_note_path(received)
+            link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
+            if self._entry_exists(daily_path, link):
+                return daily_path
+            summary = self._get_or_create_summary(note_path)
+            line = self.render_todo_line(note_path, summary)
+            return self.append_line(received, line)
 
     def _entry_exists(self, daily_path: Path, link: str) -> bool:
         if not daily_path.exists():
@@ -1518,14 +1602,21 @@ class DailyNoteWriter:
                 return True
         return False
 
-    def _summarize_file(self, note_path: Path) -> str:
-        if self.summarizer is None:
-            return ""
+    def _get_or_create_summary(self, note_path: Path) -> str:
         try:
             content = note_path.read_text()
         except OSError:
             return ""
-        return self.summarizer.summarize(content)
+        existing_summary = get_note_summary(content)
+        if existing_summary:
+            return existing_summary
+        if self.summarizer is None:
+            return ""
+        summary = self.summarizer.summarize(content)
+        if not summary:
+            return ""
+        note_path.write_text(set_note_summary(content, summary))
+        return summary
 
     def get_daily_note_path(self, received: datetime) -> Path:
         folder = self.get_daily_notes_folder()
@@ -1575,7 +1666,7 @@ class WeaveService:
         self.handlers = self.get_handlers(config)
         self.daily_note_writer = DailyNoteWriter(
             vault_root=config.vault_root,
-            summarizer=LlmNoteSummarizer(),
+            summarizer=LlmNoteSummarizer(prompt=SUMMARY_PROMPT),
         )
         self._shutdown = threading.Event()
         self.calendar_scraper: CalendarScraper | None = None
@@ -1587,14 +1678,12 @@ class WeaveService:
 
     def _init_agent_session_scraper(self, config: WeaveConfig) -> None:
         if config.agent_sessions_dir and not config.agent_sessions_dir.is_dir():
-            raise ConfigError(
-                f"Agent sessions directory not found: {config.agent_sessions_dir}"
-            )
+            raise ConfigError(f"Agent sessions directory not found: {config.agent_sessions_dir}")
         output_dir = config.vault_root / SINK_RELATIVE_PATH
         self.agent_session_scraper = AgentSessionScraper(
             sessions_dir=config.agent_sessions_dir,  # type: ignore[arg-type]
             output_dir=output_dir,
-            summarizer=LlmNoteSummarizer(),
+            summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_SUMMARY_PROMPT),
         )
 
     def _init_calendar_scraper(self, config: WeaveConfig) -> None:

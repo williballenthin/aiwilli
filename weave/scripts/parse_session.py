@@ -18,7 +18,6 @@ from weave.app import (
     SessionData,
     _format_duration,
     parse_session,
-    render_session_turns,
 )
 
 
@@ -63,7 +62,12 @@ def render_metrics(session: SessionData) -> str:
     lines.append(f"Output:      {usage.output_tokens:,}")
     lines.append(f"Cache read:  {usage.cache_read_tokens:,}")
     lines.append(f"Cache write: {usage.cache_write_tokens:,}")
-    total = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    total = (
+        usage.input_tokens
+        + usage.output_tokens
+        + usage.cache_read_tokens
+        + usage.cache_write_tokens
+    )
     lines.append(f"Total:       {total:,}")
     if usage.cost is not None:
         lines.append(f"Cost:        ${usage.cost:.4f}")
@@ -112,10 +116,22 @@ def summarize(session: SessionData, model: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Parse agent session JSONL files")
-    parser.add_argument("session_file", type=Path, help="Path to .jsonl session file")
+    parser.add_argument(
+        "session_file",
+        type=Path,
+        help="Path to .jsonl session file",
+    )
     parser.add_argument("--no-summary", action="store_true", help="Skip LLM summary")
-    parser.add_argument("--model", default=SUMMARY_MODEL, help=f"LLM model for summary (default: {SUMMARY_MODEL})")
-    parser.add_argument("--metrics-only", action="store_true", help="Only show metrics, no conversation")
+    parser.add_argument(
+        "--model",
+        default=SUMMARY_MODEL,
+        help=f"LLM model for summary (default: {SUMMARY_MODEL})",
+    )
+    parser.add_argument(
+        "--metrics-only",
+        action="store_true",
+        help="Only show metrics, no conversation",
+    )
     args = parser.parse_args()
 
     path: Path = args.session_file

@@ -141,7 +141,9 @@ def test_daily_note_writer_uses_obsidian_daily_folder(tmp_path: Path) -> None:
 
     daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
     assert daily_path.exists()
-    assert daily_path.read_text() == "- transcript: [[sink/2026/03/01/1345 - transcription.md]] #weave\n"
+    assert daily_path.read_text() == (
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] #weave\n"
+    )
 
 
 def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
@@ -366,7 +368,10 @@ def test_daily_note_writer_includes_summary_when_summarizer_provided(tmp_path: P
     note_path.parent.mkdir(parents=True)
     note_path.write_text("Some voice note content here.")
 
-    writer = DailyNoteWriter(vault_root=vault_root, summarizer=StaticSummarizer("Voice memo about project planning."))
+    writer = DailyNoteWriter(
+        vault_root=vault_root,
+        summarizer=StaticSummarizer("Voice memo about project planning."),
+    )
     writer.append_note_entry(
         received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
         note_path=note_path,
@@ -377,6 +382,9 @@ def test_daily_note_writer_includes_summary_when_summarizer_provided(tmp_path: P
     assert daily_path.read_text() == (
         "- transcript: [[sink/2026/03/01/1345 - transcription.md]]"
         " - Voice memo about project planning. #weave\n"
+    )
+    assert note_path.read_text() == (
+        '---\nsummary: "Voice memo about project planning."\n---\nSome voice note content here.'
     )
 
 
@@ -389,7 +397,10 @@ def test_daily_note_writer_todo_includes_summary(tmp_path: Path) -> None:
     note_path.parent.mkdir(parents=True)
     note_path.write_text("Fix the login bug.")
 
-    writer = DailyNoteWriter(vault_root=vault_root, summarizer=StaticSummarizer("Bug fix for login flow."))
+    writer = DailyNoteWriter(
+        vault_root=vault_root,
+        summarizer=StaticSummarizer("Bug fix for login flow."),
+    )
     writer.append_todo_entry(
         received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
         note_path=note_path,
@@ -397,9 +408,43 @@ def test_daily_note_writer_todo_includes_summary(tmp_path: Path) -> None:
 
     daily_path = vault_root / "daily" / "2026-03-01.md"
     assert daily_path.read_text() == (
-        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]]"
-        " - Bug fix for login flow. #weave\n"
+        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]] - Bug fix for login flow. #weave\n"
     )
+    assert note_path.read_text() == (
+        '---\nsummary: "Bug fix for login flow."\n---\nFix the login bug.'
+    )
+
+
+def test_daily_note_writer_uses_stored_frontmatter_summary(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        "---\n"
+        'subject: "Voice note"\n'
+        'summary: "Stored summary."\n'
+        "received: 2026-03-01T13:45:00+00:00\n"
+        "---\n"
+        "\n"
+        "Some voice note content here.\n"
+    )
+
+    summarizer = CallCountSummarizer()
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=summarizer)
+    writer.append_note_entry(
+        received=datetime(2026, 3, 1, 13, 45, tzinfo=UTC),
+        note_path=note_path,
+        entry_type="transcript",
+    )
+
+    daily_path = vault_root / "daily" / "2026-03-01.md"
+    assert daily_path.read_text() == (
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Stored summary. #weave\n"
+    )
+    assert summarizer.call_count == 0
 
 
 # --- Calendar scraper tests ---
@@ -561,98 +606,211 @@ def _build_claude_session_jsonl() -> str:
         "output_tokens": 20,
     }
     lines = [
-        {**base, "type": "user", "parentUuid": None,
-         "message": {"role": "user", "content": "help me fix this bug"},
-         "uuid": "u1", "timestamp": "2026-03-04T11:00:00.000Z"},
-        {**base, "type": "assistant", "parentUuid": "u1",
-         "message": {"model": "claude-opus-4-6", "id": "msg_001",
-                     "role": "assistant",
-                     "content": [{"type": "thinking", "thinking": "Look."}],
-                     "stop_reason": None, "usage": usage_001a},
-         "uuid": "a1", "timestamp": "2026-03-04T11:00:05.000Z"},
-        {**base, "type": "assistant", "parentUuid": "a1",
-         "message": {"model": "claude-opus-4-6", "id": "msg_001",
-                     "role": "assistant",
-                     "content": [{"type": "tool_use", "id": "t1",
-                                  "name": "Read", "input": {}}],
-                     "stop_reason": None, "usage": usage_001b},
-         "uuid": "a2", "timestamp": "2026-03-04T11:00:06.000Z"},
-        {**base, "type": "user", "parentUuid": "a2",
-         "message": {"role": "user", "content": [
-             {"tool_use_id": "t1", "type": "tool_result",
-              "content": "file content"}]},
-         "uuid": "u2", "timestamp": "2026-03-04T11:00:06.100Z"},
-        {**base, "type": "assistant", "parentUuid": "u2",
-         "message": {"model": "claude-opus-4-6", "id": "msg_002",
-                     "role": "assistant",
-                     "content": [{"type": "text",
-                                  "text": "I found the bug in line 42."}],
-                     "stop_reason": "end_turn", "usage": usage_002},
-         "uuid": "a3", "timestamp": "2026-03-04T11:00:10.000Z"},
-        {**base, "type": "user", "parentUuid": "a3",
-         "message": {"role": "user", "content": "great, fix it"},
-         "uuid": "u3", "timestamp": "2026-03-04T11:01:00.000Z"},
-        {**base, "type": "assistant", "parentUuid": "u3",
-         "message": {"model": "claude-opus-4-6", "id": "msg_003",
-                     "role": "assistant",
-                     "content": [{"type": "tool_use", "id": "t2",
-                                  "name": "Edit", "input": {}}],
-                     "stop_reason": None, "usage": usage_003},
-         "uuid": "a4", "timestamp": "2026-03-04T11:01:05.000Z"},
-        {**base, "type": "user", "parentUuid": "a4",
-         "message": {"role": "user", "content": [
-             {"tool_use_id": "t2", "type": "tool_result",
-              "content": "edited"}]},
-         "uuid": "u4", "timestamp": "2026-03-04T11:01:05.100Z"},
-        {**base, "type": "assistant", "parentUuid": "u4",
-         "message": {"model": "claude-opus-4-6", "id": "msg_004",
-                     "role": "assistant",
-                     "content": [{"type": "text",
-                                  "text": "Fixed. Var was uninitialized."}],
-                     "stop_reason": "end_turn", "usage": usage_004},
-         "uuid": "a5", "timestamp": "2026-03-04T11:01:10.000Z"},
+        {
+            **base,
+            "type": "user",
+            "parentUuid": None,
+            "message": {"role": "user", "content": "help me fix this bug"},
+            "uuid": "u1",
+            "timestamp": "2026-03-04T11:00:00.000Z",
+        },
+        {
+            **base,
+            "type": "assistant",
+            "parentUuid": "u1",
+            "message": {
+                "model": "claude-opus-4-6",
+                "id": "msg_001",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "Look."}],
+                "stop_reason": None,
+                "usage": usage_001a,
+            },
+            "uuid": "a1",
+            "timestamp": "2026-03-04T11:00:05.000Z",
+        },
+        {
+            **base,
+            "type": "assistant",
+            "parentUuid": "a1",
+            "message": {
+                "model": "claude-opus-4-6",
+                "id": "msg_001",
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+                "stop_reason": None,
+                "usage": usage_001b,
+            },
+            "uuid": "a2",
+            "timestamp": "2026-03-04T11:00:06.000Z",
+        },
+        {
+            **base,
+            "type": "user",
+            "parentUuid": "a2",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"tool_use_id": "t1", "type": "tool_result", "content": "file content"}
+                ],
+            },
+            "uuid": "u2",
+            "timestamp": "2026-03-04T11:00:06.100Z",
+        },
+        {
+            **base,
+            "type": "assistant",
+            "parentUuid": "u2",
+            "message": {
+                "model": "claude-opus-4-6",
+                "id": "msg_002",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "I found the bug in line 42."}],
+                "stop_reason": "end_turn",
+                "usage": usage_002,
+            },
+            "uuid": "a3",
+            "timestamp": "2026-03-04T11:00:10.000Z",
+        },
+        {
+            **base,
+            "type": "user",
+            "parentUuid": "a3",
+            "message": {"role": "user", "content": "great, fix it"},
+            "uuid": "u3",
+            "timestamp": "2026-03-04T11:01:00.000Z",
+        },
+        {
+            **base,
+            "type": "assistant",
+            "parentUuid": "u3",
+            "message": {
+                "model": "claude-opus-4-6",
+                "id": "msg_003",
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "t2", "name": "Edit", "input": {}}],
+                "stop_reason": None,
+                "usage": usage_003,
+            },
+            "uuid": "a4",
+            "timestamp": "2026-03-04T11:01:05.000Z",
+        },
+        {
+            **base,
+            "type": "user",
+            "parentUuid": "a4",
+            "message": {
+                "role": "user",
+                "content": [{"tool_use_id": "t2", "type": "tool_result", "content": "edited"}],
+            },
+            "uuid": "u4",
+            "timestamp": "2026-03-04T11:01:05.100Z",
+        },
+        {
+            **base,
+            "type": "assistant",
+            "parentUuid": "u4",
+            "message": {
+                "model": "claude-opus-4-6",
+                "id": "msg_004",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Fixed. Var was uninitialized."}],
+                "stop_reason": "end_turn",
+                "usage": usage_004,
+            },
+            "uuid": "a5",
+            "timestamp": "2026-03-04T11:01:10.000Z",
+        },
     ]
     return "\n".join(json.dumps(entry) for entry in lines) + "\n"
 
 
 def _build_pi_session_jsonl() -> str:
-    cost1 = {"input": 0.003, "output": 0.001,
-             "cacheRead": 0, "cacheWrite": 0, "total": 0.004}
-    cost2 = {"input": 0.005, "output": 0.002,
-             "cacheRead": 0.001, "cacheWrite": 0, "total": 0.008}
+    cost1 = {"input": 0.003, "output": 0.001, "cacheRead": 0, "cacheWrite": 0, "total": 0.004}
+    cost2 = {"input": 0.005, "output": 0.002, "cacheRead": 0.001, "cacheWrite": 0, "total": 0.008}
     lines = [
-        {"type": "session", "version": 3, "id": "pi-sess-001",
-         "timestamp": "2026-03-03T16:00:00.000Z",
-         "cwd": "/Users/user/code/myproject"},
-        {"type": "model_change", "id": "mc1", "parentId": None,
-         "timestamp": "2026-03-03T16:00:00.000Z",
-         "provider": "anthropic", "modelId": "claude-sonnet-4-6"},
-        {"type": "message", "id": "m1", "parentId": "mc1",
-         "timestamp": "2026-03-03T16:00:10.000Z",
-         "message": {"role": "user", "content": [
-             {"type": "text", "text": "explore the codebase"}]}},
-        {"type": "message", "id": "m2", "parentId": "m1",
-         "timestamp": "2026-03-03T16:00:20.000Z",
-         "message": {"role": "assistant", "content": [
-             {"type": "thinking", "thinking": "Let me look."},
-             {"type": "toolCall", "id": "tc1", "name": "bash",
-              "arguments": {"command": "ls"}}],
-             "usage": {"input": 1000, "output": 50,
-                       "cacheRead": 0, "cacheWrite": 0,
-                       "totalTokens": 1050, "cost": cost1}}},
-        {"type": "message", "id": "m3", "parentId": "m2",
-         "timestamp": "2026-03-03T16:00:25.000Z",
-         "message": {"role": "toolResult", "content": [
-             {"type": "text", "text": "file1.py file2.py"}]}},
-        {"type": "message", "id": "m4", "parentId": "m3",
-         "timestamp": "2026-03-03T16:00:30.000Z",
-         "message": {"role": "assistant", "content": [
-             {"type": "thinking", "thinking": "Found two files."},
-             {"type": "text",
-              "text": "The project has two Python files."}],
-             "usage": {"input": 1500, "output": 80,
-                       "cacheRead": 500, "cacheWrite": 0,
-                       "totalTokens": 2080, "cost": cost2}}},
+        {
+            "type": "session",
+            "version": 3,
+            "id": "pi-sess-001",
+            "timestamp": "2026-03-03T16:00:00.000Z",
+            "cwd": "/Users/user/code/myproject",
+        },
+        {
+            "type": "model_change",
+            "id": "mc1",
+            "parentId": None,
+            "timestamp": "2026-03-03T16:00:00.000Z",
+            "provider": "anthropic",
+            "modelId": "claude-sonnet-4-6",
+        },
+        {
+            "type": "message",
+            "id": "m1",
+            "parentId": "mc1",
+            "timestamp": "2026-03-03T16:00:10.000Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "explore the codebase"}],
+            },
+        },
+        {
+            "type": "message",
+            "id": "m2",
+            "parentId": "m1",
+            "timestamp": "2026-03-03T16:00:20.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Let me look."},
+                    {
+                        "type": "toolCall",
+                        "id": "tc1",
+                        "name": "bash",
+                        "arguments": {"command": "ls"},
+                    },
+                ],
+                "usage": {
+                    "input": 1000,
+                    "output": 50,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "totalTokens": 1050,
+                    "cost": cost1,
+                },
+            },
+        },
+        {
+            "type": "message",
+            "id": "m3",
+            "parentId": "m2",
+            "timestamp": "2026-03-03T16:00:25.000Z",
+            "message": {
+                "role": "toolResult",
+                "content": [{"type": "text", "text": "file1.py file2.py"}],
+            },
+        },
+        {
+            "type": "message",
+            "id": "m4",
+            "parentId": "m3",
+            "timestamp": "2026-03-03T16:00:30.000Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Found two files."},
+                    {"type": "text", "text": "The project has two Python files."},
+                ],
+                "usage": {
+                    "input": 1500,
+                    "output": 80,
+                    "cacheRead": 500,
+                    "cacheWrite": 0,
+                    "totalTokens": 2080,
+                    "cost": cost2,
+                },
+            },
+        },
     ]
     return "\n".join(json.dumps(entry) for entry in lines) + "\n"
 
@@ -765,13 +923,18 @@ def test_parse_session_auto_detects(claude_session_file: Path, pi_session_file: 
 
 def test_render_session_turns_includes_user_and_assistant() -> None:
     session = SessionData(
-        agent="claude", session_id="x", project="proj", cwd="/x",
-        turns=[SessionTurn(
-            user_text="do the thing",
-            assistant_texts=["done."],
-            tool_names=["Edit"],
-            timestamp=datetime(2026, 3, 4, 11, 0, tzinfo=UTC),
-        )],
+        agent="claude",
+        session_id="x",
+        project="proj",
+        cwd="/x",
+        turns=[
+            SessionTurn(
+                user_text="do the thing",
+                assistant_texts=["done."],
+                tool_names=["Edit"],
+                timestamp=datetime(2026, 3, 4, 11, 0, tzinfo=UTC),
+            )
+        ],
     )
     rendered = render_session_turns(session)
     assert "**USER:** do the thing" in rendered
@@ -781,7 +944,10 @@ def test_render_session_turns_includes_user_and_assistant() -> None:
 
 def test_render_session_note_has_frontmatter() -> None:
     session = SessionData(
-        agent="pi", session_id="sess-abc", project="myproject", cwd="/x",
+        agent="pi",
+        session_id="sess-abc",
+        project="myproject",
+        cwd="/x",
         start_time=datetime(2026, 3, 3, 16, 0, tzinfo=UTC),
         end_time=datetime(2026, 3, 3, 16, 5, tzinfo=UTC),
         models=["anthropic/sonnet"],
@@ -807,9 +973,7 @@ def test_agent_session_scraper_writes_note(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    (claude_dir / "sess-001.jsonl").write_text(
-        _build_claude_session_jsonl()
-    )
+    (claude_dir / "sess-001.jsonl").write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
@@ -835,9 +999,7 @@ def test_agent_session_scraper_skips_cached(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    (claude_dir / "sess-001.jsonl").write_text(
-        _build_claude_session_jsonl()
-    )
+    (claude_dir / "sess-001.jsonl").write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
@@ -879,9 +1041,7 @@ def test_agent_session_scraper_skips_subagents(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     subdir = sessions_dir / "claude" / "-proj" / "s1" / "subagents"
     subdir.mkdir(parents=True)
-    (subdir / "agent-x.jsonl").write_text(
-        _build_claude_session_jsonl()
-    )
+    (subdir / "agent-x.jsonl").write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
