@@ -10,14 +10,14 @@ Weave monitors one IMAP inbox and routes unread emails to handler logic based on
 2. Invocation
 
 Command:
-- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--no-calendar] [--agent-sessions DIR]`
+- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR]`
 
 Behavior:
 - `--once` processes one unread batch plus one calendar scrape plus one agent session scan, runs one daily-note sync pass, then exits.
-- default mode stays connected and loops with IMAP IDLE; a background maintenance thread runs every 5 minutes for calendar scraping, agent session scraping, and once-per-day daily-note sync.
+- default mode stays connected and loops with IMAP IDLE; a background maintenance thread runs immediately at startup and then every 5 minutes for calendar scraping, agent session scraping, and once-per-day daily-note sync.
 - `<vault_root>` must exist.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
-- `--no-calendar` disables the calendar scraper entirely.
+- calendar scraping is always enabled.
 - `--agent-sessions DIR` points to the directory containing agent session JSONL files. Can also be set via `WEAVE_AGENT_SESSIONS_DIR` env var. If not set, agent session scraping is disabled.
 
 3. Required runtime environment
@@ -28,7 +28,7 @@ Behavior:
 - `WEAVE_BASE_EMAIL` (base mailbox, e.g. `name@example.com`)
 - `WEAVE_ALLOWED_SENDERS` (comma-separated list of email addresses allowed to send to any route)
 
-For calendar scraping (unless `--no-calendar`):
+For calendar scraping:
 - Google OAuth token at `$XDG_CONFIG_HOME/wballenthin/weave/token.json` (created via `scripts/setup_google_credentials.py`)
 - Google OAuth client credentials at `$XDG_CONFIG_HOME/wballenthin/weave/credentials.json`
 
@@ -104,8 +104,9 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - existing notes without a `summary` property are backfilled the first time Weave needs a summary for them.
 - daily note folder is loaded from `<vault_root>/.obsidian/daily-notes.json` key `folder`.
 - if the daily-notes config file is missing/invalid or folder is empty, Weave uses `<vault_root>/` as daily note folder.
-- duplicate entries are detected by matching the `[[link]]` destination and `#weave` tag, not by exact line match. This means a note that was already linked won't be re-summarized or re-appended even if the configured prompt later changes.
-- once per day, Weave scans `YYYY-MM-DD.md` files in the configured daily-note folder and rewrites managed `#weave` lines from the linked note's current frontmatter `summary` value, without calling the summarizer again.
+- managed entries are identified by matching the `[[link]]` destination and `#weave` tag, not by exact line match.
+- if Weave writes a note whose managed line already exists, it replaces that managed line in place so the daily note tracks the note's current `summary` value.
+- once per day, Weave also scans `YYYY-MM-DD.md` files in the configured daily-note folder and rewrites managed `#weave` lines from the linked note's current frontmatter `summary` value, without calling the summarizer again.
 - if a managed daily-note line points at a missing/unreadable note, Weave leaves that line unchanged during sync.
 - daily note file I/O is thread-safe (calendar thread and IMAP thread share the writer).
 
@@ -113,14 +114,19 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - scans `claude/` and `pi/` subdirectories of the configured agent sessions directory for `.jsonl` files.
 - subagent session files (under `*/subagents/`) are skipped.
 - parses both Claude Code and Pi Agent JSONL formats, auto-detecting by first line.
+- session identity comes from the harness session ID: Claude usually uses the filename stem; Pi usually uses the session UUID from the timestamp-prefixed filename. Parsed JSONL data can also supply the session ID.
 - for each session with at least one user turn, produces a markdown note with:
-  - YAML front matter: type (agent_session), summary, agent, project, session_id, timestamps, duration, models, token counts, cost (pi only), user turn count, tool call count.
+  - YAML front matter: type (agent_session), summary, agent, project, session_id, session_sha256, timestamps, duration, models, token counts, cost (pi only), user turn count, tool call count.
   - an LLM-generated structured summary section (goal, decisions, work completed, topics).
   - metrics table.
   - full conversation with user messages and user-directed assistant responses.
-- note path: `<output>/<YYYY>/<MM>/<DD>/<HHMM> - <agent> - <project> (<session-id-prefix>).md`
+- note path: `<output>/<YYYY>/<MM>/<DD>/<session-id>.md`
 - date directory is based on session start time.
-- file-existence check serves as cache; existing files are not re-processed.
+- sync state is tracked in a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json` (falling back to `~/.cache/...`). Missing or malformed manifests are treated as cache misses and are regenerated on the next scan.
+- on each scan, agent session files modified within the last 7 days are treated as mutable and are checked against the manifest. Older files are treated as immutable once they have a manifest entry and an existing sink note.
+- the manifest stores per-source-file session ID, SHA-256, sink path, and source mtime for incremental sync.
+- if a mutable file's SHA-256 changes, Weave rewrites the sink note and updates the managed daily-note line.
+- each agent-session scan emits a JSON sync report to stdout summarizing scanned, imported, updated, unchanged, immutable-skipped, empty-skipped, and failed sessions.
 - daily note entry type: `agent session`.
 - agent session note body summary and frontmatter/daily-note summary are separate outputs with separate prompts.
 

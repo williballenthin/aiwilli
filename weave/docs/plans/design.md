@@ -32,9 +32,9 @@ Last updated: 2026-03-11
 
 4. Runtime flow
 
-1. Parse CLI args (including `--source`, `--no-calendar`).
+1. Parse CLI args (including `--source`).
 2. Build `WeaveConfig` from env: route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`, allowed senders from `WEAVE_ALLOWED_SENDERS`.
-3. If calendar is enabled, validate Google token exists and initialize `CalendarScraper`.
+3. Validate Google token exists and initialize `CalendarScraper`.
 4. Connect with `IMAPClient` and select `INBOX`.
 5. Fetch unread messages with envelope + RFC822 payload.
 6. Normalize sender/to-addresses and resolve route.
@@ -82,8 +82,8 @@ Last updated: 2026-03-11
 - falls back to vault root if config is missing/invalid
 - resolves daily note filename as `YYYY-MM-DD.md` from message received date
 - accepts an optional `NoteSummarizer` for generating one-sentence summaries
-- `append_note_entry(received, note_path, entry_type)` checks for an existing managed line, then reads or backfills the note's frontmatter `summary`, then renders `- <type>: [[path]] - <summary> #weave`
-- `append_todo_entry(received, note_path)` follows the same summary/backfill path and renders `- [ ] todo: [[path]] - <summary> #weave`
+- `append_note_entry(received, note_path, entry_type)` reads or backfills the note's frontmatter `summary`, then upserts a managed line rendered as `- <type>: [[path]] - <summary> #weave`
+- `append_todo_entry(received, note_path)` follows the same summary/backfill path and upserts `- [ ] todo: [[path]] - <summary> #weave`
 - helper functions `split_front_matter()`, `get_note_summary()`, and `set_note_summary()` implement minimal summary-field parsing/updating without adding a YAML dependency
 - if a note already has a non-empty `summary` field, Weave reuses it and skips the LLM call
 - if a note lacks frontmatter entirely, `set_note_summary()` prepends a minimal frontmatter block containing only `summary`
@@ -92,19 +92,20 @@ Last updated: 2026-03-11
 - sync resolves the linked path back to a vault file, reads its current frontmatter `summary`, and re-renders the managed line without invoking the summarizer
 - if the linked note is missing or unreadable during sync, the original daily-note line is left untouched
 - all lines end with `#weave` tag for future regeneration of managed lines
-- deduplication happens in `append_note_entry`/`append_todo_entry` before summarization: checks if a line containing the same `[[link]]` and `#weave` tag already exists in the daily note, skipping both the LLM call and the write. This handles non-deterministic summaries correctly.
-- shared `append_line` method handles file I/O (exact-match dedup remains as a secondary guard)
+- deduplication and refresh are both link-based: `_upsert_line()` finds an existing managed line for the same `[[link]]` + `#weave` tag and either leaves it unchanged or replaces it in place with the refreshed summary text
 - `threading.RLock` protects the full append path, including summary backfill and daily-note write, for concurrent access from IMAP and calendar threads
 
 5.6 `AgentSessionScraper`
 - initialized with `sessions_dir`, `output_dir`, and optional `NoteSummarizer`
 - `scrape_once()` finds all `.jsonl` files under `claude/` and `pi/` subdirectories (skipping `subagents/`)
-- parses each file via `parse_session()` which auto-detects Claude Code vs Pi Agent format
-- skips sessions with no user turns
-- uses file-existence check as cache to avoid re-processing
-- renders full session note via Jinja2 template with frontmatter, including `summary: ""`, structured LLM summary section, metrics table, and conversation turns
+- keeps a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`; if the file is missing or malformed it is ignored and rebuilt from the source tree
+- manifest entries are keyed by source file path and store `session_id`, `session_sha256`, `sink_path`, and `source_mtime_ns`
+- each scan stats every source file, treats files with an mtime in the last 7 days as mutable, and otherwise trusts the manifest + existing sink note without rereading file contents
+- mutable files skip reparsing when `st_mtime_ns` matches the manifest; otherwise Weave hashes the file and only reparses when the SHA-256 changed or the sink note disappeared
+- session note filenames are the session ID (`<YYYY>/<MM>/<DD>/<session-id>.md`) rather than a project/time slug
+- rendered session notes include frontmatter `summary: ""`, `session_id`, and `session_sha256`, plus the structured LLM summary section, metrics table, and conversation turns
 - `WeaveService` wires the agent-session note-body summarizer to `AGENT_SESSION_SUMMARY_PROMPT`, distinct from the generic daily-index/frontmatter summary prompt
-- returns `list[tuple[datetime, Path, str]]` for daily note embedding
+- `scrape_once()` returns both changed-note results for daily-note updates and an `AgentSessionSyncReport`; `WeaveService.run_agent_session_scrape()` prints that report as JSON to stdout
 
 5.7 Session parsing
 - `SessionTurn`, `SessionTokenUsage`, `SessionData` dataclasses hold parsed session data
@@ -168,4 +169,4 @@ The `scripts/poc.py` calendar scraper was consolidated into the `CalendarScraper
 
 - split `app.py` into `mailbox.py`, `routes.py`, `handlers/`, and `cli.py`
 - add handler for links/quick notes
-- add route-level metrics and structured JSON run report
+- add route-level metrics and broader structured JSON run reports beyond agent-session sync
