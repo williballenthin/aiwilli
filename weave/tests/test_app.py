@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt_mod
 import json
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from weave.app import (
+    CalendarScraper,
     ConfigError,
     DailyNoteWriter,
     IncomingMessage,
@@ -17,7 +19,10 @@ from weave.app import (
     TodoHandler,
     TranscriptionError,
     VoiceNoteHandler,
+    extract_section_for_date,
     get_variant_address,
+    is_gemini_notes,
+    is_shared_notes,
     sanitize_filename,
 )
 
@@ -112,7 +117,7 @@ def test_daily_note_writer_uses_obsidian_daily_folder(tmp_path: Path) -> None:
     config_dir = vault_root / ".obsidian"
     config_dir.mkdir(parents=True)
     (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
-    note_path = vault_root / "sink" / "2026-03-01" / "1345 - transcription.md"
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
     note_path.parent.mkdir(parents=True)
     note_path.write_text("content")
 
@@ -124,7 +129,7 @@ def test_daily_note_writer_uses_obsidian_daily_folder(tmp_path: Path) -> None:
 
     daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
     assert daily_path.exists()
-    assert daily_path.read_text() == "- 13:45 ![[sink/2026-03-01/1345 - transcription.md]]\n"
+    assert daily_path.read_text() == "- 13:45 ![[sink/2026/03/01/1345 - transcription.md]]\n"
 
 
 def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
@@ -132,7 +137,7 @@ def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
     config_dir = vault_root / ".obsidian"
     config_dir.mkdir(parents=True)
     (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
-    note_path = vault_root / "sink" / "2026-03-01" / "1345 - transcription.md"
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
     note_path.parent.mkdir(parents=True)
     note_path.write_text("content")
     daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
@@ -150,7 +155,7 @@ def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
     )
 
     content = daily_path.read_text()
-    assert content.count("![[sink/2026-03-01/1345 - transcription.md]]") == 1
+    assert content.count("![[sink/2026/03/01/1345 - transcription.md]]") == 1
 
 
 def test_voice_handler_writes_markdown_and_attachment(tmp_path: Path) -> None:
@@ -160,8 +165,8 @@ def test_voice_handler_writes_markdown_and_attachment(tmp_path: Path) -> None:
     result = handler.handle_message(message)
 
     assert result.handled is True
-    note_path = tmp_path / "2026-03-01" / "1345 - transcription.md"
-    attachment_path = tmp_path / "2026-03-01" / "_attachments" / "1345 - clip.png"
+    note_path = tmp_path / "2026/03/01" / "1345 - transcription.md"
+    attachment_path = tmp_path / "2026/03/01" / "_attachments" / "1345 - clip.png"
     assert note_path.exists()
     assert attachment_path.exists()
     assert result.note_paths == [note_path]
@@ -180,8 +185,8 @@ def test_remarkable_handler_writes_pdf_and_markdown(tmp_path: Path) -> None:
     result = handler.handle_message(message)
 
     assert result.handled is True
-    pdf_path = tmp_path / "2026-03-01" / "_attachments" / "1345 - page.pdf"
-    note_path = tmp_path / "2026-03-01" / "1345 - page.md"
+    pdf_path = tmp_path / "2026/03/01" / "_attachments" / "1345 - page.pdf"
+    note_path = tmp_path / "2026/03/01" / "1345 - page.md"
     assert pdf_path.exists()
     assert note_path.exists()
     assert result.note_paths == [note_path]
@@ -197,7 +202,7 @@ def test_remarkable_handler_writes_error_note_on_transcription_failure(tmp_path:
     result = handler.handle_message(message)
 
     assert result.handled is True
-    note_path = tmp_path / "2026-03-01" / "1345 - page.md"
+    note_path = tmp_path / "2026/03/01" / "1345 - page.md"
     assert result.note_paths == [note_path]
     content = note_path.read_text()
     assert "TRANSCRIPTION_FAILED" in content
@@ -218,8 +223,8 @@ def test_todo_handler_writes_note_with_heading_and_attachments(tmp_path: Path) -
     result = handler.handle_message(message)
 
     assert result.handled is True
-    note_path = tmp_path / "2026-03-01" / "1345 - Buy groceries.md"
-    attachment_path = tmp_path / "2026-03-01" / "_attachments" / "1345 - clip.png"
+    note_path = tmp_path / "2026/03/01" / "1345 - Buy groceries.md"
+    attachment_path = tmp_path / "2026/03/01" / "_attachments" / "1345 - clip.png"
     assert note_path.exists()
     assert attachment_path.exists()
     assert result.note_paths == []
@@ -234,7 +239,7 @@ def test_todo_handler_skips_existing_note(tmp_path: Path) -> None:
     handler = TodoHandler(output_dir=tmp_path)
     raw = build_message_with_body_and_attachment()
     message = build_incoming(raw, subject="Buy groceries")
-    date_folder = tmp_path / "2026-03-01"
+    date_folder = tmp_path / "2026/03/01"
     date_folder.mkdir(parents=True)
     (date_folder / "_attachments").mkdir()
     (date_folder / "1345 - Buy groceries.md").write_text("existing")
@@ -251,7 +256,7 @@ def test_daily_note_writer_appends_todo_embed(tmp_path: Path) -> None:
     config_dir = vault_root / ".obsidian"
     config_dir.mkdir(parents=True)
     (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
-    note_path = vault_root / "sink" / "2026-03-01" / "1345 - Buy groceries.md"
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - Buy groceries.md"
     note_path.parent.mkdir(parents=True)
     note_path.write_text("content")
 
@@ -265,5 +270,129 @@ def test_daily_note_writer_appends_todo_embed(tmp_path: Path) -> None:
     daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
     assert daily_path.exists()
     assert daily_path.read_text() == (
-        "- [ ] TODO: Buy groceries [[sink/2026-03-01/1345 - Buy groceries.md]]\n"
+        "- [ ] TODO: Buy groceries [[sink/2026/03/01/1345 - Buy groceries.md]]\n"
     )
+
+
+# --- Calendar scraper tests ---
+
+
+SAMPLE_SHARED_NOTES = """\
+## Mar 5, 2026
+### Agenda
+- Item A
+- Item B
+
+## Mar 6, 2026
+### Standup
+- Status update
+
+## Mar 7, 2026
+### Retro
+- Done
+"""
+
+
+def test_extract_section_for_date_returns_matching_section() -> None:
+    result = extract_section_for_date(SAMPLE_SHARED_NOTES, dt_mod.date(2026, 3, 6))
+    assert result is not None
+    assert "### Standup" in result
+    assert "Status update" in result
+    assert "### Agenda" not in result
+
+
+def test_extract_section_for_date_returns_none_for_missing_date() -> None:
+    result = extract_section_for_date(SAMPLE_SHARED_NOTES, dt_mod.date(2026, 3, 10))
+    assert result is None
+
+
+def test_extract_section_for_date_returns_last_section() -> None:
+    result = extract_section_for_date(SAMPLE_SHARED_NOTES, dt_mod.date(2026, 3, 7))
+    assert result is not None
+    assert "### Retro" in result
+
+
+def test_is_gemini_notes_matches_variants() -> None:
+    assert is_gemini_notes("Notes by Gemini for meeting") is True
+    assert is_gemini_notes("Team Sync - Notes by Gemini") is True
+    assert is_gemini_notes("Regular meeting notes") is False
+    assert is_gemini_notes("notes by gemini") is True
+
+
+def test_is_shared_notes_matches_prefix() -> None:
+    assert is_shared_notes("Notes - Team Sync") is True
+    assert is_shared_notes("Notes -\u00a0Team Sync") is True
+    assert is_shared_notes("Meeting notes doc") is False
+
+
+class StaticDriveExporter:
+    def __init__(
+        self,
+        doc_content: bytes = b"# Meeting\nNotes here",
+        chat_content: bytes = b"Chat log",
+    ):
+        self.doc_content = doc_content
+        self.chat_content = chat_content
+
+    def export_document(self, file_id: str) -> bytes:
+        return self.doc_content
+
+    def get_media(self, file_id: str) -> bytes:
+        return self.chat_content
+
+
+def test_calendar_scraper_writes_doc_note(tmp_path: Path) -> None:
+    from weave.app import CALENDAR_TEMPLATE, get_date_folder
+
+    exporter = StaticDriveExporter(doc_content=b"# Agenda\n- discuss things")
+    scraper = CalendarScraper(
+        output_dir=tmp_path,
+        source="@test.com",
+        drive_exporter=exporter,
+    )
+
+    start_dt = datetime(2026, 3, 6, 10, 0, tzinfo=UTC)
+    day_dir = get_date_folder(scraper.output_dir, start_dt)
+    event_name = "Team Sync"
+    out_path = day_dir / f"1000 - {event_name}.md"
+
+    md_bytes = exporter.export_document("doc123")
+    front_matter = CALENDAR_TEMPLATE.render(
+        source=scraper.source,
+        doc_type="meeting_notes",
+        event_name=event_name,
+        date=start_dt.strftime("%Y-%m-%d"),
+        attended="true",
+        doc_url="https://docs.google.com/document/d/doc123",
+        event_url="https://calendar.google.com/event/abc",
+        attendees=[{"email": "me@test.com", "responseStatus": "accepted"}],
+    )
+    out_path.write_bytes(front_matter.encode() + md_bytes)
+
+    assert out_path.exists()
+    content = out_path.read_text()
+    assert "Team Sync" in content
+    assert "discuss things" in content
+    assert out_path.parent.parent.parent.parent == tmp_path
+
+
+def test_calendar_scraper_skips_existing_files(tmp_path: Path) -> None:
+    day_dir = tmp_path / "2026" / "03" / "06"
+    day_dir.mkdir(parents=True)
+    (day_dir / "_attachments").mkdir()
+    existing = day_dir / "1000 - Team Sync.md"
+    existing.write_text("already here")
+
+    assert existing.exists()
+    assert existing.read_text() == "already here"
+
+
+def test_calendar_scraper_creates_nested_date_dirs(tmp_path: Path) -> None:
+    from weave.app import get_date_folder
+
+    dt = datetime(2026, 3, 6, 14, 30, tzinfo=UTC)
+    day_dir = get_date_folder(tmp_path, dt)
+
+    assert day_dir == tmp_path / "2026" / "03" / "06"
+    assert day_dir.exists()
+    assert (day_dir / "_attachments").exists()

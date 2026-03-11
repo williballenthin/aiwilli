@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt_mod
 import email
 import json
 import logging
@@ -9,6 +10,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
@@ -18,7 +20,7 @@ from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from imapclient import IMAPClient
 from jinja2 import Environment
@@ -109,6 +111,43 @@ RM2_VARIANT = "+rm2"
 TODO_VARIANT = "+todo"
 SINK_RELATIVE_PATH = Path("sink")
 
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
+GOOGLE_CONFIG_DIR = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "wballenthin" / "weave"
+)
+GOOGLE_CREDENTIALS_PATH = GOOGLE_CONFIG_DIR / "credentials.json"
+GOOGLE_TOKEN_PATH = GOOGLE_CONFIG_DIR / "token.json"
+
+MONTHS: dict[str, int] = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+SECTION_DATE_RE = re.compile(r"^## (\w{3}) (\d{1,2}), (\d{4})")
+
+CALENDAR_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
+    """---
+source: "{{ source }}"
+type: {{ doc_type }}
+calendar: primary
+event: "{{ event_name }}"
+date: {{ date }}
+attended: {{ attended }}
+url: "{{ doc_url }}"
+event_url: "{{ event_url }}"
+attendees:
+{% for a in attendees %}
+  - name: "{{ a.get("displayName", "") }}"
+    email: "{{ a["email"] }}"
+    status: "{{ a.get("responseStatus", "unknown") }}"
+{% endfor %}
+---
+
+"""
+)
+
 
 class ConfigError(Exception):
     """Raised when startup configuration is invalid."""
@@ -132,6 +171,13 @@ def get_variant_address(base_email: str, variant: str) -> str:
     if not variant.startswith("+"):
         raise ConfigError(f"Invalid variant format: {variant}")
     return f"{local}{variant}@{domain}"
+
+
+def get_date_folder(output_dir: Path, received: datetime) -> Path:
+    date_folder = output_dir / received.strftime("%Y/%m/%d")
+    date_folder.mkdir(parents=True, exist_ok=True)
+    (date_folder / "_attachments").mkdir(exist_ok=True)
+    return date_folder
 
 
 def sanitize_filename(name: str) -> str:
@@ -201,9 +247,17 @@ class WeaveConfig(BaseModel):
     vault_root: Path
     poll_interval_seconds: int
     routes: tuple[RouteConfig, ...]
+    calendar_source: str = "@hex-rays.com"
+    calendar_enabled: bool = True
 
     @classmethod
-    def from_runtime(cls, vault_root: Path, poll_interval_seconds: int) -> WeaveConfig:
+    def from_runtime(
+        cls,
+        vault_root: Path,
+        poll_interval_seconds: int,
+        calendar_source: str = "@hex-rays.com",
+        calendar_enabled: bool = True,
+    ) -> WeaveConfig:
         """Build runtime configuration from args and environment.
 
         Raises:
@@ -222,6 +276,8 @@ class WeaveConfig(BaseModel):
                 imap_password=os.environ["IMAP_PASSWORD"],
                 vault_root=vault_root,
                 poll_interval_seconds=poll_interval_seconds,
+                calendar_source=calendar_source,
+                calendar_enabled=calendar_enabled,
                 routes=(
                     RouteConfig(
                         name="voice-notes",
@@ -394,7 +450,7 @@ class VoiceNoteHandler:
         self.output_dir = output_dir
 
     def handle_message(self, message: IncomingMessage) -> HandlerResult:
-        date_folder = self.get_date_folder(message.received)
+        date_folder = get_date_folder(self.output_dir, message.received)
         timestamp = message.received.strftime("%H%M")
         note_path = date_folder / f"{timestamp} - transcription.md"
         if note_path.exists():
@@ -419,12 +475,6 @@ class VoiceNoteHandler:
         note_path.write_text(content)
         created_paths = [note_path, *attachment_paths]
         return HandlerResult(handled=True, created_paths=created_paths, note_paths=[note_path])
-
-    def get_date_folder(self, received: datetime) -> Path:
-        date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        date_folder.mkdir(parents=True, exist_ok=True)
-        (date_folder / "_attachments").mkdir(exist_ok=True)
-        return date_folder
 
     def get_plain_text_body(self, message: Message) -> str:
         body_parts: list[str] = []
@@ -481,7 +531,7 @@ class TodoHandler:
         self.output_dir = output_dir
 
     def handle_message(self, message: IncomingMessage) -> HandlerResult:
-        date_folder = self.get_date_folder(message.received)
+        date_folder = get_date_folder(self.output_dir, message.received)
         timestamp = message.received.strftime("%H%M")
         slug = sanitize_filename(message.subject)
         note_path = date_folder / f"{timestamp} - {slug}.md"
@@ -514,12 +564,6 @@ class TodoHandler:
             note_paths=[],
             todo_entries=[(message.subject, note_path)],
         )
-
-    def get_date_folder(self, received: datetime) -> Path:
-        date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        date_folder.mkdir(parents=True, exist_ok=True)
-        (date_folder / "_attachments").mkdir(exist_ok=True)
-        return date_folder
 
     def get_plain_text_body(self, message: Message) -> str:
         body_parts: list[str] = []
@@ -582,7 +626,7 @@ class RemarkableSnapshotHandler:
         if not attachments:
             logger.debug("message %s has no PDF attachments", message.uid)
             return HandlerResult(handled=False, created_paths=[], note_paths=[])
-        date_folder = self.get_date_folder(message.received)
+        date_folder = get_date_folder(self.output_dir, message.received)
         timestamp = message.received.strftime("%H%M")
         created_paths: list[Path] = []
         note_paths: list[Path] = []
@@ -606,12 +650,6 @@ class RemarkableSnapshotHandler:
             created_paths.append(md_path)
             note_paths.append(md_path)
         return HandlerResult(handled=True, created_paths=created_paths, note_paths=note_paths)
-
-    def get_date_folder(self, received: datetime) -> Path:
-        date_folder = self.output_dir / received.strftime("%Y-%m-%d")
-        date_folder.mkdir(parents=True, exist_ok=True)
-        (date_folder / "_attachments").mkdir(exist_ok=True)
-        return date_folder
 
     def get_pdf_attachments(self, message: Message) -> list[Attachment]:
         attachments: list[Attachment] = []
@@ -664,23 +702,255 @@ class RemarkableSnapshotHandler:
         )
 
 
+def extract_section_for_date(md_text: str, target_date: dt_mod.date) -> str | None:
+    lines = md_text.split("\n")
+    sections: list[tuple[dt_mod.date, int]] = []
+    for i, line in enumerate(lines):
+        m = SECTION_DATE_RE.match(line)
+        if m:
+            month = MONTHS.get(m.group(1))
+            if month:
+                section_date = dt_mod.date(int(m.group(3)), month, int(m.group(2)))
+                sections.append((section_date, i))
+    for idx, (section_date, start_line) in enumerate(sections):
+        if section_date != target_date:
+            continue
+        end_line = sections[idx + 1][1] if idx + 1 < len(sections) else len(lines)
+        return "\n".join(lines[start_line:end_line]).strip()
+    return None
+
+
+def is_gemini_notes(att_title: str) -> bool:
+    return att_title.lower().startswith("notes by gemini") or (
+        " - Notes by Gemini" in att_title
+    )
+
+
+def is_shared_notes(att_title: str) -> bool:
+    return att_title.lower().startswith("notes - ") or att_title.lower().startswith("notes -\u00a0")
+
+
+class DriveExporter(Protocol):
+    def export_document(self, file_id: str) -> bytes:
+        """Export a Google Doc as markdown bytes.
+
+        Raises:
+            Exception: If the export fails (e.g. access denied).
+        """
+
+    def get_media(self, file_id: str) -> bytes:
+        """Download raw file content (e.g. chat transcript).
+
+        Raises:
+            Exception: If the download fails.
+        """
+
+
+class GoogleDriveExporter:
+    def __init__(self, credentials: object):
+        from googleapiclient.discovery import build
+
+        self.service = build("drive", "v3", credentials=credentials)
+
+    def export_document(self, file_id: str) -> bytes:
+        result: bytes = self.service.files().export(
+            fileId=file_id, mimeType="text/markdown"
+        ).execute()
+        return result
+
+    def get_media(self, file_id: str) -> bytes:
+        result: bytes = self.service.files().get_media(fileId=file_id).execute()
+        return result
+
+
+class CalendarScraper:
+    def __init__(self, output_dir: Path, source: str, drive_exporter: DriveExporter):
+        self.output_dir = output_dir
+        self.source = source
+        self.drive_exporter = drive_exporter
+
+    @staticmethod
+    def get_google_credentials() -> object:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        creds = None
+        if GOOGLE_TOKEN_PATH.exists():
+            creds = Credentials.from_authorized_user_file(str(GOOGLE_TOKEN_PATH), GOOGLE_SCOPES)  # type: ignore[no-untyped-call]
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(GOOGLE_CREDENTIALS_PATH), GOOGLE_SCOPES
+                )
+                creds = flow.run_local_server(port=0)
+            GOOGLE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+        return creds
+
+    def scrape_once(self) -> list[tuple[datetime, Path]]:
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+
+        creds = self.get_google_credentials()
+        cal = build("calendar", "v3", credentials=creds)
+
+        now = datetime.now(tz=UTC)
+        week_ago = (now - dt_mod.timedelta(days=7)).isoformat()
+
+        logger.info("fetching calendar events from past 7 days")
+        events: list[dict[str, Any]] = (
+            cal.events()
+            .list(
+                calendarId="primary",
+                timeMin=week_ago,
+                timeMax=now.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+            .get("items", [])
+        )
+        logger.info("found %d calendar events", len(events))
+
+        results: list[tuple[datetime, Path]] = []
+        for event in events:
+            self_attendee = next(
+                (a for a in event.get("attendees", []) if a.get("self")),
+                None,
+            )
+            if self_attendee:
+                attended = self_attendee.get("responseStatus") == "accepted"
+            else:
+                attended = True
+
+            start_raw = event["start"].get("dateTime", event["start"].get("date"))
+            start_dt = datetime.fromisoformat(start_raw)
+            event_name = sanitize_filename(event.get("summary", "Untitled"))
+            event_url = event.get("htmlLink", "")
+            attendees: list[dict[str, str]] = event.get("attendees", [])
+            all_attachments: list[dict[str, str]] = event.get("attachments", [])
+
+            doc_attachments = [
+                a for a in all_attachments
+                if a.get("mimeType") == "application/vnd.google-apps.document"
+            ]
+            chat_attachments = [
+                a for a in all_attachments
+                if a.get("mimeType") == "text/plain" and a.get("title", "").endswith("- Chat")
+            ]
+
+            if not doc_attachments and not chat_attachments:
+                continue
+
+            day_dir = get_date_folder(self.output_dir, start_dt)
+            time_prefix = start_dt.strftime("%H%M")
+            base_name = f"{time_prefix} - {event_name}"
+            has_multiple_docs = len(doc_attachments) > 1
+
+            for att in doc_attachments:
+                file_id = att["fileId"]
+                att_title = att.get("title", "")
+
+                if has_multiple_docs and is_gemini_notes(att_title):
+                    name = f"{base_name} (Gemini)"
+                else:
+                    name = base_name
+
+                out_path = day_dir / f"{name}.md"
+                if out_path.exists():
+                    logger.debug("calendar note cached: %s", out_path)
+                    results.append((start_dt, out_path))
+                    continue
+
+                try:
+                    md_bytes = self.drive_exporter.export_document(file_id)
+                except HttpError:
+                    logger.warning("calendar doc not accessible: %s", out_path.name)
+                    continue
+
+                content = md_bytes
+                if is_shared_notes(att_title):
+                    section = extract_section_for_date(
+                        md_bytes.decode("utf-8", errors="replace"), start_dt.date()
+                    )
+                    if section is None:
+                        logger.warning(
+                            "no section for %s in %s", start_dt.date(), out_path.name
+                        )
+                        continue
+                    content = section.encode("utf-8")
+
+                doc_url = f"https://docs.google.com/document/d/{file_id}"
+                front_matter = CALENDAR_TEMPLATE.render(
+                    source=self.source,
+                    doc_type="meeting_notes",
+                    event_name=event_name,
+                    date=start_dt.strftime("%Y-%m-%d"),
+                    attended="true" if attended else "false",
+                    doc_url=doc_url,
+                    event_url=event_url,
+                    attendees=attendees,
+                )
+                out_path.write_bytes(front_matter.encode() + content)
+                logger.info("wrote calendar note: %s", out_path)
+                results.append((start_dt, out_path))
+
+            for att in chat_attachments:
+                file_id = att["fileId"]
+                name = f"{base_name} (chat)"
+                out_path = day_dir / f"{name}.md"
+
+                if out_path.exists():
+                    logger.debug("calendar chat cached: %s", out_path)
+                    results.append((start_dt, out_path))
+                    continue
+
+                try:
+                    chat_content = self.drive_exporter.get_media(file_id)
+                except HttpError:
+                    logger.warning("calendar chat not accessible: %s", out_path.name)
+                    continue
+
+                doc_url = f"https://drive.google.com/file/d/{file_id}"
+                front_matter = CALENDAR_TEMPLATE.render(
+                    source=self.source,
+                    doc_type="meeting_chat",
+                    event_name=event_name,
+                    date=start_dt.strftime("%Y-%m-%d"),
+                    attended="true" if attended else "false",
+                    doc_url=doc_url,
+                    event_url=event_url,
+                    attendees=attendees,
+                )
+                out_path.write_bytes(front_matter.encode() + chat_content)
+                logger.info("wrote calendar chat: %s", out_path)
+                results.append((start_dt, out_path))
+
+        return results
+
+
 class DailyNoteWriter:
     def __init__(self, vault_root: Path):
         self.vault_root = vault_root
+        self._lock = threading.Lock()
 
     def append_line(self, received: datetime, line: str) -> Path:
-        daily_path = self.get_daily_note_path(received)
-        daily_path.parent.mkdir(parents=True, exist_ok=True)
-        if daily_path.exists():
-            content = daily_path.read_text()
-            existing_lines = content.splitlines()
-            if line in existing_lines:
+        with self._lock:
+            daily_path = self.get_daily_note_path(received)
+            daily_path.parent.mkdir(parents=True, exist_ok=True)
+            if daily_path.exists():
+                content = daily_path.read_text()
+                existing_lines = content.splitlines()
+                if line in existing_lines:
+                    return daily_path
+                separator = "" if content.endswith("\n") or content == "" else "\n"
+                daily_path.write_text(f"{content}{separator}{line}\n")
                 return daily_path
-            separator = "" if content.endswith("\n") or content == "" else "\n"
-            daily_path.write_text(f"{content}{separator}{line}\n")
+            daily_path.write_text(f"{line}\n")
             return daily_path
-        daily_path.write_text(f"{line}\n")
-        return daily_path
 
     def append_note_embed(self, received: datetime, note_path: Path) -> Path:
         embed_line = self.render_embed_line(received, note_path)
@@ -730,6 +1000,24 @@ class WeaveService:
         self.route_resolver = RouteResolver(config.routes)
         self.handlers = self.get_handlers(config)
         self.daily_note_writer = DailyNoteWriter(vault_root=config.vault_root)
+        self._shutdown = threading.Event()
+        self.calendar_scraper: CalendarScraper | None = None
+        if config.calendar_enabled:
+            self._init_calendar_scraper(config)
+
+    def _init_calendar_scraper(self, config: WeaveConfig) -> None:
+        if not GOOGLE_TOKEN_PATH.exists():
+            raise ConfigError(
+                f"Google token not found at {GOOGLE_TOKEN_PATH}. "
+                "Run: python scripts/setup_google_credentials.py"
+            )
+        creds = CalendarScraper.get_google_credentials()
+        output_dir = config.vault_root / SINK_RELATIVE_PATH
+        self.calendar_scraper = CalendarScraper(
+            output_dir=output_dir,
+            source=config.calendar_source,
+            drive_exporter=GoogleDriveExporter(creds),
+        )
 
     def get_handlers(self, config: WeaveConfig) -> dict[str, MessageHandler]:
         handlers: dict[str, MessageHandler] = {}
@@ -748,9 +1036,33 @@ class WeaveService:
                 raise ConfigError(f"Unknown handler key: {route.handler_key}")
         return handlers
 
+    def run_calendar_scrape(self) -> int:
+        if self.calendar_scraper is None:
+            return 0
+        try:
+            results = self.calendar_scraper.scrape_once()
+        except Exception as exc:
+            logger.warning("calendar scrape failed: %s", exc)
+            return 0
+        for event_start, note_path in results:
+            self.daily_note_writer.append_note_embed(
+                received=event_start,
+                note_path=note_path,
+            )
+        return len(results)
+
+    def run_calendar_loop(self, interval: int = 300) -> None:
+        while not self._shutdown.is_set():
+            count = self.run_calendar_scrape()
+            if count > 0:
+                logger.info("calendar scrape: %d note(s)", count)
+            self._shutdown.wait(timeout=interval)
+
     def run_single_batch(self) -> int:
         with self.monitor.connect() as client:
-            return self.get_processed_count(client)
+            email_count = self.get_processed_count(client)
+        cal_count = self.run_calendar_scrape()
+        return email_count + cal_count
 
     def get_processed_count(self, client: IMAPClient) -> int:
         messages = self.monitor.get_unseen_messages(client)
@@ -793,6 +1105,12 @@ class WeaveService:
 
     def run_daemon(self) -> None:
         self.register_signal_handlers()
+        if self.calendar_scraper is not None:
+            cal_thread = threading.Thread(
+                target=self.run_calendar_loop, daemon=True, name="calendar-scraper"
+            )
+            cal_thread.start()
+            logger.info("started calendar scraper thread")
         while True:
             try:
                 with self.monitor.connect() as client:
@@ -814,6 +1132,7 @@ class WeaveService:
     def register_signal_handlers(self) -> None:
         def handle_signal(signum: int, frame: object) -> None:
             logger.info("shutting down")
+            self._shutdown.set()
             sys.exit(0)
 
         signal.signal(signal.SIGINT, handle_signal)
@@ -852,6 +1171,8 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Process one batch and exit")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("--quiet", action="store_true", help="Only show errors")
+    parser.add_argument("--source", default="@hex-rays.com", help="Calendar source tag")
+    parser.add_argument("--no-calendar", action="store_true", help="Disable calendar scraping")
     return parser.parse_args(argv)
 
 
@@ -865,6 +1186,8 @@ def main(argv: list[str] | None = None) -> None:
         config = WeaveConfig.from_runtime(
             vault_root=args.vault_root,
             poll_interval_seconds=args.poll_interval,
+            calendar_source=args.source,
+            calendar_enabled=not args.no_calendar,
         )
     except ConfigError as exc:
         logger.error("configuration error: %s", exc)
