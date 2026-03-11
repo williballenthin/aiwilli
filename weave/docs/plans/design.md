@@ -10,7 +10,7 @@ Last updated: 2026-03-03
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args with hardcoded route variants.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`.
 - `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
 - `get_variant_address(base_email, variant)`: derives `local+variant@domain` from `WEAVE_BASE_EMAIL`.
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.
@@ -21,7 +21,7 @@ Last updated: 2026-03-03
 3. Runtime flow
 
 1. Parse CLI args.
-2. Build `WeaveConfig` from env and hardcoded route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`; route sink path is `sink/` under vault root.
+2. Build `WeaveConfig` from env: route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`, allowed senders from `WEAVE_ALLOWED_SENDERS`; route sink path is `sink/` under vault root.
 3. Connect with `IMAPClient` and select `INBOX`.
 4. Fetch unread messages with envelope + RFC822 payload.
 5. Normalize sender/to-addresses and resolve route.

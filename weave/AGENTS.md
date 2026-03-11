@@ -113,5 +113,5 @@ Output paths:
 
 6. Notes
 
-- Route variants, allowed senders, and handler mapping are hardcoded in code by design.
+- Route variants and handler mapping are hardcoded in code; allowed senders come from `WEAVE_ALLOWED_SENDERS` env var.
 - Existing design document mentions planned split of app.py into smaller modules; this is not yet implemented.

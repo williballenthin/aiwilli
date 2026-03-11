@@ -23,24 +23,25 @@ Behavior:
 - `IMAP_USER`
 - `IMAP_PASSWORD`
 - `WEAVE_BASE_EMAIL` (base mailbox, e.g. `name@example.com`)
+- `WEAVE_ALLOWED_SENDERS` (comma-separated list of email addresses allowed to send to any route)
 
 4. Routing behavior
 
-Routing is hardcoded in code. The base mailbox comes from `WEAVE_BASE_EMAIL`; variants (`+vnote`, `+rm2`) are hardcoded.
+Routing is partially hardcoded: route variants (`+vnote`, `+rm2`, `+todo`) and handler mappings are in code, but allowed senders come from the `WEAVE_ALLOWED_SENDERS` env var (shared across all routes).
 
 4.1 Voice route
 - to-address: `<WEAVE_BASE_EMAIL local-part>+vnote@<WEAVE_BASE_EMAIL domain>`
-- allowed sender: `wilbal1087@gmail.com`
+- allowed senders: from `WEAVE_ALLOWED_SENDERS`
 - output root: `<vault_root>/sink/`
 
 4.2 reMarkable route
 - to-address: `<WEAVE_BASE_EMAIL local-part>+rm2@<WEAVE_BASE_EMAIL domain>`
-- allowed sender: `my@remarkable.com`
+- allowed senders: from `WEAVE_ALLOWED_SENDERS`
 - output root: `<vault_root>/sink/`
 
 4.3 TODO route
 - to-address: `<WEAVE_BASE_EMAIL local-part>+todo@<WEAVE_BASE_EMAIL domain>`
-- allowed sender: `wilbal1087@gmail.com`
+- allowed senders: from `WEAVE_ALLOWED_SENDERS`
 - output root: `<vault_root>/sink/`
 
 5. Output behavior

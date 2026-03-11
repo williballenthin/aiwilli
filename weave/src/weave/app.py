@@ -190,6 +190,10 @@ class RouteConfig(BaseModel):
     sink_relative: Path
 
 
+def _parse_senders(env_var: str) -> tuple[str, ...]:
+    return tuple(s.strip() for s in os.environ[env_var].split(",") if s.strip())
+
+
 class WeaveConfig(BaseModel):
     imap_host: str
     imap_user: str
@@ -205,11 +209,12 @@ class WeaveConfig(BaseModel):
         Raises:
             ConfigError: If required environment variables are missing.
         """
-        required = ("IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD", BASE_EMAIL_ENV)
+        required = ("IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD", BASE_EMAIL_ENV, "WEAVE_ALLOWED_SENDERS")
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             raise ConfigError(f"Missing required env vars: {', '.join(missing)}")
         base_email = os.environ[BASE_EMAIL_ENV]
+        allowed_senders = _parse_senders("WEAVE_ALLOWED_SENDERS")
         try:
             return cls(
                 imap_host=os.environ["IMAP_HOST"],
@@ -221,21 +226,21 @@ class WeaveConfig(BaseModel):
                     RouteConfig(
                         name="voice-notes",
                         to_address=get_variant_address(base_email, VOICE_VARIANT),
-                        allowed_senders=("wilbal1087@gmail.com",),
+                        allowed_senders=allowed_senders,
                         handler_key="voice",
                         sink_relative=SINK_RELATIVE_PATH,
                     ),
                     RouteConfig(
                         name="remarkable",
                         to_address=get_variant_address(base_email, RM2_VARIANT),
-                        allowed_senders=("my@remarkable.com",),
+                        allowed_senders=allowed_senders,
                         handler_key="rm2",
                         sink_relative=SINK_RELATIVE_PATH,
                     ),
                     RouteConfig(
                         name="todo",
                         to_address=get_variant_address(base_email, TODO_VARIANT),
-                        allowed_senders=("wilbal1087@gmail.com",),
+                        allowed_senders=allowed_senders,
                         handler_key="todo",
                         sink_relative=SINK_RELATIVE_PATH,
                     ),
