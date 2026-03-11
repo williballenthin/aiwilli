@@ -5,22 +5,26 @@ Last updated: 2026-03-11
 
 1. Purpose
 
-Weave monitors one IMAP inbox and routes unread emails to handler logic based on the recipient address. It also scrapes Google Calendar meeting notes and chat transcripts on a recurring schedule. It can also monitor a directory of AI agent session transcripts (Claude Code, Pi Agent), parse them, and produce session summary notes.
+Weave monitors one IMAP inbox and routes unread emails to handler logic based on the recipient address. It also scrapes Google Calendar meeting notes and chat transcripts on a recurring schedule. It can also monitor a directory of AI agent session transcripts (Claude Code, Pi Agent), parse them, and produce session summary notes. It also imports finalized GitHub activity into daily notes.
 
 2. Invocation
 
 Command:
-- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR]`
+- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ]`
 
 Behavior:
-- `--once` processes one unread batch plus one calendar scrape plus one agent session scan, runs one daily-note sync pass, then exits.
+- `--once` processes one unread batch plus one calendar scrape plus one agent session scan plus one GitHub activity sync pass, runs one daily-note sync pass, then exits.
 - default mode stays connected and loops with IMAP IDLE; background maintenance starts immediately at startup.
-- calendar scraping, agent session scraping, and daily-note sync each run in their own daemon thread.
-- calendar scraping and agent session scraping repeat every 5 minutes while the process is running; daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
+- calendar scraping, agent session scraping, GitHub activity sync, and daily-note sync each run in their own daemon thread.
+- calendar scraping and agent session scraping repeat every 5 minutes while the process is running.
+- GitHub activity sync checks hourly.
+- daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
 - `<vault_root>` must exist.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
 - calendar scraping is always enabled.
 - `--agent-sessions DIR` points to the directory containing agent session JSONL files. Can also be set via `WEAVE_AGENT_SESSIONS_DIR` env var. If not set, agent session scraping is disabled.
+- `--github-user USER` overrides the GitHub username to query. If omitted, Weave uses the authenticated `gh` user.
+- `--github-timezone TZ` sets the local timezone used for GitHub day boundaries and the stabilization cutoff. Can also be set via `WEAVE_GITHUB_TIMEZONE`.
 
 3. Required runtime environment
 
@@ -36,6 +40,11 @@ For calendar scraping:
 
 For agent session scraping:
 - `WEAVE_AGENT_SESSIONS_DIR` or `--agent-sessions` pointing to a directory with `claude/` and/or `pi/` subdirectories containing JSONL session files.
+
+For GitHub activity import:
+- `gh` CLI installed and authenticated for the desired account, unless `--github-user` / `WEAVE_GITHUB_USER` targets a public account and the local `gh` auth still has enough access for the request.
+- optional `WEAVE_GITHUB_USER` to override the account whose activity is imported.
+- optional `WEAVE_GITHUB_TIMEZONE` to set local day boundaries and the stabilization cutoff.
 
 4. Routing behavior
 
@@ -134,6 +143,23 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - each agent-session scan emits a JSON sync report to stdout summarizing scanned, imported, updated, unchanged, immutable-skipped, empty-skipped, and failed sessions.
 - daily note entry type: `agent session`.
 - agent session note body summary and frontmatter/daily-note summary are separate outputs with separate prompts.
+
+5.7 GitHub activity import
+- GitHub activity import does not create sink notes; it writes directly into the relevant daily note.
+- Weave reads the recent GitHub user events feed via `gh` and expands pushes through compare requests so commit activity can be rendered directly.
+- imported content is grouped by repository under a managed daily-note section headed `## GitHub activity #weave`.
+- Weave wraps the managed section with internal HTML comment markers so the section can be replaced deterministically if needed.
+- repository headings are markdown links to the repository.
+- event lines are markdown bullets whose timestamp is the primary link target.
+- push events are commit-centric when compare expansion succeeds: each pushed commit becomes its own bullet line, with the timestamp linked to the compare view and the commit SHA linked to the commit.
+- if compare expansion fails, Weave falls back to a single push line.
+- comment, review, and review-comment lines include compact inline body snippets.
+- Weave never imports the current local day.
+- Weave only imports a completed day once that day has passed a 6-hour stabilization window in the configured local timezone. Concretely, a day becomes eligible at `06:00` on the following local day.
+- once a local day is imported, Weave records that fact in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json` and does not re-render the day on later syncs.
+- if the manifest is missing but the daily note already contains the managed GitHub activity section for that day, Weave treats the day as already imported and rebuilds the manifest entry instead of rewriting the note.
+- days with no GitHub activity are left unchanged; Weave only adds the section when there is activity to render.
+- the import is best-effort and limited by the GitHub user events feed window; if Weave is not running for too long and relevant events fall out of the recent feed, historical backfill is not guaranteed.
 
 6. Message visibility behavior
 

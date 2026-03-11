@@ -8,7 +8,7 @@ from collections import defaultdict
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -673,20 +673,47 @@ def render_activity_report(
     for date_key in sorted(grouped.keys(), reverse=True):
         lines.append("")
         lines.append(f"## {date_key}")
-        for repo_name in sorted(grouped[date_key].keys()):
-            repo_url = get_repo_url(repo_name)
+        section = render_activity_section(grouped[date_key], timezone)
+        if section:
             lines.append("")
-            lines.append(f"### {render_link(repo_name, repo_url)}")
-            events = sorted(
-                grouped[date_key][repo_name],
-                key=lambda record: (record.occurred_at.astimezone(timezone), record.event_id),
-            )
-            for record in events:
-                local_dt = record.occurred_at.astimezone(timezone)
-                time_link = render_link(local_dt.strftime("%H:%M:%S"), record.url)
-                lines.append(f"- {time_link} {record.summary}")
+            lines.append(section.rstrip())
 
     return "\n".join(lines) + "\n"
+
+
+
+def render_activity_section(
+    grouped_records: dict[str, list[ActivityRecord]] | None,
+    timezone: tzinfo,
+) -> str:
+    """Render one day's repository-grouped activity section."""
+    if not grouped_records:
+        return ""
+
+    lines: list[str] = []
+    for repo_name in sorted(grouped_records.keys()):
+        repo_url = get_repo_url(repo_name)
+        lines.append(f"### {render_link(repo_name, repo_url)}")
+        events = sorted(
+            grouped_records[repo_name],
+            key=lambda record: (record.occurred_at.astimezone(timezone), record.event_id),
+        )
+        for record in events:
+            local_dt = record.occurred_at.astimezone(timezone)
+            time_link = render_link(local_dt.strftime("%H:%M:%S"), record.url)
+            lines.append(f"- {time_link} {record.summary}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+
+def get_records_for_local_day(
+    records: Sequence[ActivityRecord],
+    day: date,
+    timezone: tzinfo,
+) -> list[ActivityRecord]:
+    """Return records whose local timestamp falls on the requested day."""
+    return [record for record in records if record.occurred_at.astimezone(timezone).date() == day]
 
 
 

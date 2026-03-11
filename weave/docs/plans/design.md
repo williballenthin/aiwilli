@@ -5,8 +5,8 @@ Last updated: 2026-03-11
 
 1. Module layout
 
-- `src/weave/app.py`: all runtime logic for now.
-- `src/weave/github_activity.py`: standalone GitHub activity timeline prototype; fetches recent user events via `gh`, expands pull requests and pushes, normalizes them, and renders a grouped markdown report organized by day and repository.
+- `src/weave/app.py`: all runtime logic for now, including the integrated `GitHubActivitySyncer` that finalizes recent GitHub activity into daily notes.
+- `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers; fetches recent user events via `gh`, expands pull requests and pushes, normalizes them, and renders grouped markdown sections/reports.
 - `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and agent session tests.
 - `tests/test_github_activity.py`: GitHub activity normalization and rendering tests.
 - `scripts/setup_google_credentials.py`: interactive OAuth setup for Google Calendar/Drive.
@@ -17,7 +17,7 @@ Last updated: 2026-03-11
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source` and `agent_sessions_dir` fields.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source`, `agent_sessions_dir`, `github_activity_user`, and `github_activity_timezone` fields.
 - `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
 - `get_variant_address(base_email, variant)`: derives `local+variant@domain` from `WEAVE_BASE_EMAIL`.
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.
@@ -44,16 +44,17 @@ Last updated: 2026-03-11
 
 4. Runtime flow
 
-1. Parse CLI args (including `--source`).
-2. Build `WeaveConfig` from env: route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`, allowed senders from `WEAVE_ALLOWED_SENDERS`.
+1. Parse CLI args (including `--source`, `--github-user`, and `--github-timezone`).
+2. Build `WeaveConfig` from env: route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`, allowed senders from `WEAVE_ALLOWED_SENDERS`, plus optional GitHub overrides.
 3. Validate Google token exists and initialize `CalendarScraper`.
-4. Connect with `IMAPClient` and select `INBOX`.
-5. Fetch unread messages with envelope + RFC822 payload.
-6. Normalize sender/to-addresses and resolve route.
-7. Dispatch to handler by `handler_key`.
-8. For each created sink note path, append a timestamped embed line to that day's daily note.
-9. If handler result says handled and daily-note updates succeeded, mark message as seen.
-10. In daemon mode, enter IMAP IDLE and repeat on notifications; separate daemon threads handle calendar scraping, agent session scraping, and once-per-day daily-note sync.
+4. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`, configured timezone, and optional username override.
+5. Connect with `IMAPClient` and select `INBOX`.
+6. Fetch unread messages with envelope + RFC822 payload.
+7. Normalize sender/to-addresses and resolve route.
+8. Dispatch to handler by `handler_key`.
+9. For each created sink note path, append a timestamped embed line to that day's daily note.
+10. If handler result says handled and daily-note updates succeeded, mark message as seen.
+11. In daemon mode, enter IMAP IDLE and repeat on notifications; separate daemon threads handle calendar scraping, agent session scraping, GitHub activity finalization, and once-per-day daily-note sync.
 
 5. Handler implementations
 
@@ -105,9 +106,22 @@ Last updated: 2026-03-11
 - if the linked note is missing or unreadable during sync, the original daily-note line is left untouched
 - all lines end with `#weave` tag for future regeneration of managed lines
 - deduplication and refresh are both link-based: `_upsert_line()` finds an existing managed line for the same `[[link]]` + `#weave` tag and either leaves it unchanged or replaces it in place with the refreshed summary text
-- `threading.RLock` protects the full append path, including summary backfill and daily-note write, for concurrent access from IMAP and calendar threads
+- `upsert_github_activity_section(day, body)` writes a managed section headed `## GitHub activity #weave` and bounded by explicit HTML comment markers so the entire section can be replaced deterministically
+- `has_github_activity_section(day)` is used as a fallback when the GitHub manifest is missing but a daily note already contains the managed section
+- `threading.RLock` protects the full append path, including summary backfill, managed-line writes, and GitHub section writes, for concurrent access from IMAP and maintenance threads
 
-5.6 `AgentSessionScraper`
+5.6 `GitHubActivitySyncer`
+- initialized with the shared `DailyNoteWriter`, a timezone name, an optional username override, and a `GitHubTimelineClient`
+- uses `GhCliGitHubTimelineClient` in production and fetches up to 3 pages of 100 recent user events via `gh`
+- resolves the effective username from config or the authenticated `gh` user
+- imports only stable completed local days; a day is considered stable at `06:00` local time on the following day
+- groups normalized activity by local day, filters out the current/unstable day, and renders one managed daily-note section per eligible day
+- push handling is commit-centric because `collect_activity_records()` expands compare data into individual commit records when available
+- keeps a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json` keyed by `<username>:<YYYY-MM-DD>` so imported days are finalized once and skipped on future runs
+- if the manifest is missing but the daily note already has the managed GitHub section, the syncer records the manifest entry without rewriting the daily note
+- if a stable day has no GitHub records, no section is written and no note is modified
+
+5.7 `AgentSessionScraper`
 - initialized with `sessions_dir`, `output_dir`, and optional `NoteSummarizer`
 - `scrape_once()` finds canonical session `.jsonl` files under `claude/` and `pi/` subdirectories, skipping `subagents/` and ignoring non-canonical cache/export artifacts such as `agent-*.jsonl`
 - keeps a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`; if the file is missing or malformed it is ignored and rebuilt from the source tree
@@ -121,7 +135,7 @@ Last updated: 2026-03-11
 - zero-byte session files are short-circuited as `skipped_empty` before hashing or parsing
 - `scrape_once()` returns both changed-note results and an `AgentSessionSyncReport`; `WeaveService.run_agent_session_scrape()` prints that report as JSON to stdout
 
-5.7 Session parsing
+5.8 Session parsing
 - `SessionTurn`, `SessionTokenUsage`, `SessionData` dataclasses hold parsed session data
 - `detect_session_format()` reads the first JSONL line to distinguish Claude vs Pi format
 - `parse_claude_session()` handles streaming dedup (multiple records per `message.id`, take last for accurate `output_tokens`)
@@ -130,7 +144,7 @@ Last updated: 2026-03-11
 - `render_session_turns()` produces markdown conversation output
 - `render_session_note()` produces the full markdown file with Jinja2 template
 
-5.8 `NoteSummarizer` / `LlmNoteSummarizer`
+5.9 `NoteSummarizer` / `LlmNoteSummarizer`
 - protocol: `NoteSummarizer.summarize(content) -> str`
 - concrete: `LlmNoteSummarizer(prompt=..., model=...)` shells out to `llm` CLI with a caller-supplied prompt
 - current prompt wiring uses `SUMMARY_PROMPT` for frontmatter/daily-note summaries and `AGENT_SESSION_SUMMARY_PROMPT` for the agent-session note body summary
@@ -155,10 +169,11 @@ Last updated: 2026-03-11
 - In daemon mode, the IMAP loop runs on the main thread.
 - A dedicated calendar thread runs `run_calendar_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`.
 - A dedicated agent-session thread runs `run_agent_session_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`. This avoids long agent-session imports blocking calendar scraping.
+- A dedicated GitHub activity thread runs `run_github_activity_loop()` hourly via `_shutdown.wait(timeout=3600)`.
 - A dedicated daily-note thread runs `run_daily_note_sync_loop()` every 5 minutes; `run_daily_note_sync()` uses `WeaveService._last_daily_note_sync_on` to ensure at most one sync pass per local calendar day.
-- `DailyNoteWriter` uses a `threading.RLock` across summary backfill and daily-note writes since IMAP, calendar, and agent-session activity can all touch the same daily notes.
+- `DailyNoteWriter` uses a `threading.RLock` across summary backfill, managed-line writes, and managed-section writes since IMAP, calendar, agent-session, and GitHub activity can all touch the same daily notes.
 - Signal handlers (SIGINT, SIGTERM) set `_shutdown` before exiting.
-- In `--once` mode, calendar scrape, agent session scrape, and one daily-note sync pass run synchronously after the IMAP batch.
+- In `--once` mode, calendar scrape, agent session scrape, GitHub activity sync, and one daily-note sync pass run synchronously after the IMAP batch.
 
 9. Credential setup
 

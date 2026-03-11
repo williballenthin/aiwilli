@@ -14,6 +14,7 @@ from weave.app import (
     CalendarScraper,
     ConfigError,
     DailyNoteWriter,
+    GitHubActivitySyncer,
     IncomingMessage,
     RemarkableSnapshotHandler,
     RouteConfig,
@@ -30,6 +31,7 @@ from weave.app import (
     detect_session_format,
     extract_section_for_date,
     get_agent_session_manifest_path,
+    get_github_activity_manifest_path,
     get_variant_address,
     is_gemini_notes,
     is_shared_notes,
@@ -53,6 +55,32 @@ class StaticTranscriber:
 class FailingTranscriber:
     def get_transcription(self, pdf_path: Path) -> str:
         raise TranscriptionError("failed")
+
+
+class StaticGitHubTimelineClient:
+    def __init__(
+        self,
+        events: list[dict[str, object]],
+        pull_requests: dict[tuple[str, str, int], dict[str, object]] | None = None,
+        compares: dict[tuple[str, str, str, str], dict[str, object]] | None = None,
+    ) -> None:
+        self.events = events
+        self.pull_requests = pull_requests or {}
+        self.compares = compares or {}
+
+    def get_authenticated_login(self) -> str:
+        return "tester"
+
+    def get_user_events(self, username: str, page: int, per_page: int) -> list[dict[str, object]]:
+        if page != 1:
+            return []
+        return self.events[:per_page]
+
+    def get_pull_request(self, owner: str, repo: str, number: int) -> dict[str, object]:
+        return self.pull_requests[(owner, repo, number)]
+
+    def compare_commits(self, owner: str, repo: str, base: str, head: str) -> dict[str, object]:
+        return self.compares[(owner, repo, base, head)]
 
 
 def build_message_with_body_and_attachment() -> bytes:
@@ -94,6 +122,27 @@ def build_incoming(raw_email: bytes, subject: str) -> IncomingMessage:
         to_addresses=["target@example.com"],
         raw_email=raw_email,
     )
+
+
+
+def build_github_event(
+    *,
+    event_id: str,
+    event_type: str,
+    repo: str,
+    created_at: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "id": event_id,
+        "type": event_type,
+        "actor": {"login": "tester"},
+        "repo": {"name": repo},
+        "public": True,
+        "created_at": created_at,
+        "payload": payload,
+    }
+
 
 
 def test_route_resolver_matches_to_and_sender() -> None:
@@ -566,6 +615,175 @@ def test_weave_service_runs_daily_note_sync_once_per_day(
     assert daily_path.read_text() == (
         "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Second summary. #weave\n"
     )
+
+
+def test_github_activity_syncer_waits_for_stable_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    vault_root = tmp_path / "vault"
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+
+    events = [
+        build_github_event(
+            event_id="1",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-10T20:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-1",
+                    "body": "Looks good to me.",
+                },
+                "issue": {
+                    "number": 9,
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        )
+    ]
+    syncer = GitHubActivitySyncer(
+        daily_note_writer=DailyNoteWriter(vault_root=vault_root),
+        timezone_name="UTC",
+        client=StaticGitHubTimelineClient(events),
+    )
+
+    assert syncer.run_once(now=datetime(2026, 3, 11, 5, 0, tzinfo=UTC)) == 0
+    assert not (vault_root / "daily" / "2026-03-10.md").exists()
+
+    assert syncer.run_once(now=datetime(2026, 3, 11, 6, 0, tzinfo=UTC)) == 1
+    content = (vault_root / "daily" / "2026-03-10.md").read_text()
+    assert "## GitHub activity #weave" in content
+    assert "commented on issue #9: Looks good to me." in content
+
+
+
+def test_github_activity_syncer_skips_current_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    vault_root = tmp_path / "vault"
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+
+    events = [
+        build_github_event(
+            event_id="1",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-10T20:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-1",
+                    "body": "Yesterday item.",
+                },
+                "issue": {
+                    "number": 9,
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        ),
+        build_github_event(
+            event_id="2",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-11T08:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-2",
+                    "body": "Today item.",
+                },
+                "issue": {
+                    "number": 9,
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        ),
+    ]
+    syncer = GitHubActivitySyncer(
+        daily_note_writer=DailyNoteWriter(vault_root=vault_root),
+        timezone_name="UTC",
+        client=StaticGitHubTimelineClient(events),
+    )
+
+    assert syncer.run_once(now=datetime(2026, 3, 11, 12, 0, tzinfo=UTC)) == 1
+    assert (vault_root / "daily" / "2026-03-10.md").exists()
+    assert not (vault_root / "daily" / "2026-03-11.md").exists()
+
+
+
+def test_github_activity_syncer_does_not_rewrite_imported_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    vault_root = tmp_path / "vault"
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+
+    original_events = [
+        build_github_event(
+            event_id="1",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-10T20:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-1",
+                    "body": "Original body.",
+                },
+                "issue": {
+                    "number": 9,
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        )
+    ]
+    syncer = GitHubActivitySyncer(
+        daily_note_writer=DailyNoteWriter(vault_root=vault_root),
+        timezone_name="UTC",
+        client=StaticGitHubTimelineClient(original_events),
+    )
+
+    assert syncer.run_once(now=datetime(2026, 3, 11, 12, 0, tzinfo=UTC)) == 1
+    daily_path = vault_root / "daily" / "2026-03-10.md"
+    original_content = daily_path.read_text()
+
+    changed_events = [
+        build_github_event(
+            event_id="1",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-10T20:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-1",
+                    "body": "Changed body that should not be imported.",
+                },
+                "issue": {
+                    "number": 9,
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        )
+    ]
+    syncer.client = StaticGitHubTimelineClient(changed_events)
+
+    assert syncer.run_once(now=datetime(2026, 3, 11, 13, 0, tzinfo=UTC)) == 0
+    assert daily_path.read_text() == original_content
+    manifest = json.loads(get_github_activity_manifest_path().read_text())
+    assert "tester:2026-03-10" in manifest["days"]
 
 
 # --- Calendar scraper tests ---

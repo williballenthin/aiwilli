@@ -6,7 +6,8 @@ Purpose
   - IMAP email routing into sink notes
   - Google Calendar meeting note/chat export
   - AI agent session import from Claude Code and Pi JSONL logs
-- `src/weave/github_activity.py` is a separate standalone GitHub activity renderer, not part of the main daemon flow.
+  - GitHub activity import into daily notes
+- `src/weave/github_activity.py` provides the GitHub fetch/render helpers used by both the standalone script and the main daemon flow.
 
 Read these first
 1. `docs/plans/spec.md` for intended user-facing behavior and output layout.
@@ -35,7 +36,7 @@ High-level runtime flow
 - `RouteResolver` matches each message by recipient address and allowed sender.
 - A handler writes sink notes and attachments.
 - `DailyNoteWriter` appends or updates managed `#weave` lines in the correct daily note.
-- Background maintenance also runs calendar scraping, agent session scraping, and daily-note sync.
+- Background maintenance also runs calendar scraping, agent session scraping, GitHub activity sync, and daily-note sync.
 
 Important classes and functions
 - `WeaveConfig`, `RouteConfig`: runtime configuration and hardcoded route definitions.
@@ -75,6 +76,6 @@ How to extend it
 - If you split `app.py`, preserve the existing boundaries: monitor, routing, handlers, scrapers, daily-note writer, service.
 
 Practical notes
-- `README.md` is narrower than the current code. The codebase now also includes calendar scraping, TODO handling, agent session import, and the GitHub activity prototype.
+- `README.md` is narrower than the current code. The codebase now also includes calendar scraping, TODO handling, agent session import, and GitHub activity import.
 - If docs and code disagree, verify behavior in `src/weave/app.py` and tests first, then update `docs/plans/spec.md` and `docs/plans/design.md`.
 - The current code initializes calendar support eagerly in `WeaveService`; confirm startup assumptions in code before relying on doc text about optional calendar behavior.

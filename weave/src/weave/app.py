@@ -11,6 +11,7 @@ import re
 import signal
 import subprocess
 import threading
+from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -29,6 +30,17 @@ from rich.live import Live
 from rich.logging import RichHandler
 from rich.spinner import Spinner
 from rich.text import Text
+
+from weave.github_activity import (
+    GhCliGitHubTimelineClient,
+    GitHubActivityError,
+    GitHubTimelineClient,
+    collect_activity_records,
+    fetch_user_events,
+    get_default_timezone_name,
+    get_timezone,
+    render_activity_section,
+)
 
 logger = logging.getLogger(__name__)
 STDERR_CONSOLE = Console(stderr=True)
@@ -160,6 +172,14 @@ GOOGLE_CREDENTIALS_PATH = GOOGLE_CONFIG_DIR / "credentials.json"
 GOOGLE_TOKEN_PATH = GOOGLE_CONFIG_DIR / "token.json"
 AGENT_SESSION_MUTABLE_DAYS = 7
 AGENT_SESSION_MANIFEST_VERSION = 1
+GITHUB_ACTIVITY_MANIFEST_VERSION = 1
+GITHUB_ACTIVITY_PAGES = 3
+GITHUB_ACTIVITY_PER_PAGE = 100
+GITHUB_ACTIVITY_SYNC_INTERVAL_SECONDS = 3600
+GITHUB_ACTIVITY_STABILIZATION_HOURS = 6
+GITHUB_ACTIVITY_SECTION_HEADING = "## GitHub activity #weave"
+GITHUB_ACTIVITY_SECTION_START = "<!-- weave:github-activity:start -->"
+GITHUB_ACTIVITY_SECTION_END = "<!-- weave:github-activity:end -->"
 
 MONTHS: dict[str, int] = {
     "Jan": 1,
@@ -307,6 +327,8 @@ class WeaveConfig(BaseModel):
     routes: tuple[RouteConfig, ...]
     calendar_source: str = "@hex-rays.com"
     agent_sessions_dir: Path | None = None
+    github_activity_user: str | None = None
+    github_activity_timezone: str = "UTC"
 
     @classmethod
     def from_runtime(
@@ -315,6 +337,8 @@ class WeaveConfig(BaseModel):
         poll_interval_seconds: int,
         calendar_source: str = "@hex-rays.com",
         agent_sessions_dir: Path | None = None,
+        github_activity_user: str | None = None,
+        github_activity_timezone: str | None = None,
     ) -> WeaveConfig:
         """Build runtime configuration from args and environment.
 
@@ -335,6 +359,12 @@ class WeaveConfig(BaseModel):
         allowed_senders = _parse_senders("WEAVE_ALLOWED_SENDERS")
         env_sessions = os.environ.get("WEAVE_AGENT_SESSIONS_DIR")
         resolved_sessions = agent_sessions_dir or (Path(env_sessions) if env_sessions else None)
+        resolved_github_user = github_activity_user or os.environ.get("WEAVE_GITHUB_USER")
+        resolved_github_timezone = (
+            github_activity_timezone
+            or os.environ.get("WEAVE_GITHUB_TIMEZONE")
+            or get_default_timezone_name()
+        )
         try:
             return cls(
                 imap_host=os.environ["IMAP_HOST"],
@@ -344,6 +374,8 @@ class WeaveConfig(BaseModel):
                 poll_interval_seconds=poll_interval_seconds,
                 calendar_source=calendar_source,
                 agent_sessions_dir=resolved_sessions,
+                github_activity_user=resolved_github_user,
+                github_activity_timezone=resolved_github_timezone,
                 routes=(
                     RouteConfig(
                         name="voice-notes",
@@ -382,6 +414,17 @@ class AgentSessionManifestEntry(BaseModel):
 class AgentSessionManifest(BaseModel):
     version: int = AGENT_SESSION_MANIFEST_VERSION
     sessions: dict[str, AgentSessionManifestEntry] = Field(default_factory=dict)
+
+
+class GitHubActivityManifestDay(BaseModel):
+    imported_at: str
+    rendered_items: int
+    source_events: int
+
+
+class GitHubActivityManifest(BaseModel):
+    version: int = GITHUB_ACTIVITY_MANIFEST_VERSION
+    days: dict[str, GitHubActivityManifestDay] = Field(default_factory=dict)
 
 
 class AgentSessionSyncReport(BaseModel):
@@ -1114,6 +1157,13 @@ def get_agent_session_manifest_path() -> Path:
     return cache_home / "wballethin" / "weave" / "agent-session-manifest.json"
 
 
+
+def get_github_activity_manifest_path() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "wballethin" / "weave" / "github-activity-manifest.json"
+
+
+
 def get_session_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -1754,6 +1804,134 @@ def set_note_summary(content: str, summary: str) -> str:
     return f"---\n{updated_front_matter}\n---\n{body}"
 
 
+class GitHubActivitySyncer:
+    def __init__(
+        self,
+        daily_note_writer: DailyNoteWriter,
+        timezone_name: str,
+        username: str | None = None,
+        client: GitHubTimelineClient | None = None,
+    ):
+        self.daily_note_writer = daily_note_writer
+        self.timezone = get_timezone(timezone_name)
+        self.username = username
+        self.client = client or GhCliGitHubTimelineClient()
+        self._username_resolution_failed = False
+
+    def run_once(self, now: datetime | None = None) -> int:
+        username = self._get_username()
+        if username is None:
+            return 0
+        try:
+            events = fetch_user_events(
+                client=self.client,
+                username=username,
+                pages=GITHUB_ACTIVITY_PAGES,
+                per_page=GITHUB_ACTIVITY_PER_PAGE,
+            )
+        except GitHubActivityError as exc:
+            logger.warning("github activity fetch failed: %s", exc)
+            return 0
+
+        records = collect_activity_records(events=events, client=self.client, enrich=True)
+        grouped_days = self._group_days(records)
+        eligible_days = [
+            day for day in sorted(grouped_days.keys()) if self._is_stable_day(day, now=now)
+        ]
+        if not eligible_days:
+            return 0
+
+        manifest_path = get_github_activity_manifest_path()
+        manifest = self._load_manifest(manifest_path)
+        manifest_dirty = False
+        updated_daily_notes = 0
+        imported_at = datetime.now(tz=UTC).isoformat()
+
+        for day in eligible_days:
+            key = self._get_manifest_key(username, day)
+            if key in manifest.days:
+                continue
+            day_records = grouped_days[day]
+            if self.daily_note_writer.has_github_activity_section(day):
+                manifest.days[key] = GitHubActivityManifestDay(
+                    imported_at=imported_at,
+                    rendered_items=len(day_records),
+                    source_events=len(events),
+                )
+                manifest_dirty = True
+                continue
+            body = render_activity_section(self._group_records_by_repo(day_records), self.timezone)
+            if body:
+                daily_path = self.daily_note_writer.upsert_github_activity_section(day, body)
+                logger.info("updated github activity section %s", daily_path)
+                updated_daily_notes += 1
+            manifest.days[key] = GitHubActivityManifestDay(
+                imported_at=imported_at,
+                rendered_items=len(day_records),
+                source_events=len(events),
+            )
+            manifest_dirty = True
+
+        if manifest_dirty:
+            self._save_manifest(manifest_path, manifest)
+        return updated_daily_notes
+
+    def _get_username(self) -> str | None:
+        if self.username:
+            return self.username
+        if self._username_resolution_failed:
+            return None
+        try:
+            self.username = self.client.get_authenticated_login()
+        except GitHubActivityError as exc:
+            logger.warning("github activity disabled: %s", exc)
+            self._username_resolution_failed = True
+            return None
+        return self.username
+
+    def _is_stable_day(self, day: dt_mod.date, now: datetime | None = None) -> bool:
+        current = now or datetime.now(tz=self.timezone)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=self.timezone)
+        else:
+            current = current.astimezone(self.timezone)
+        stable_at = datetime.combine(
+            day + dt_mod.timedelta(days=1),
+            dt_mod.time(hour=GITHUB_ACTIVITY_STABILIZATION_HOURS),
+            tzinfo=self.timezone,
+        )
+        return current >= stable_at
+
+    def _group_days(self, records: list[Any]) -> dict[dt_mod.date, list[Any]]:
+        grouped: dict[dt_mod.date, list[Any]] = defaultdict(list)
+        for record in records:
+            day = record.occurred_at.astimezone(self.timezone).date()
+            grouped[day].append(record)
+        return grouped
+
+    def _group_records_by_repo(self, records: list[Any]) -> dict[str, list[Any]]:
+        grouped: dict[str, list[Any]] = defaultdict(list)
+        for record in records:
+            grouped[record.repo].append(record)
+        return grouped
+
+    def _get_manifest_key(self, username: str, day: dt_mod.date) -> str:
+        return f"{username}:{day.isoformat()}"
+
+    def _load_manifest(self, manifest_path: Path) -> GitHubActivityManifest:
+        if not manifest_path.exists():
+            return GitHubActivityManifest()
+        try:
+            return GitHubActivityManifest.model_validate_json(manifest_path.read_text())
+        except (OSError, ValidationError, json.JSONDecodeError) as exc:
+            logger.warning("github activity manifest invalid, rebuilding: %s", exc)
+            return GitHubActivityManifest()
+
+    def _save_manifest(self, manifest_path: Path, manifest: GitHubActivityManifest) -> None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
+
+
 class DailyNoteWriter:
     def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
         self.vault_root = vault_root
@@ -1790,6 +1968,23 @@ class DailyNoteWriter:
             summary = self._get_or_create_summary(note_path)
             line = self.render_todo_line(note_path, summary)
             return self._upsert_line(daily_path, link, line)
+
+    def has_github_activity_section(self, day: dt_mod.date) -> bool:
+        with self._lock:
+            daily_path = self.get_daily_note_path_for_date(day)
+            if not daily_path.exists():
+                return False
+            content = daily_path.read_text()
+            return (
+                GITHUB_ACTIVITY_SECTION_START in content
+                and GITHUB_ACTIVITY_SECTION_END in content
+            )
+
+    def upsert_github_activity_section(self, day: dt_mod.date, body: str) -> Path:
+        with self._lock:
+            daily_path = self.get_daily_note_path_for_date(day)
+            section = self.render_github_activity_section(body)
+            return self._upsert_section(daily_path, section)
 
     def sync_all_daily_notes(self) -> int:
         with self._lock:
@@ -1871,6 +2066,34 @@ class DailyNoteWriter:
         daily_path.write_text(f"{content}{separator}{line}\n")
         return daily_path
 
+    def _upsert_section(self, daily_path: Path, section: str) -> Path:
+        daily_path.parent.mkdir(parents=True, exist_ok=True)
+        if not daily_path.exists():
+            daily_path.write_text(section)
+            return daily_path
+        content = daily_path.read_text()
+        start = content.find(GITHUB_ACTIVITY_SECTION_START)
+        end = content.find(GITHUB_ACTIVITY_SECTION_END)
+        if start != -1 and end != -1 and end >= start:
+            section_start = content.rfind("\n", 0, start)
+            if section_start == -1:
+                section_start = 0
+            else:
+                section_start += 1
+            section_end = content.find("\n", end)
+            if section_end == -1:
+                section_end = len(content)
+            else:
+                section_end += 1
+            new_content = f"{content[:section_start]}{section}{content[section_end:]}"
+            if new_content == content:
+                return daily_path
+            daily_path.write_text(new_content)
+            return daily_path
+        separator = "" if content.endswith("\n") or content == "" else "\n"
+        daily_path.write_text(f"{content}{separator}{section}")
+        return daily_path
+
     def _get_summary_for_sync(self, note_path: Path) -> str | None:
         try:
             content = note_path.read_text()
@@ -1895,8 +2118,11 @@ class DailyNoteWriter:
         return summary
 
     def get_daily_note_path(self, received: datetime) -> Path:
+        return self.get_daily_note_path_for_date(received.date())
+
+    def get_daily_note_path_for_date(self, day: dt_mod.date) -> Path:
         folder = self.get_daily_notes_folder()
-        return folder / f"{received.strftime('%Y-%m-%d')}.md"
+        return folder / f"{day.isoformat()}.md"
 
     def get_daily_notes_folder(self) -> Path:
         settings_path = self.vault_root / ".obsidian" / "daily-notes.json"
@@ -1933,6 +2159,17 @@ class DailyNoteWriter:
         parts.append(WEAVE_TAG)
         return " ".join(parts)
 
+    def render_github_activity_section(self, body: str) -> str:
+        normalized_body = body.rstrip()
+        lines = [
+            GITHUB_ACTIVITY_SECTION_HEADING,
+            GITHUB_ACTIVITY_SECTION_START,
+        ]
+        if normalized_body:
+            lines.extend(normalized_body.splitlines())
+        lines.append(GITHUB_ACTIVITY_SECTION_END)
+        return "\n".join(lines) + "\n"
+
 
 class WeaveService:
     def __init__(self, config: WeaveConfig):
@@ -1951,6 +2188,11 @@ class WeaveService:
         self.agent_session_scraper: AgentSessionScraper | None = None
         if config.agent_sessions_dir:
             self._init_agent_session_scraper(config)
+        self.github_activity_syncer = GitHubActivitySyncer(
+            daily_note_writer=self.daily_note_writer,
+            timezone_name=config.github_activity_timezone,
+            username=config.github_activity_user,
+        )
 
     def _init_agent_session_scraper(self, config: WeaveConfig) -> None:
         if config.agent_sessions_dir and not config.agent_sessions_dir.is_dir():
@@ -2039,6 +2281,13 @@ class WeaveService:
         print(run.report.model_dump_json())
         return run.report.changed_count
 
+    def run_github_activity_sync(self, now: datetime | None = None) -> int:
+        try:
+            return self.github_activity_syncer.run_once(now=now)
+        except Exception as exc:
+            logger.warning("github activity sync failed: %s", exc)
+            return 0
+
     def run_daily_note_sync(self, sync_date: dt_mod.date | None = None) -> int:
         current_date = sync_date or dt_mod.date.today()
         if self._last_daily_note_sync_on == current_date:
@@ -2065,6 +2314,16 @@ class WeaveService:
                 logger.info("agent session scrape: %d note(s)", count)
             self._shutdown.wait(timeout=interval)
 
+    def run_github_activity_loop(
+        self,
+        interval: int = GITHUB_ACTIVITY_SYNC_INTERVAL_SECONDS,
+    ) -> None:
+        while not self._shutdown.is_set():
+            count = self.run_github_activity_sync()
+            if count > 0:
+                logger.info("github activity sync: %d daily note(s)", count)
+            self._shutdown.wait(timeout=interval)
+
     def run_daily_note_sync_loop(self, interval: int = 300) -> None:
         while not self._shutdown.is_set():
             count = self.run_daily_note_sync()
@@ -2077,8 +2336,9 @@ class WeaveService:
             email_count = self.get_processed_count(client)
         cal_count = self.run_calendar_scrape()
         session_count = self.run_agent_session_scrape()
+        github_count = self.run_github_activity_sync()
         self.run_daily_note_sync()
-        return email_count + cal_count + session_count
+        return email_count + cal_count + session_count + github_count
 
     def get_processed_count(self, client: IMAPClient) -> int:
         messages = self.monitor.get_unseen_messages(client)
@@ -2137,6 +2397,13 @@ class WeaveService:
             )
             agent_thread.start()
             logger.info("started agent session maintenance thread")
+        github_thread = threading.Thread(
+            target=self.run_github_activity_loop,
+            daemon=True,
+            name="github-activity-maintenance",
+        )
+        github_thread.start()
+        logger.info("started github activity maintenance thread")
         daily_note_thread = threading.Thread(
             target=self.run_daily_note_sync_loop,
             daemon=True,
@@ -2221,6 +2488,16 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Directory containing agent session JSONL files (or set WEAVE_AGENT_SESSIONS_DIR)",
     )
+    parser.add_argument(
+        "--github-user",
+        default=None,
+        help="GitHub username override for daily activity import (or set WEAVE_GITHUB_USER)",
+    )
+    parser.add_argument(
+        "--github-timezone",
+        default=None,
+        help="Timezone for GitHub activity day boundaries (or set WEAVE_GITHUB_TIMEZONE)",
+    )
     return parser.parse_args(argv)
 
 
@@ -2236,6 +2513,8 @@ def main(argv: list[str] | None = None) -> None:
             poll_interval_seconds=args.poll_interval,
             calendar_source=args.source,
             agent_sessions_dir=args.agent_sessions,
+            github_activity_user=args.github_user,
+            github_activity_timezone=args.github_timezone,
         )
     except ConfigError as exc:
         logger.error("configuration error: %s", exc)
