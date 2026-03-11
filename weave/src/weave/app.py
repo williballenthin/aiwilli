@@ -9,9 +9,7 @@ import os
 import re
 import signal
 import subprocess
-import sys
 import threading
-import time
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -1111,29 +1109,39 @@ class WeaveService:
             )
             cal_thread.start()
             logger.info("started calendar scraper thread")
-        while True:
+        idle_chunk = min(self.config.poll_interval_seconds, 30)
+        while not self._shutdown.is_set():
             try:
                 with self.monitor.connect() as client:
+                    if self._shutdown.is_set():
+                        break
                     count = self.get_processed_count(client)
                     if count > 0:
                         logger.info("processed %s message(s)", count)
-                    while True:
+                    elapsed = 0
+                    while not self._shutdown.is_set():
                         client.idle()
-                        responses = client.idle_check(timeout=self.config.poll_interval_seconds)
+                        responses = client.idle_check(timeout=idle_chunk)
                         client.idle_done()
-                        if responses:
+                        if self._shutdown.is_set():
+                            break
+                        elapsed += idle_chunk
+                        if responses or elapsed >= self.config.poll_interval_seconds:
+                            elapsed = 0
                             count = self.get_processed_count(client)
                             if count > 0:
                                 logger.info("processed %s message(s)", count)
             except Exception as exc:
+                if self._shutdown.is_set():
+                    break
                 logger.warning("connection error: %s", exc)
-                time.sleep(5)
+                self._shutdown.wait(timeout=5)
+        logger.info("shutdown complete")
 
     def register_signal_handlers(self) -> None:
         def handle_signal(signum: int, frame: object) -> None:
             logger.info("shutting down")
             self._shutdown.set()
-            sys.exit(0)
 
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
