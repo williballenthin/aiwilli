@@ -1,117 +1,80 @@
-Weave codebase overview
+Weave agent notes
 
-Status: generated summary
-Last updated: 2026-03-03
+Purpose
+- Weave ingests outside activity into an Obsidian vault.
+- The main implemented workflows are:
+  - IMAP email routing into sink notes
+  - Google Calendar meeting note/chat export
+  - AI agent session import from Claude Code and Pi JSONL logs
+- `src/weave/github_activity.py` is a separate standalone GitHub activity renderer, not part of the main daemon flow.
 
-1. Purpose
+Read these first
+1. `docs/plans/spec.md` for intended user-facing behavior and output layout.
+2. `docs/plans/design.md` for the current architecture and major components.
+3. `src/weave/app.py` for the real implementation. Almost everything lives here.
+4. `tests/test_app.py` for the most useful executable map of expected behavior and edge cases.
+5. `src/weave/github_activity.py` and `tests/test_github_activity.py` if working on the GitHub activity prototype.
 
-Weave is a single-process email ingress daemon for an Obsidian vault.
+Project shape
+- The codebase is still monolithic.
+- `src/weave/app.py` contains:
+  - CLI entry logic
+  - runtime config loading
+  - IMAP polling and IDLE loop
+  - route resolution
+  - email handlers
+  - calendar scraping
+  - agent session parsing and import
+  - daily note writing and sync
+- `src/weave/cli.py` and `src/weave/__init__.py` are thin entry shims.
 
-It monitors one IMAP inbox for unread emails, routes them by recipient variant and sender allowlist, and writes sink notes plus attachments into the vault.
+High-level runtime flow
+- `main()` parses args and builds `WeaveConfig` from env plus CLI inputs.
+- `WeaveService` wires the system together.
+- `MailboxMonitor` fetches unread IMAP messages and normalizes them into `IncomingMessage`.
+- `RouteResolver` matches each message by recipient address and allowed sender.
+- A handler writes sink notes and attachments.
+- `DailyNoteWriter` appends or updates managed `#weave` lines in the correct daily note.
+- Background maintenance also runs calendar scraping, agent session scraping, and daily-note sync.
 
-Current hardcoded routes:
-- <base-local>+vnote@<domain> from wilbal1087@gmail.com
-- <base-local>+rm2@<domain> from my@remarkable.com
+Important classes and functions
+- `WeaveConfig`, `RouteConfig`: runtime configuration and hardcoded route definitions.
+- `MailboxMonitor`: IMAP connection lifecycle, unread fetch, envelope decoding, mark-seen.
+- `RouteResolver`: recipient-plus-sender matching.
+- `VoiceNoteHandler`: saves plain-text body plus attachments.
+- `RemarkableSnapshotHandler`: saves PDFs and transcribes them through `llm`.
+- `TodoHandler`: turns email into a TODO note and daily-note checkbox entry.
+- `CalendarScraper`: exports Google Docs and chat attachments from recent calendar events.
+- `AgentSessionScraper`: imports Claude/Pi session logs, uses a manifest for incremental sync, and renders session notes.
+- `DailyNoteWriter`: central place for daily-note path resolution, dedupe, summary backfill, and sync.
+- `WeaveService`: top-level orchestration. Start here if you need the overall control flow.
+- `parse_session()`, `parse_claude_session()`, `parse_pi_session()`, `render_session_note()`: the agent-session import path.
+- `get_date_folder()`, `sanitize_filename()`, `get_variant_address()`: shared path and naming helpers.
 
-For each created sink markdown note, Weave appends an embed line to the corresponding daily note:
-- format: - HH:MM ![[<vault-relative-note-path>]]
+Filesystem model
+- Generated notes go under `<vault>/sink/YYYY/MM/DD/`.
+- Attachments go under `<vault>/sink/YYYY/MM/DD/_attachments/`.
+- Daily note folder comes from `<vault>/.obsidian/daily-notes.json` key `folder`, with vault root as fallback.
+- Daily-note entries managed by Weave always end with `#weave`; `DailyNoteWriter` owns dedupe and rewrite behavior.
 
-2. Tech stack
+Where to look for common tasks
+- Routing bug: `WeaveConfig.from_runtime()`, `RouteResolver`, `WeaveService.get_processed_count()`.
+- Note filename/content bug: the relevant handler and the Jinja templates near the top of `src/weave/app.py`.
+- Daily note duplication or summary issues: `DailyNoteWriter` and the frontmatter helpers around `split_front_matter()`.
+- Calendar behavior: `CalendarScraper` plus `scripts/setup_google_credentials.py`.
+- Agent session import issue: `AgentSessionScraper`, session parsing helpers, and `docs/research/agent-sessions.md`.
+- GitHub activity work: `src/weave/github_activity.py`.
 
-Language/runtime:
-- Python 3.12
+How to extend it
+- New email workflow:
+  - add a route in `WeaveConfig.from_runtime()`
+  - add the handler in `WeaveService.get_handlers()`
+  - return the right `HandlerResult` so daily-note updates happen correctly
+  - add tests in `tests/test_app.py`
+- Keep summary generation/backfill logic inside `DailyNoteWriter`, not inside individual handlers.
+- If you split `app.py`, preserve the existing boundaries: monitor, routing, handlers, scrapers, daily-note writer, service.
 
-Primary dependencies:
-- imapclient (IMAP access)
-- pydantic (config/data validation)
-- jinja2 (markdown templating)
-- rich (logging/spinner output)
-
-External command dependency:
-- llm CLI (PDF transcription), model gemini/gemini-3-flash-preview
-
-Tooling:
-- pytest
-- ruff
-- mypy (strict)
-- uv / uv_build
-
-3. Architecture
-
-Current layout is intentionally monolithic:
-- src/weave/app.py contains almost all runtime logic.
-
-Runtime flow:
-1. Parse CLI args.
-2. Load runtime config from env and hardcoded route variants.
-3. Connect to IMAP and select INBOX.
-4. Fetch unread messages.
-5. Normalize envelope fields (sender, recipients, subject, received date).
-6. Resolve route by recipient + sender allowlist.
-7. Dispatch to route handler.
-8. For each created sink note, append an embed line to a daily note.
-9. Mark message as seen when handling and daily-note updates succeed.
-10. In daemon mode, use IMAP IDLE loop and reconnect on errors.
-
-Core components in src/weave/app.py:
-- Exceptions: ConfigError, TranscriptionError
-- Helpers: get_variant_address, show_spinner, setup_logging, get_args, main
-- Data classes: Attachment, IncomingMessage, HandlerResult
-- Protocols: MessageHandler, PdfTranscriber
-- Config models: RouteConfig, WeaveConfig
-- Services: RouteResolver, MailboxMonitor, LlmPdfTranscriber, VoiceNoteHandler, RemarkableSnapshotHandler, DailyNoteWriter, WeaveService
-
-Handler behavior:
-- VoiceNoteHandler: extracts text/plain and attachments, writes transcription markdown plus files.
-- RemarkableSnapshotHandler: extracts PDF attachments, transcribes via PdfTranscriber, writes markdown note (or error note on transcription failure).
-- DailyNoteWriter: resolves daily note folder from .obsidian/daily-notes.json (folder), falls back to vault root, appends deduplicated embed lines.
-
-4. Repository files and components
-
-Repository files:
-- .gitignore
-- .python-version
-- AGENTS.md
-- README.md
-- docs/plans/spec.md
-- docs/plans/design.md
-- pyproject.toml
-- src/weave/__init__.py
-- src/weave/app.py
-- src/weave/cli.py
-- tests/test_app.py
-- uv.lock
-
-Top-level directories:
-- docs/
-- src/
-- tests/
-
-Source modules:
-- src/weave/__init__.py: exports main
-- src/weave/cli.py: CLI entry shim
-- src/weave/app.py: full application logic
-
-Tests:
-- tests/test_app.py: route resolution, address derivation validation, daily-note writer behavior, voice handler output, rm2 handler output and failure handling
-
-5. Runtime inputs and outputs
-
-Required environment variables:
-- IMAP_HOST
-- IMAP_USER
-- IMAP_PASSWORD
-- WEAVE_BASE_EMAIL
-
-CLI:
-- weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet]
-
-Output paths:
-- sink notes and attachments under: <vault_root>/sink/<YYYY-MM-DD>/
-- attachments under: <vault_root>/sink/<YYYY-MM-DD>/_attachments/
-- daily notes under configured daily folder (or vault root fallback)
-
-6. Notes
-
-- Route variants and handler mapping are hardcoded in code; allowed senders come from `WEAVE_ALLOWED_SENDERS` env var.
-- Existing design document mentions planned split of app.py into smaller modules; this is not yet implemented.
+Practical notes
+- `README.md` is narrower than the current code. The codebase now also includes calendar scraping, TODO handling, agent session import, and the GitHub activity prototype.
+- If docs and code disagree, verify behavior in `src/weave/app.py` and tests first, then update `docs/plans/spec.md` and `docs/plans/design.md`.
+- The current code initializes calendar support eagerly in `WeaveService`; confirm startup assumptions in code before relying on doc text about optional calendar behavior.
