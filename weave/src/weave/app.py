@@ -176,6 +176,14 @@ MONTHS: dict[str, int] = {
     "Dec": 12,
 }
 SECTION_DATE_RE = re.compile(r"^## (\w{3}) (\d{1,2}), (\d{4})")
+CLAUDE_SESSION_FILENAME_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$",
+    re.IGNORECASE,
+)
+PI_SESSION_FILENAME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d+)?Z_[0-9a-f-]+\.jsonl$",
+    re.IGNORECASE,
+)
 
 CALENDAR_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
@@ -1572,15 +1580,20 @@ class AgentSessionScraper:
 
     def _find_session_files(self) -> list[Path]:
         paths: list[Path] = []
-        for agent_dir in ("claude", "pi"):
+        for agent_dir, filename_re in (
+            ("claude", CLAUDE_SESSION_FILENAME_RE),
+            ("pi", PI_SESSION_FILENAME_RE),
+        ):
             agent_path = self.sessions_dir / agent_dir
             if not agent_path.is_dir():
                 continue
             for jsonl in agent_path.rglob("*.jsonl"):
                 if "/subagents/" in str(jsonl):
                     continue
+                if not filename_re.match(jsonl.name):
+                    continue
                 paths.append(jsonl)
-        return paths
+        return sorted(paths)
 
     def _load_manifest(self, manifest_path: Path) -> AgentSessionManifest:
         if not manifest_path.exists():

@@ -106,7 +106,7 @@ Last updated: 2026-03-11
 
 5.6 `AgentSessionScraper`
 - initialized with `sessions_dir`, `output_dir`, and optional `NoteSummarizer`
-- `scrape_once()` finds all `.jsonl` files under `claude/` and `pi/` subdirectories (skipping `subagents/`)
+- `scrape_once()` finds canonical session `.jsonl` files under `claude/` and `pi/` subdirectories, skipping `subagents/` and ignoring non-canonical cache/export artifacts such as `agent-*.jsonl`
 - keeps a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`; if the file is missing or malformed it is ignored and rebuilt from the source tree
 - manifest entries are keyed by source file path and store `session_id`, `session_sha256`, `sink_path`, and `source_mtime_ns`
 - each scan stats every source file, treats files with an mtime in the last 7 days as mutable, and otherwise trusts the manifest + existing sink note without rereading file contents

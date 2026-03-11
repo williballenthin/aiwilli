@@ -113,8 +113,9 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - daily note file I/O is thread-safe (calendar thread and IMAP thread share the writer).
 
 5.6 Agent session scraper output
-- scans `claude/` and `pi/` subdirectories of the configured agent sessions directory for `.jsonl` files.
+- scans `claude/` and `pi/` subdirectories of the configured agent sessions directory for canonical session `.jsonl` files.
 - subagent session files (under `*/subagents/`) are skipped.
+- non-canonical `.jsonl` artifacts such as harness cache/export files are ignored. Claude imports require a UUID filename; Pi imports require the timestamp-plus-session-id filename form.
 - parses both Claude Code and Pi Agent JSONL formats, auto-detecting by first line.
 - session identity comes from the harness session ID: Claude usually uses the filename stem; Pi usually uses the session UUID from the timestamp-prefixed filename. Parsed JSONL data can also supply the session ID.
 - for each session with at least one user turn, produces a markdown note with:

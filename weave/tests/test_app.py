@@ -949,7 +949,7 @@ def claude_session_file(tmp_path: Path) -> Path:
 def pi_session_file(tmp_path: Path) -> Path:
     d = tmp_path / "pi" / "--Users-user-code-myproject--"
     d.mkdir(parents=True)
-    p = d / "2026-03-03T16-00-00-000Z_pi-sess-001.jsonl"
+    p = d / "2026-03-03T16-00-00-000Z_pi-11111111-1111-1111-1111-111111111111.jsonl"
     p.write_text(_build_pi_session_jsonl())
     return p
 
@@ -1099,7 +1099,8 @@ def test_agent_session_scraper_writes_note(tmp_path: Path, monkeypatch: pytest.M
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    (claude_dir / "sess-001.jsonl").write_text(_build_claude_session_jsonl())
+    session_path = claude_dir / "11111111-1111-1111-1111-111111111111.jsonl"
+    session_path.write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
@@ -1135,7 +1136,7 @@ def test_agent_session_scraper_uses_manifest_for_unchanged_mutable_sessions(
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    session_path = claude_dir / "sess-001.jsonl"
+    session_path = claude_dir / "11111111-1111-1111-1111-111111111111.jsonl"
     session_path.write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
@@ -1166,7 +1167,7 @@ def test_agent_session_scraper_updates_changed_mutable_session(
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    session_path = claude_dir / "sess-001.jsonl"
+    session_path = claude_dir / "11111111-1111-1111-1111-111111111111.jsonl"
     session_path.write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
@@ -1209,7 +1210,7 @@ def test_agent_session_scraper_skips_immutable_sessions(
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    session_path = claude_dir / "sess-001.jsonl"
+    session_path = claude_dir / "11111111-1111-1111-1111-111111111111.jsonl"
     session_path.write_text(_build_claude_session_jsonl())
 
     old_ts = (datetime.now(tz=UTC) - timedelta(days=8)).timestamp()
@@ -1242,7 +1243,8 @@ def test_agent_session_scraper_recovers_from_malformed_manifest(
     sessions_dir = tmp_path / "sessions"
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
-    (claude_dir / "sess-001.jsonl").write_text(_build_claude_session_jsonl())
+    session_path = claude_dir / "11111111-1111-1111-1111-111111111111.jsonl"
+    session_path.write_text(_build_claude_session_jsonl())
 
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
@@ -1266,7 +1268,7 @@ def test_agent_session_scraper_skips_empty_sessions(
     claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
     claude_dir.mkdir(parents=True)
     empty = '{"type":"file-history-snapshot","messageId":"x","snapshot":{}}\n'
-    (claude_dir / "empty.jsonl").write_text(empty)
+    (claude_dir / "11111111-1111-1111-1111-111111111111.jsonl").write_text(empty)
 
     output_dir = tmp_path / "sink"
     output_dir.mkdir()
@@ -1300,3 +1302,30 @@ def test_agent_session_scraper_skips_subagents(
     run = scraper.scrape_once()
     assert run.report.scanned == 0
     assert run.results == []
+
+
+def test_agent_session_scraper_skips_noncanonical_session_filenames(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-proj"
+    claude_dir.mkdir(parents=True)
+    (claude_dir / "agent-a0d1b80.jsonl").write_text(_build_claude_session_jsonl())
+    (claude_dir / "abc-123.jsonl").write_text(_build_claude_session_jsonl())
+    (claude_dir / "11111111-1111-1111-1111-111111111111.jsonl").write_text(
+        _build_claude_session_jsonl().replace("abc-123", "11111111-1111-1111-1111-111111111111")
+    )
+
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    scraper = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+    )
+    run = scraper.scrape_once()
+    assert run.report.scanned == 1
+    assert len(run.results) == 1
+    assert run.results[0].note_path.name == "11111111-1111-1111-1111-111111111111.md"
