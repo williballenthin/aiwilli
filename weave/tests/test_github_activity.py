@@ -154,22 +154,13 @@ def test_render_activity_report_formats_supported_events() -> None:
     ]
     client = StaticGitHubTimelineClient(
         pull_requests={
-            (
-                "acme",
-                "app",
-                42,
-            ): {
+            ("acme", "app", 42): {
                 "title": "Add activity renderer",
                 "html_url": "https://github.com/acme/app/pull/42",
             },
         },
         compares={
-            (
-                "acme",
-                "app",
-                "aaaa1111",
-                "bbbb2222",
-            ): {
+            ("acme", "app", "aaaa1111", "bbbb2222"): {
                 "html_url": "https://github.com/acme/app/compare/aaaa1111...bbbb2222",
                 "commits": [
                     {
@@ -193,11 +184,14 @@ def test_render_activity_report_formats_supported_events() -> None:
         username="tester",
         timezone=ZoneInfo("UTC"),
         fetched_at=datetime(2026, 3, 11, 14, 0, tzinfo=UTC),
+        source_event_count=len(events),
     )
 
     assert "# GitHub activity for tester" in report
+    assert "Source events: 7" in report
+    assert "Rendered items: 8" in report
     assert "## 2026-03-11" in report
-    assert "### acme/app" in report
+    assert "### [acme/app](https://github.com/acme/app)" in report
     assert "#### " not in report
     assert (
         "- [08:30:00](https://github.com/acme/app/tree/feature/demo) "
@@ -205,15 +199,13 @@ def test_render_activity_report_formats_supported_events() -> None:
     )
     assert (
         "- [09:00:00](https://github.com/acme/app/compare/aaaa1111...bbbb2222) "
-        "pushed 2 commits to main" in report
+        "committed [abc1234](https://github.com/acme/app/commit/abc12345) to main: "
+        "Fix parser crash" in report
     )
     assert (
-        "  - [abc1234](https://github.com/acme/app/commit/abc12345) Fix parser crash"
-        in report
-    )
-    assert (
-        "  - [def6789](https://github.com/acme/app/commit/def67890) Add regression test"
-        in report
+        "- [09:00:00](https://github.com/acme/app/compare/aaaa1111...bbbb2222) "
+        "committed [def6789](https://github.com/acme/app/commit/def67890) to main: "
+        "Add regression test" in report
     )
     assert (
         "- [10:00:00](https://github.com/acme/app/pull/42) opened PR #42: Add activity renderer"
@@ -234,7 +226,7 @@ def test_render_activity_report_formats_supported_events() -> None:
         "left review comment on PR #42 in src/app.py: can we extract this into a helper?"
         in report
     )
-    assert "### acme/lib" in report
+    assert "### [acme/lib](https://github.com/acme/lib)" in report
     assert (
         "- [13:30:00](https://github.com/acme/lib) starred the repository "
         "[acme/lib](https://github.com/acme/lib)"
@@ -246,13 +238,12 @@ def test_render_activity_report_uses_timezone_for_local_day() -> None:
     records = [
         ActivityRecord(
             event_id="1",
-            event_type="PushEvent",
             repo="acme/app",
             occurred_at=datetime(2026, 3, 11, 1, 15, tzinfo=UTC),
             url="https://github.com/acme/app/compare/aaaa1111...bbbb2222",
-            summary="pushed 1 commit to main",
-            details=(
-                "[abc1234](https://github.com/acme/app/commit/abc12345) Fix parser crash",
+            summary=(
+                "committed [abc1234](https://github.com/acme/app/commit/abc12345) "
+                "to main: Fix parser crash"
             ),
         )
     ]
@@ -262,12 +253,14 @@ def test_render_activity_report_uses_timezone_for_local_day() -> None:
         username="tester",
         timezone=ZoneInfo("America/New_York"),
         fetched_at=datetime(2026, 3, 11, 2, 0, tzinfo=UTC),
+        source_event_count=1,
     )
 
     assert "## 2026-03-10" in report
     assert (
         "- [21:15:00](https://github.com/acme/app/compare/aaaa1111...bbbb2222) "
-        "pushed 1 commit to main" in report
+        "committed [abc1234](https://github.com/acme/app/commit/abc12345) "
+        "to main: Fix parser crash" in report
     )
 
 

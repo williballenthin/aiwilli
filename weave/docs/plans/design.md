@@ -34,9 +34,12 @@ Last updated: 2026-03-11
 
 - `scripts/render_github_activity.py` is intentionally standalone and does not write vault notes.
 - output grouping is `date -> repository -> chronological events`; there are no per-type subheadings inside a repository section.
-- most events render as a single markdown bullet line whose timestamp is also the primary link target, e.g. `[10:28:20](...) pushed 4 commits to main`.
-- push events may include nested commit bullets under the top-level push line, each rendered as `[sha](commit-url) headline`.
-- issue comments, review submissions, and review comments render the comment/review body snippet inline on the main bullet line.
+- repository headings render as markdown links to the repository HTML URL.
+- most events render as a single markdown bullet line whose timestamp is also the primary link target.
+- push expansion is commit-centric: when compare data is available, each pushed commit becomes its own top-level event line and the timestamp links to the compare view while the commit SHA in the summary links to the individual commit.
+- if compare expansion is unavailable, the renderer falls back to a single push line.
+- issue comments, review submissions, and review comments render compact body snippets inline on the main bullet line.
+- leading quote markers are stripped from comment snippets and snippet limits are intentionally short to keep the report scan-friendly.
 - star events render both the timestamp link and the repository name link to the repository HTML URL.
 
 4. Runtime flow
