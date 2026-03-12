@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from weave.app import (
+    AgentSessionIndexSummarizer,
     AgentSessionScraper,
     CalendarScraper,
     ConfigError,
@@ -81,6 +82,16 @@ class StaticGitHubTimelineClient:
 
     def compare_commits(self, owner: str, repo: str, base: str, head: str) -> dict[str, object]:
         return self.compares[(owner, repo, base, head)]
+
+
+class SequentialLlmInvoker:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, str, str]] = []
+
+    def run(self, model: str, prompt: str, content: str) -> str:
+        self.calls.append((model, prompt, content))
+        return self.responses.pop(0)
 
 
 def build_message_with_body_and_attachment() -> bytes:
@@ -459,6 +470,40 @@ class StaticSummarizer:
 
     def summarize(self, content: str) -> str:
         return self.summary
+
+
+def test_agent_session_index_summarizer_accepts_compact_output() -> None:
+    invoker = SequentialLlmInvoker(
+        ["Align Pi session discovery with native JSONL storage and UUIDs"]
+    )
+    summarizer = AgentSessionIndexSummarizer(invoker=invoker)
+
+    summary = summarizer.summarize("conversation")
+
+    assert summary == "Align Pi session discovery with native JSONL storage and UUIDs"
+    assert len(invoker.calls) == 1
+
+
+def test_agent_session_index_summarizer_repairs_verbose_output() -> None:
+    invoker = SequentialLlmInvoker(
+        [
+            "This plan outlines a comprehensive overhaul of the chat interface's rendering "
+            "pipeline and data flow to eliminate lag, prevent UI flickering, and optimize "
+            "mobile performance.\n\n```plan\n...\n```",
+            "Overhaul chat rendering to eliminate lag, flicker, and mobile slowdowns",
+        ]
+    )
+    summarizer = AgentSessionIndexSummarizer(invoker=invoker)
+
+    summary = summarizer.summarize("conversation")
+
+    assert summary == "Overhaul chat rendering to eliminate lag, flicker, and mobile slowdowns"
+    assert len(invoker.calls) == 2
+    assert invoker.calls[1][2] == (
+        "This plan outlines a comprehensive overhaul of the chat interface's rendering "
+        "pipeline and data flow to eliminate lag, prevent UI flickering, and optimize "
+        "mobile performance."
+    )
 
 
 def test_daily_note_writer_includes_summary_when_summarizer_provided(tmp_path: Path) -> None:

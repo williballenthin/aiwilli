@@ -2608,7 +2608,7 @@ class WeaveService:
             sessions_dir=config.agent_sessions_dir,  # type: ignore[arg-type]
             output_dir=output_dir,
             summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_SUMMARY_PROMPT),
-            index_summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_INDEX_SUMMARY_PROMPT),
+            index_summarizer=AgentSessionIndexSummarizer(),
         )
         logger.info("agent session scraper enabled: %s", config.agent_sessions_dir)
 

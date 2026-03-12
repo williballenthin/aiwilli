@@ -123,7 +123,8 @@ Date directory format: sink handlers and calendar/session imports use nested `YY
 - TODO items render as checkbox bullets with compact aliased wiki-links and optional summaries.
 - meeting notes/chats and capture items render as compact bullets with aliased wiki-links and optional summaries.
 - agent sessions render as a nested list grouped by project; child bullets use a shortened session ID as link text, plus a compact summary and message count.
-- when an existing agent-session note already carries a longer legacy summary, the Weave daily-note renderer truncates it to roughly 12 words for scanability without modifying the note itself.
+- current agent-session imports generate that frontmatter summary with a dedicated prompt that targets a single plain-text phrase of about 12 words.
+- when an existing older agent-session note still carries a longer legacy summary, the Weave daily-note renderer truncates it to roughly 12 words for scanability without modifying the note itself.
 - GitHub activity renders as a compact repository index; see section 5.7.
 - Weave still stores/reuses a per-note frontmatter `summary` on generated sink notes. If a sink note has no summary and a summarizer is configured, Weave backfills it into the sink note itself and then reuses it in the Weave-generated daily note.
 - Once per local day, daily-note sync regenerates Weave daily notes from current sink-note metadata and removes legacy inline `#weave` entries / legacy managed GitHub sections from personal daily notes while preserving all non-Weave personal content.
@@ -141,7 +142,8 @@ Date directory format: sink handlers and calendar/session imports use nested `YY
   - the full conversation rendered as Obsidian callouts (`note` for user, `quote` for assistant) so markdown/code inside the body still renders normally.
 - note path: `<output>/<YYYY>/<MM>/<DD>/<session-id>.md`
 - date directory is based on session start time.
-- frontmatter `summary` is a separate compact index summary intended for the Weave-generated daily note. The structured summary section in the note body is generated independently.
+- frontmatter `summary` is a separate compact index summary intended for the Weave-generated daily note. It is generated with a dedicated agent-session index prompt that aims for a single plain-text phrase of about 12 words, with a rewrite pass if the first LLM output is verbose or misformatted.
+- the structured summary section in the note body is generated independently.
 - sync state is tracked in a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json` (falling back to `~/.cache/...`). Missing or malformed manifests are treated as cache misses and are regenerated on the next scan.
 - on each scan, agent session files modified within the last 7 days are treated as mutable and are checked against the manifest. Older files are treated as immutable once they have a manifest entry and an existing sink note.
 - the manifest stores per-source-file session ID, SHA-256, sink path, and source mtime for incremental sync.

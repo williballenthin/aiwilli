@@ -40,7 +40,7 @@ Last updated: 2026-03-12
 4. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
 5. Initialize `AgentSessionScraper` with two summarizers:
    - structured body summary prompt for the note body
-   - compact index summary prompt for frontmatter / daily-note grouping
+   - a dedicated compact index summarizer for frontmatter / daily-note grouping that targets about 12 words and runs a repair pass when the first LLM output is verbose or misformatted
 6. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
 7. Connect to IMAP and process unread routed messages.
 8. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
@@ -91,7 +91,7 @@ Section rendering:
 - section order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity.
 - standard note sections render compact bullets with aliased wiki-links and optional summaries.
 - agent sessions render as `project -> nested session bullets`; each child uses a shortened session-id tail, compact frontmatter summary, and message count parsed from the metrics table.
-- legacy long agent-session frontmatter summaries are truncated at render time to keep the generated daily note dense without rewriting the underlying sink note.
+- current imports aim to keep agent-session frontmatter summaries short at generation time; legacy long summaries are still truncated at render time to keep the generated daily note dense without rewriting the underlying sink note.
 - GitHub activity is injected as a pre-rendered compact body and wrapped with the GitHub section markers.
 
 Discovery + sync:
@@ -113,6 +113,7 @@ Discovery + sync:
 - constructor now accepts two summarizers:
   - `summarizer`: structured body summary used for the `## Summary` section
   - `index_summarizer`: compact summary written into frontmatter `summary`
+- the default agent-session index summarizer is now a dedicated class that normalizes the first non-empty response line, validates that it looks like a compact one-line summary, and asks the LLM to rewrite verbose output instead of relying on daily-note truncation.
 - `_sync_session()` renders the conversation once, then runs the two summary prompts independently.
 - rendered note filenames remain session-ID based.
 
