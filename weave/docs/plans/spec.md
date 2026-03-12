@@ -127,6 +127,7 @@ Date directory format: sink handlers and calendar/session imports use nested `YY
 - TODO items render as checkbox bullets with compact aliased wiki-links and optional summaries.
 - meeting notes/chats and capture items render as compact bullets with aliased wiki-links and optional summaries.
 - agent sessions render as a nested list grouped by project; child bullets use a shortened session ID as link text, plus a compact summary and message count.
+- when an existing agent-session note already carries a longer legacy summary, the Weave daily-note renderer truncates it to roughly 12 words for scanability without modifying the note itself.
 - GitHub activity renders as a compact repository index; see section 5.7.
 - Weave still stores/reuses a per-note frontmatter `summary` on generated sink notes. If a sink note has no summary and a summarizer is configured, Weave backfills it into the sink note itself and then reuses it in the Weave-generated daily note.
 - `--generate-weave-daily-notes-only` regenerates only the Weave daily notes. It leaves sink notes and personal daily notes untouched.

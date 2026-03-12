@@ -714,6 +714,44 @@ def test_generate_all_weave_daily_notes_does_not_backfill_sink_summaries(tmp_pat
     )
 
 
+def test_generate_all_weave_daily_notes_truncates_agent_session_summaries(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "11111111-1111-1111-1111-abcdef123456.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        "---\n"
+        "type: agent_session\n"
+        'summary: "one two three four five six seven eight nine ten eleven twelve thirteen"\n'
+        'agent: "pi"\n'
+        'project: "weave"\n'
+        'session_id: "11111111-1111-1111-1111-abcdef123456"\n'
+        'session_sha256: "sha"\n'
+        "---\n"
+        "\n"
+        "## Metrics\n"
+        "\n"
+        "| Metric | Value |\n"
+        "|--------|-------|\n"
+        "| Messages | 42 |\n"
+    )
+
+    writer = DailyNoteWriter(vault_root=vault_root)
+
+    assert writer.generate_all_weave_daily_notes() == 1
+    assert (vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md").read_text() == (
+        "## Agent sessions\n"
+        "<!-- weave:section:agent-sessions:start -->\n"
+        "- weave\n"
+        "  - [[sink/2026/03/01/11111111-1111-1111-1111-abcdef123456.md|abcdef123456]]"
+        " — one two three four five six seven eight nine ten eleven twelve…"
+        " (42 messages)\n"
+        "<!-- weave:section:agent-sessions:end -->\n"
+    )
+
+
 def test_daily_note_writer_migrates_personal_note_layout(tmp_path: Path) -> None:
     vault_root = tmp_path
     config_dir = vault_root / ".obsidian"

@@ -2406,12 +2406,19 @@ class DailyNoteWriter:
             for entry in sorted(grouped[project], key=lambda item: item.session_id):
                 short_label = self._get_short_session_label(entry.session_id)
                 line = f"  - {self.render_wikilink(entry.note_path, short_label)}"
-                if entry.summary:
-                    line = f"{line} — {entry.summary}"
+                compact_summary = self._truncate_words(entry.summary, limit=12)
+                if compact_summary:
+                    line = f"{line} — {compact_summary}"
                 if entry.message_count is not None:
                     line = f"{line} ({entry.message_count} messages)"
                 lines.append(line)
         return "\n".join(lines)
+
+    def _truncate_words(self, text: str, limit: int) -> str:
+        words = text.split()
+        if len(words) <= limit:
+            return text
+        return " ".join(words[:limit]).rstrip(".,;:") + "…"
 
     def _get_short_session_label(self, session_id: str) -> str:
         tail = session_id.rsplit("/", 1)[-1]

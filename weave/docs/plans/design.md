@@ -101,6 +101,7 @@ Section rendering:
 - section order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity.
 - standard note sections render compact bullets with aliased wiki-links and optional summaries.
 - agent sessions render as `project -> nested session bullets`; each child uses a shortened session-id tail, compact frontmatter summary, and message count parsed from the metrics table.
+- legacy long agent-session frontmatter summaries are truncated at render time to keep the generated daily note dense without rewriting the underlying sink note.
 - GitHub activity is injected as a pre-rendered compact body and wrapped with the GitHub section markers.
 
 Discovery + sync:
