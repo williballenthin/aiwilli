@@ -7,7 +7,7 @@ Last updated: 2026-03-12
 
 - `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, and the integrated `GitHubActivitySyncer`.
 - `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers. It still renders the detailed standalone report, and now also renders the compact per-repository daily-note section used by the daemon.
-- `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, session rendering, and migration tests.
+- `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and session rendering tests.
 - `tests/test_github_activity.py`: GitHub activity normalization plus detailed and compact rendering tests.
 - `scripts/setup_google_credentials.py`: interactive OAuth setup.
 - `scripts/parse_session.py`: standalone CLI for parsing/displaying agent session JSONL files.
@@ -28,7 +28,7 @@ Last updated: 2026-03-12
 
 - `get_date_folder(output_dir, received)`: creates `YYYY/MM/DD` nested directories under the sink root.
 - `sanitize_filename(name)`: strips filesystem-unsafe characters.
-- `render_daily_note_relative_path(day, format_string)`: renders Obsidian-style daily note paths for the supported token subset (`YYYY`, `MM`, `DD`). Used both for normal personal-daily-note resolution and explicit layout migration.
+- `render_daily_note_relative_path(day, format_string)`: renders Obsidian-style daily note paths for the supported token subset (`YYYY`, `MM`, `DD`). Used for personal daily-note resolution and the fixed Weave daily-note path layout.
 - `split_front_matter()`, `parse_front_matter_scalar()`, `get_front_matter_fields()`, `get_note_summary()`, `set_note_summary()`: minimal frontmatter parsing/updating without a YAML dependency.
 - `get_managed_section_markers(section_name)`: returns deterministic HTML comment markers for managed Weave sections. GitHub activity keeps its legacy marker names for upgrade compatibility.
 
@@ -102,11 +102,6 @@ Discovery + sync:
 - each discovered day is rebuilt with `_refresh_day(day)`.
 - `sync_daily_note(path)` now means “rebuild the day identified by this personal daily note path”.
 
-Layout migration:
-- `migrate_personal_daily_layout(format_string)` moves existing personal daily notes to the rendered path for the requested format and writes the new `format` back to `.obsidian/daily-notes.json`.
-- if a destination file already exists with different content, it raises `ConfigError` rather than merging.
-- empty directories left behind by a move are pruned upward until the configured personal daily-note folder root.
-
 5.6 `GitHubActivitySyncer`
 - still fetches recent user events via `gh` and finalizes only stable completed local days.
 - still uses a manifest keyed by `<username>:<YYYY-MM-DD>`.
@@ -140,7 +135,7 @@ Layout migration:
 6. Threading model
 
 - unchanged structurally: IMAP runs on the main thread, maintenance threads handle calendar, agent sessions, GitHub activity, and daily-note sync.
-- `DailyNoteWriter` still uses one `threading.RLock` around summary backfill, day rebuilds, GitHub section updates, and migration logic so concurrent writers cannot interleave file updates.
+- `DailyNoteWriter` still uses one `threading.RLock` around summary backfill, day rebuilds, and GitHub section updates so concurrent writers cannot interleave file updates.
 
 7. Notes on compatibility
 
@@ -148,5 +143,5 @@ Layout migration:
   - transcription filename suffix for voice notes
   - PDF attachment frontmatter for handwriting notes
   - subject + `##` heading shape for TODOs
-- legacy inline `#weave` personal-daily-note lines remain supported only as migration inputs. `DailyNoteWriter` strips them during daily-note sync and replaces them with the embed-region model.
-- legacy managed GitHub sections in personal daily notes are preserved long enough to seed the new Weave daily note during migration, then removed from the personal note.
+- legacy inline `#weave` personal-daily-note lines remain supported as cleanup inputs. `DailyNoteWriter` strips them during daily-note sync and replaces them with the embed-region model.
+- legacy managed GitHub sections in personal daily notes are preserved long enough to seed the new Weave daily note during regeneration, then removed from the personal note.

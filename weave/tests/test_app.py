@@ -752,24 +752,6 @@ def test_generate_all_weave_daily_notes_truncates_agent_session_summaries(tmp_pa
     )
 
 
-def test_daily_note_writer_migrates_personal_note_layout(tmp_path: Path) -> None:
-    vault_root = tmp_path
-    config_dir = vault_root / ".obsidian"
-    config_dir.mkdir(parents=True)
-    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
-    old_path = vault_root / "daily" / "2026-03-01.md"
-    old_path.parent.mkdir(parents=True)
-    old_path.write_text("hello\n")
-
-    writer = DailyNoteWriter(vault_root=vault_root)
-    assert writer.migrate_personal_daily_layout("YYYY/MM/DD/YYYY-MM-DD") == 1
-
-    new_path = vault_root / "daily" / "2026/03/01" / "2026-03-01.md"
-    assert new_path.read_text() == "hello\n"
-    settings = json.loads((config_dir / "daily-notes.json").read_text())
-    assert settings["format"] == "YYYY/MM/DD/YYYY-MM-DD"
-
-
 def test_weave_service_runs_daily_note_sync_once_per_day(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -168,9 +168,21 @@ Provide a structured summary with:
 Be concise. Use plain text, no markdown headers."""
 
 AGENT_SESSION_INDEX_SUMMARY_PROMPT = (
-    "Summarize this software engineering agent session in 12 words or fewer."
+    "You are writing the YAML frontmatter summary for a software engineering"
+    " agent session note."
+    " Write one compact plain-text phrase of about 12 words describing the"
+    " main task or concrete outcome."
+    " Return exactly one line."
+    " No markdown, no quotes, no bullet markers, no code fences, and no"
+    ' preamble like "This session".'
+)
+AGENT_SESSION_INDEX_SUMMARY_REPAIR_PROMPT = (
+    "Rewrite this software engineering agent-session summary as one compact"
+    " plain-text phrase of about 12 words."
     " Focus on the main task or concrete outcome."
-    " Output a single plain-text phrase."
+    " Return exactly one line."
+    " No markdown, no quotes, no bullet markers, no code fences, and no"
+    ' preamble like "This session".'
 )
 
 HANDLER_ENTRY_TYPES: dict[str, str] = {
@@ -647,15 +659,16 @@ class NoteSummarizer(Protocol):
         """Return a brief summary of the given content."""
 
 
-class LlmNoteSummarizer:
-    def __init__(self, prompt: str = SUMMARY_PROMPT, model: str = SUMMARY_MODEL):
-        self.prompt = prompt
-        self.model = model
+class LlmInvoker(Protocol):
+    def run(self, model: str, prompt: str, content: str) -> str:
+        """Return an LLM response for the given prompt and content."""
 
-    def summarize(self, content: str) -> str:
+
+class SubprocessLlmInvoker:
+    def run(self, model: str, prompt: str, content: str) -> str:
         try:
             result = subprocess.run(
-                ["llm", "-m", self.model, self.prompt],
+                ["llm", "-m", model, prompt],
                 input=content,
                 capture_output=True,
                 text=True,
@@ -665,6 +678,63 @@ class LlmNoteSummarizer:
             logger.warning("summarization failed: %s", exc)
             return ""
         return result.stdout.strip()
+
+
+class LlmNoteSummarizer:
+    def __init__(
+        self,
+        prompt: str = SUMMARY_PROMPT,
+        model: str = SUMMARY_MODEL,
+        invoker: LlmInvoker | None = None,
+    ):
+        self.prompt = prompt
+        self.model = model
+        self.invoker = invoker or SubprocessLlmInvoker()
+
+    def summarize(self, content: str) -> str:
+        return self.invoker.run(self.model, self.prompt, content)
+
+
+class AgentSessionIndexSummarizer:
+    def __init__(
+        self,
+        model: str = SUMMARY_MODEL,
+        invoker: LlmInvoker | None = None,
+    ):
+        self.model = model
+        self.invoker = invoker or SubprocessLlmInvoker()
+
+    def summarize(self, content: str) -> str:
+        summary = self._normalize_summary(
+            self.invoker.run(self.model, AGENT_SESSION_INDEX_SUMMARY_PROMPT, content)
+        )
+        if self._is_valid_summary(summary):
+            return summary
+        if not summary:
+            return ""
+        repaired = self._normalize_summary(
+            self.invoker.run(self.model, AGENT_SESSION_INDEX_SUMMARY_REPAIR_PROMPT, summary)
+        )
+        return repaired or summary
+
+    def _normalize_summary(self, value: str) -> str:
+        for raw_line in value.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^[*-]\s+", "", line)
+            line = re.sub(r"^\d+[.)]\s+", "", line)
+            line = re.sub(r"^(summary|result|outcome):\s*", "", line, flags=re.IGNORECASE)
+            line = line.strip().strip("`")
+            line = line.strip('"\'')
+            return re.sub(r"\s+", " ", line).strip()
+        return ""
+
+    def _is_valid_summary(self, value: str) -> bool:
+        if not value or any(marker in value for marker in ("```", "\n")):
+            return False
+        word_count = len(value.split())
+        return 6 <= word_count <= 16
 
 
 class VoiceNoteHandler:
@@ -2080,31 +2150,6 @@ class DailyNoteWriter:
             _, changed = self._refresh_day(day)
             return changed
 
-    def migrate_personal_daily_layout(self, format_string: str) -> int:
-        with self._lock:
-            folder = self.get_daily_notes_folder()
-            settings = self._load_daily_note_settings()
-            moved = 0
-            for old_path in sorted(self._iter_personal_daily_note_paths()):
-                day = self._parse_day_from_path(old_path)
-                if day is None:
-                    continue
-                new_path = folder / render_daily_note_relative_path(day, format_string)
-                if new_path == old_path:
-                    continue
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                if new_path.exists():
-                    if new_path.read_text() != old_path.read_text():
-                        raise ConfigError(f"daily note destination already exists: {new_path}")
-                    old_path.unlink()
-                else:
-                    old_path.replace(new_path)
-                self._prune_empty_parents(old_path.parent, stop_at=folder)
-                moved += 1
-            settings["format"] = format_string
-            self._write_daily_note_settings(settings)
-            return moved
-
     def get_daily_note_path(self, received: datetime) -> Path:
         return self.get_daily_note_path_for_date(received.date())
 
@@ -2530,20 +2575,6 @@ class DailyNoteWriter:
         except json.JSONDecodeError:
             return {}
         return settings if isinstance(settings, dict) else {}
-
-    def _write_daily_note_settings(self, settings: dict[str, Any]) -> None:
-        settings_path = self.vault_root / ".obsidian" / "daily-notes.json"
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True))
-
-    def _prune_empty_parents(self, directory: Path, stop_at: Path) -> None:
-        current = directory
-        while current != stop_at and current.exists():
-            try:
-                current.rmdir()
-            except OSError:
-                break
-            current = current.parent
 
 
 class WeaveService:
