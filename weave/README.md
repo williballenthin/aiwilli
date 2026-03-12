@@ -32,23 +32,26 @@ GitHub activity:
 - rendered as a compact repository index with counts per activity kind
 - finalized days are tracked in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json`
 
-Required environment variables for normal daemon/once mode:
+Recommended environment variables for deployed daemon/once mode:
 - `IMAP_HOST`
 - `IMAP_USER`
 - `IMAP_PASSWORD`
 - `WEAVE_BASE_EMAIL`
 - `WEAVE_ALLOWED_SENDERS`
+- `WEAVE_VAULT_ROOT` (`OBSIDIAN_VAULT_ROOT` is also accepted as a fallback)
+
+For deployed runs, prefer setting the vault path in your environment file and running `weave` without a positional vault argument. The positional `<vault_root>` argument remains available as an override.
 
 Run once:
 
 ```bash
-uv --directory weave run weave /path/to/obsidian-vault --once
+uv --directory weave run weave --once
 ```
 
 Run daemon:
 
 ```bash
-uv --directory weave run weave /path/to/obsidian-vault
+uv --directory weave run weave
 ```
 
 Development checks:

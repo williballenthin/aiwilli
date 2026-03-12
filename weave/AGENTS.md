@@ -30,12 +30,12 @@ Project shape
 - `src/weave/cli.py` and `src/weave/__init__.py` are thin entry shims.
 
 High-level runtime flow
-- `main()` parses args and builds `WeaveConfig` from env plus CLI inputs.
+- `main()` parses args, resolves the vault root from CLI or env, and builds `WeaveConfig` from env plus CLI inputs.
 - `WeaveService` wires the system together.
 - `MailboxMonitor` fetches unread IMAP messages and normalizes them into `IncomingMessage`.
 - `RouteResolver` matches each message by recipient address and allowed sender.
 - A handler writes sink notes and attachments.
-- `DailyNoteWriter` appends or updates managed `#weave` lines in the correct daily note.
+- `DailyNoteWriter` regenerates the Weave-managed daily note and keeps the personal daily-note embed region in sync.
 - Background maintenance also runs calendar scraping, agent session scraping, GitHub activity sync, and daily-note sync.
 
 Important classes and functions
@@ -77,5 +77,8 @@ How to extend it
 
 Practical notes
 - `README.md` is narrower than the current code. The codebase now also includes calendar scraping, TODO handling, agent session import, and GitHub activity import.
+- Local machine configuration for this repo should be read from `${XDG_CONFIG_HOME:-~/.config}/wballenthin/weave/secrets.env`.
+- In this checkout, `../secrets.env` may exist as a compatibility symlink; prefer the XDG file as the canonical source of truth.
+- For local Obsidian runs, look for `WEAVE_VAULT_ROOT` in that secrets file. `OBSIDIAN_VAULT_ROOT` is only a compatibility fallback.
 - If docs and code disagree, verify behavior in `src/weave/app.py` and tests first, then update `docs/plans/spec.md` and `docs/plans/design.md`.
 - The current code initializes calendar support eagerly in `WeaveService`; confirm startup assumptions in code before relying on doc text about optional calendar behavior.

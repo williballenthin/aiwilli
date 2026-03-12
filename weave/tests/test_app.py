@@ -32,6 +32,7 @@ from weave.app import (
     detect_session_format,
     extract_section_for_date,
     get_agent_session_manifest_path,
+    get_args,
     get_github_activity_manifest_path,
     get_variant_address,
     is_gemini_notes,
@@ -41,6 +42,7 @@ from weave.app import (
     parse_session,
     render_session_note,
     render_session_turns,
+    resolve_vault_root,
     sanitize_filename,
 )
 
@@ -185,6 +187,50 @@ def test_get_variant_address_builds_plus_alias() -> None:
 def test_get_variant_address_rejects_malformed_base() -> None:
     with pytest.raises(ConfigError):
         get_variant_address("bad-address", "+vnote")
+
+
+def test_get_args_allows_missing_vault_root() -> None:
+    args = get_args(["--once"])
+
+    assert args.vault_root is None
+    assert args.once is True
+
+
+def test_resolve_vault_root_prefers_cli_argument(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("WEAVE_VAULT_ROOT", str(tmp_path / "env-vault"))
+    cli_vault_root = tmp_path / "cli-vault"
+
+    assert resolve_vault_root(cli_vault_root) == cli_vault_root
+
+
+def test_resolve_vault_root_uses_weave_env_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_vault_root = tmp_path / "env-vault"
+    monkeypatch.setenv("WEAVE_VAULT_ROOT", str(env_vault_root))
+    monkeypatch.delenv("OBSIDIAN_VAULT_ROOT", raising=False)
+
+    assert resolve_vault_root(None) == env_vault_root
+
+
+def test_resolve_vault_root_falls_back_to_obsidian_env_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_vault_root = tmp_path / "obsidian-vault"
+    monkeypatch.delenv("WEAVE_VAULT_ROOT", raising=False)
+    monkeypatch.setenv("OBSIDIAN_VAULT_ROOT", str(env_vault_root))
+
+    assert resolve_vault_root(None) == env_vault_root
+
+
+def test_resolve_vault_root_requires_cli_argument_or_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEAVE_VAULT_ROOT", raising=False)
+    monkeypatch.delenv("OBSIDIAN_VAULT_ROOT", raising=False)
+
+    with pytest.raises(ConfigError, match="vault root"):
+        resolve_vault_root(None)
 
 
 def test_daily_note_writer_uses_obsidian_daily_folder(tmp_path: Path) -> None:

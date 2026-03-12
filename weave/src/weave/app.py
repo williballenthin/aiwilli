@@ -192,6 +192,8 @@ HANDLER_ENTRY_TYPES: dict[str, str] = {
 }
 
 BASE_EMAIL_ENV = "WEAVE_BASE_EMAIL"
+WEAVE_VAULT_ROOT_ENV = "WEAVE_VAULT_ROOT"
+LEGACY_OBSIDIAN_VAULT_ROOT_ENV = "OBSIDIAN_VAULT_ROOT"
 VOICE_VARIANT = "+vnote"
 RM2_VARIANT = "+rm2"
 TODO_VARIANT = "+todo"
@@ -375,6 +377,26 @@ class RouteConfig(BaseModel):
 
 def _parse_senders(env_var: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in os.environ[env_var].split(",") if s.strip())
+
+
+def resolve_vault_root(cli_vault_root: Path | None) -> Path:
+    """Resolve the Obsidian vault root from CLI args or environment.
+
+    Raises:
+        ConfigError: If neither the CLI argument nor supported environment
+            variables provide a vault root.
+    """
+    if cli_vault_root is not None:
+        return cli_vault_root
+    env_vault_root = os.environ.get(WEAVE_VAULT_ROOT_ENV) or os.environ.get(
+        LEGACY_OBSIDIAN_VAULT_ROOT_ENV
+    )
+    if env_vault_root:
+        return Path(env_vault_root)
+    raise ConfigError(
+        "Missing vault root. Pass <vault_root> or set "
+        f"{WEAVE_VAULT_ROOT_ENV} (preferred) or {LEGACY_OBSIDIAN_VAULT_ROOT_ENV}."
+    )
 
 
 class WeaveConfig(BaseModel):
@@ -2878,7 +2900,17 @@ def setup_logging(verbose: bool, quiet: bool) -> None:
 
 def get_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Weave email ingress daemon")
-    parser.add_argument("vault_root", type=Path, help="Obsidian vault root")
+    parser.add_argument(
+        "vault_root",
+        nargs="?",
+        type=Path,
+        default=None,
+        help=(
+            "Obsidian vault root "
+            f"(optional when {WEAVE_VAULT_ROOT_ENV} or "
+            f"{LEGACY_OBSIDIAN_VAULT_ROOT_ENV} is set)"
+        ),
+    )
     parser.add_argument(
         "--poll-interval",
         type=int,
@@ -2911,12 +2943,13 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = get_args(argv)
     setup_logging(verbose=args.verbose, quiet=args.quiet)
-    if not args.vault_root.exists():
-        logger.error("vault root does not exist: %s", args.vault_root)
-        raise SystemExit(1)
     try:
+        vault_root = resolve_vault_root(args.vault_root)
+        if not vault_root.exists():
+            logger.error("vault root does not exist: %s", vault_root)
+            raise SystemExit(1)
         config = WeaveConfig.from_runtime(
-            vault_root=args.vault_root,
+            vault_root=vault_root,
             poll_interval_seconds=args.poll_interval,
             calendar_source=args.source,
             agent_sessions_dir=args.agent_sessions,

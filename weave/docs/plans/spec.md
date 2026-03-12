@@ -10,7 +10,7 @@ Weave monitors one IMAP inbox and routes unread emails to handler logic based on
 2. Invocation
 
 Command:
-- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ]`
+- `weave [<vault_root>] [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ]`
 
 Behavior:
 - `--once` processes one unread batch plus one calendar scrape plus one agent session scan plus one GitHub activity sync pass, runs one daily-note sync pass, then exits.
@@ -19,7 +19,10 @@ Behavior:
 - calendar scraping and agent session scraping repeat every 5 minutes while the process is running.
 - GitHub activity sync checks hourly.
 - daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
-- `<vault_root>` must exist.
+- vault root resolution order is: positional `<vault_root>`, then `WEAVE_VAULT_ROOT`, then `OBSIDIAN_VAULT_ROOT`.
+- when no vault root can be resolved, startup fails with a configuration error.
+- the resolved vault root must exist.
+- for deployed/systemd runs, the recommended configuration is to set `WEAVE_VAULT_ROOT` in the environment file and omit the positional `<vault_root>` argument from `ExecStart`.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
 - calendar scraping is always enabled in normal daemon/once mode.
 - `--agent-sessions DIR` points to the directory containing agent session JSONL files. Can also be set via `WEAVE_AGENT_SESSIONS_DIR` env var. If not set, agent session scraping is disabled.
@@ -34,6 +37,7 @@ Normal daemon/once mode requires:
 - `IMAP_PASSWORD`
 - `WEAVE_BASE_EMAIL` (base mailbox, e.g. `name@example.com`)
 - `WEAVE_ALLOWED_SENDERS` (comma-separated list of email addresses allowed to send to any route)
+- a vault root provided either by positional `<vault_root>` or by `WEAVE_VAULT_ROOT` (preferred for deployed runs); `OBSIDIAN_VAULT_ROOT` is accepted as a compatibility fallback.
 
 Calendar scraping also requires:
 - Google OAuth token at `$XDG_CONFIG_HOME/wballenthin/weave/token.json` (created via `scripts/setup_google_credentials.py`)

@@ -15,7 +15,7 @@ Last updated: 2026-03-12
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args. Route variants are hardcoded, allowed senders come from `WEAVE_ALLOWED_SENDERS`, and GitHub overrides come from args/env.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args after vault-root resolution. Route variants are hardcoded, allowed senders come from `WEAVE_ALLOWED_SENDERS`, and GitHub overrides come from args/env.
 - `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.
 - `Attachment` (dataclass): decoded email attachment.
@@ -28,6 +28,7 @@ Last updated: 2026-03-12
 
 - `get_date_folder(output_dir, received)`: creates `YYYY/MM/DD` nested directories under the sink root.
 - `sanitize_filename(name)`: strips filesystem-unsafe characters.
+- `resolve_vault_root(cli_vault_root)`: resolves the Obsidian vault root from the positional CLI argument, then `WEAVE_VAULT_ROOT`, then legacy `OBSIDIAN_VAULT_ROOT`.
 - `render_daily_note_relative_path(day, format_string)`: renders Obsidian-style daily note paths for the supported token subset (`YYYY`, `MM`, `DD`). Used for personal daily-note resolution and the fixed Weave daily-note path layout.
 - `split_front_matter()`, `parse_front_matter_scalar()`, `get_front_matter_fields()`, `get_note_summary()`, `set_note_summary()`: minimal frontmatter parsing/updating without a YAML dependency.
 - `get_managed_section_markers(section_name)`: returns deterministic HTML comment markers for managed Weave sections. GitHub activity keeps its legacy marker names for upgrade compatibility.
@@ -35,16 +36,17 @@ Last updated: 2026-03-12
 4. Runtime flow
 
 1. Parse CLI args.
-2. Build `WeaveConfig` from env + CLI args.
-3. Validate Google token exists and initialize `CalendarScraper`.
-4. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
-5. Initialize `AgentSessionScraper` with two summarizers:
+2. Resolve the vault root from the positional CLI argument or environment fallback.
+3. Build `WeaveConfig` from env + CLI args.
+4. Validate Google token exists and initialize `CalendarScraper`.
+5. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
+6. Initialize `AgentSessionScraper` with two summarizers:
    - structured body summary prompt for the note body
    - a dedicated compact index summarizer for frontmatter / daily-note grouping that targets about 12 words and runs a repair pass when the first LLM output is verbose or misformatted
-6. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
-7. Connect to IMAP and process unread routed messages.
-8. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
-9. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
+7. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
+8. Connect to IMAP and process unread routed messages.
+9. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
+10. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
 
 5. Handler implementations
 
