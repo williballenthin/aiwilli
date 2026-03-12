@@ -27,6 +27,29 @@ STDERR_CONSOLE = Console(stderr=True)
 COMMENT_SNIPPET_LIMIT = 68
 COMMIT_SNIPPET_LIMIT = 72
 ISSUE_TITLE_LIMIT = 72
+COMPACT_DETAIL_LIMIT = 3
+COMPACT_KIND_ORDER = (
+    "commit",
+    "pr",
+    "issue",
+    "comment",
+    "branch",
+    "tag",
+    "push",
+    "star",
+    "event",
+)
+COMPACT_KIND_LABELS: dict[str, tuple[str, str]] = {
+    "commit": ("commit", "commits"),
+    "pr": ("PR", "PRs"),
+    "issue": ("issue", "issues"),
+    "comment": ("comment", "comments"),
+    "branch": ("branch", "branches"),
+    "tag": ("tag", "tags"),
+    "push": ("push", "pushes"),
+    "star": ("star", "stars"),
+    "event": ("event", "events"),
+}
 
 
 class GitHubActivityError(Exception):
@@ -72,6 +95,9 @@ class ActivityRecord:
     occurred_at: datetime
     url: str | None
     summary: str
+    event_kind: str = "event"
+    detail_text: str | None = None
+    detail_url: str | None = None
 
 
 class GitHubTimelineClient(Protocol):
@@ -271,6 +297,7 @@ def build_activity_records(
             occurred_at=event.created_at,
             url=get_repo_url(event.repo.name),
             summary=event.type,
+            event_kind="event",
         )
     ]
 
@@ -319,6 +346,9 @@ def build_push_records(
             occurred_at=event.created_at,
             url=url,
             summary=summary,
+            event_kind="push",
+            detail_text=head[:4] if isinstance(head, str) and head else None,
+            detail_url=url,
         )
     ]
 
@@ -347,6 +377,9 @@ def build_commit_records(
                 occurred_at=event.created_at,
                 url=compare_url,
                 summary=summary,
+                event_kind="commit",
+                detail_text=sha[:4],
+                detail_url=commit_url,
             )
         )
     return records
@@ -387,6 +420,9 @@ def build_pull_request_record(
         occurred_at=event.created_at,
         url=url,
         summary=summary,
+        event_kind="pr",
+        detail_text=f"#{number}" if number is not None else None,
+        detail_url=url,
     )
 
 
@@ -403,6 +439,7 @@ def build_issue_record(event: GitHubEventModel) -> ActivityRecord:
     )
     label = payload.get("label", {})
     label_name = get_str(label.get("name")) if isinstance(label, dict) else None
+    url = get_str(issue.get("html_url"))
 
     subject = "issue"
     if number is not None:
@@ -418,8 +455,11 @@ def build_issue_record(event: GitHubEventModel) -> ActivityRecord:
         event_id=event.id,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        url=get_str(issue.get("html_url")),
+        url=url,
         summary=summary,
+        event_kind="issue",
+        detail_text=f"#{number}" if number is not None else None,
+        detail_url=url,
     )
 
 
@@ -454,6 +494,9 @@ def build_issue_comment_record(event: GitHubEventModel) -> ActivityRecord:
         occurred_at=event.created_at,
         url=comment_url,
         summary=summary,
+        event_kind="comment",
+        detail_text=f"#{number}" if number is not None else None,
+        detail_url=comment_url,
     )
 
 
@@ -480,6 +523,7 @@ def build_pull_request_review_record(
         get_str(review.get("body")) or title or "review",
         limit=COMMENT_SNIPPET_LIMIT,
     )
+    url = get_str(review.get("html_url"))
 
     summary = f"submitted {state} review"
     if number is not None:
@@ -491,8 +535,11 @@ def build_pull_request_review_record(
         event_id=event.id,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        url=get_str(review.get("html_url")),
+        url=url,
         summary=summary,
+        event_kind="comment",
+        detail_text=f"#{number}" if number is not None else None,
+        detail_url=url,
     )
 
 
@@ -518,6 +565,7 @@ def build_pull_request_review_comment_record(
         limit=COMMENT_SNIPPET_LIMIT,
     )
     path = get_str(comment.get("path"))
+    url = get_str(comment.get("html_url"))
     subject = "left review comment on pull request"
     if number is not None:
         subject = f"left review comment on PR #{number}"
@@ -530,8 +578,11 @@ def build_pull_request_review_comment_record(
         event_id=event.id,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        url=get_str(comment.get("html_url")),
+        url=url,
         summary=summary,
+        event_kind="comment",
+        detail_text=f"#{number}" if number is not None else None,
+        detail_url=url,
     )
 
 
@@ -541,12 +592,17 @@ def build_create_record(event: GitHubEventModel) -> ActivityRecord:
     payload = event.payload
     ref_type = get_str(payload.get("ref_type")) or "ref"
     ref = get_str(payload.get("ref")) or "unknown"
+    url = get_ref_url(event.repo.name, ref_type, ref)
+    event_kind = ref_type if ref_type in {"branch", "tag"} else "event"
     return ActivityRecord(
         event_id=event.id,
         repo=event.repo.name,
         occurred_at=event.created_at,
-        url=get_ref_url(event.repo.name, ref_type, ref),
+        url=url,
         summary=f"created {ref_type} {ref}",
+        event_kind=event_kind,
+        detail_text=ref if event_kind in {"branch", "tag"} else None,
+        detail_url=url,
     )
 
 
@@ -561,6 +617,7 @@ def build_watch_record(event: GitHubEventModel) -> ActivityRecord:
         occurred_at=event.created_at,
         url=repo_url,
         summary=summary,
+        event_kind="star",
     )
 
 
@@ -741,6 +798,55 @@ def render_activity_section(
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
+
+
+def render_compact_activity_section(grouped_records: dict[str, list[ActivityRecord]] | None) -> str:
+    """Render a compact repository index for one day's activity."""
+    if not grouped_records:
+        return ""
+
+    lines: list[str] = []
+    for repo_name in sorted(grouped_records.keys()):
+        repo_url = get_repo_url(repo_name)
+        records = sorted(
+            grouped_records[repo_name],
+            key=lambda record: (record.occurred_at, record.event_id),
+        )
+        summaries: list[str] = []
+        by_kind: dict[str, list[ActivityRecord]] = defaultdict(list)
+        for record in records:
+            by_kind[record.event_kind].append(record)
+        for kind in COMPACT_KIND_ORDER:
+            kind_records = by_kind.get(kind)
+            if not kind_records:
+                continue
+            singular, plural = COMPACT_KIND_LABELS.get(kind, (kind, f"{kind}s"))
+            count = len(kind_records)
+            label = singular if count == 1 else plural
+            summary = f"{count} {label}"
+            details = render_compact_details(kind_records)
+            if details:
+                summary = f"{summary} ({details})"
+            summaries.append(summary)
+        if not summaries:
+            continue
+        lines.append(f"- {render_link(repo_name, repo_url)} — {', '.join(summaries)}")
+    return "\n".join(lines)
+
+
+def render_compact_details(records: Sequence[ActivityRecord]) -> str:
+    """Render compact detail links when a kind has only a few records."""
+    if len(records) > COMPACT_DETAIL_LIMIT:
+        return ""
+    details: list[str] = []
+    seen: set[tuple[str | None, str | None]] = set()
+    for record in records:
+        key = (record.detail_text, record.detail_url)
+        if key in seen or record.detail_text is None:
+            continue
+        seen.add(key)
+        details.append(render_link(record.detail_text, record.detail_url))
+    return ", ".join(details)
 
 
 def get_records_for_local_day(

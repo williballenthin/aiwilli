@@ -10,6 +10,7 @@ from weave.github_activity import (
     GitHubTimelineClient,
     collect_activity_records,
     render_activity_report,
+    render_compact_activity_section,
 )
 
 
@@ -319,6 +320,93 @@ def test_render_activity_report_uses_timezone_for_local_day() -> None:
         "- [21:15:00](https://github.com/acme/app/compare/aaaa1111...bbbb2222) "
         "committed [abc1234](https://github.com/acme/app/commit/abc12345) "
         "to main: Fix parser crash" in report
+    )
+
+
+def test_render_compact_activity_section_summarizes_repo_activity() -> None:
+    events = [
+        build_event(
+            event_id="1",
+            event_type="PushEvent",
+            repo="acme/app",
+            created_at="2026-03-11T09:00:00Z",
+            payload={
+                "before": "aaaa1111",
+                "head": "bbbb2222",
+                "ref": "refs/heads/main",
+            },
+        ),
+        build_event(
+            event_id="2",
+            event_type="PullRequestEvent",
+            repo="acme/app",
+            created_at="2026-03-11T10:00:00Z",
+            payload={
+                "action": "opened",
+                "number": 42,
+                "pull_request": {
+                    "number": 42,
+                    "url": "https://api.github.com/repos/acme/app/pulls/42",
+                    "head": {"ref": "feature/demo", "sha": "bbbb2222"},
+                    "base": {"ref": "main", "sha": "aaaa1111"},
+                },
+            },
+        ),
+        build_event(
+            event_id="3",
+            event_type="IssueCommentEvent",
+            repo="acme/app",
+            created_at="2026-03-11T11:00:00Z",
+            payload={
+                "action": "created",
+                "comment": {
+                    "html_url": "https://github.com/acme/app/issues/9#issuecomment-1",
+                    "body": "I think this needs one more test case.",
+                },
+                "issue": {
+                    "number": 9,
+                    "title": "Parser crashes on empty input",
+                    "html_url": "https://github.com/acme/app/issues/9",
+                },
+            },
+        ),
+    ]
+    client = StaticGitHubTimelineClient(
+        pull_requests={
+            ("acme", "app", 42): {
+                "title": "Add activity renderer",
+                "html_url": "https://github.com/acme/app/pull/42",
+            },
+        },
+        compares={
+            ("acme", "app", "aaaa1111", "bbbb2222"): {
+                "html_url": "https://github.com/acme/app/compare/aaaa1111...bbbb2222",
+                "commits": [
+                    {
+                        "sha": "abc12345",
+                        "html_url": "https://github.com/acme/app/commit/abc12345",
+                        "commit": {"message": "Fix parser crash"},
+                    },
+                    {
+                        "sha": "def67890",
+                        "html_url": "https://github.com/acme/app/commit/def67890",
+                        "commit": {"message": "Add regression test"},
+                    },
+                ],
+            },
+        },
+    )
+
+    records = collect_activity_records(events=events, client=client, enrich=True)
+    grouped = {"acme/app": records}
+    section = render_compact_activity_section(grouped)
+
+    assert section == (
+        "- [acme/app](https://github.com/acme/app) — "
+        "2 commits ([abc1](https://github.com/acme/app/commit/abc12345), "
+        "[def6](https://github.com/acme/app/commit/def67890)), "
+        "1 PR ([#42](https://github.com/acme/app/pull/42)), "
+        "1 comment ([#9](https://github.com/acme/app/issues/9#issuecomment-1))"
     )
 
 

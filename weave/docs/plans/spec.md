@@ -1,16 +1,16 @@
 Weave specification
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-03-12
 
 1. Purpose
 
-Weave monitors one IMAP inbox and routes unread emails to handler logic based on the recipient address. It also scrapes Google Calendar meeting notes and chat transcripts on a recurring schedule. It can also monitor a directory of AI agent session transcripts (Claude Code, Pi Agent), parse them, and produce session summary notes. It also imports finalized GitHub activity into daily notes.
+Weave monitors one IMAP inbox and routes unread emails to handler logic based on the recipient address. It also scrapes Google Calendar meeting notes and chat transcripts on a recurring schedule, imports AI agent session transcripts (Claude Code, Pi Agent), and imports finalized GitHub activity.
 
 2. Invocation
 
 Command:
-- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ]`
+- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ] [--migrate-daily-notes] [--daily-note-format FORMAT]`
 
 Behavior:
 - `--once` processes one unread batch plus one calendar scrape plus one agent session scan plus one GitHub activity sync pass, runs one daily-note sync pass, then exits.
@@ -19,32 +19,37 @@ Behavior:
 - calendar scraping and agent session scraping repeat every 5 minutes while the process is running.
 - GitHub activity sync checks hourly.
 - daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
+- `--migrate-daily-notes` skips IMAP/calendar/GitHub startup, regenerates Weave daily notes from existing vault content, cleans legacy managed Weave content out of personal daily notes, optionally migrates the personal daily-note layout when `--daily-note-format` is also provided, then exits.
+- `--daily-note-format FORMAT` is only meaningful with `--migrate-daily-notes`. It updates `.obsidian/daily-notes.json` key `format` and moves existing personal daily notes to the rendered path layout. Supported token handling is the Obsidian-style subset used by this repository: `YYYY`, `MM`, `DD`.
 - `<vault_root>` must exist.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
-- calendar scraping is always enabled.
+- calendar scraping is always enabled in normal daemon/once mode.
 - `--agent-sessions DIR` points to the directory containing agent session JSONL files. Can also be set via `WEAVE_AGENT_SESSIONS_DIR` env var. If not set, agent session scraping is disabled.
 - `--github-user USER` overrides the GitHub username to query. If omitted, Weave uses the authenticated `gh` user.
 - `--github-timezone TZ` sets the local timezone used for GitHub day boundaries and the stabilization cutoff. Can also be set via `WEAVE_GITHUB_TIMEZONE`.
 
 3. Required runtime environment
 
+Normal daemon/once mode requires:
 - `IMAP_HOST`
 - `IMAP_USER`
 - `IMAP_PASSWORD`
 - `WEAVE_BASE_EMAIL` (base mailbox, e.g. `name@example.com`)
 - `WEAVE_ALLOWED_SENDERS` (comma-separated list of email addresses allowed to send to any route)
 
-For calendar scraping:
+Calendar scraping also requires:
 - Google OAuth token at `$XDG_CONFIG_HOME/wballenthin/weave/token.json` (created via `scripts/setup_google_credentials.py`)
 - Google OAuth client credentials at `$XDG_CONFIG_HOME/wballenthin/weave/credentials.json`
 
-For agent session scraping:
+Agent session scraping also requires:
 - `WEAVE_AGENT_SESSIONS_DIR` or `--agent-sessions` pointing to a directory with `claude/` and/or `pi/` subdirectories containing JSONL session files.
 
-For GitHub activity import:
+GitHub activity import also requires:
 - `gh` CLI installed and authenticated for the desired account, unless `--github-user` / `WEAVE_GITHUB_USER` targets a public account and the local `gh` auth still has enough access for the request.
 - optional `WEAVE_GITHUB_USER` to override the account whose activity is imported.
 - optional `WEAVE_GITHUB_TIMEZONE` to set local day boundaries and the stabilization cutoff.
+
+Migration mode (`--migrate-daily-notes`) only requires the vault path. It does not require IMAP credentials or Google credentials.
 
 4. Routing behavior
 
@@ -67,17 +72,17 @@ Routing is partially hardcoded: route variants (`+vnote`, `+rm2`, `+todo`) and h
 
 5. Output behavior
 
-Date directory format: all handlers use nested `YYYY/MM/DD` directories under the output root. Decision: switched from flat `YYYY-MM-DD` to nested `YYYY/MM/DD` to reduce clutter in the sink directory and align with calendar scraper output.
+Date directory format: sink handlers and calendar/session imports use nested `YYYY/MM/DD` directories under the output root.
 
 5.1 Voice handler output
 - note path: `<output>/<YYYY>/<MM>/<DD>/<HHMM> - transcription.md`
 - attachment path: `<output>/<YYYY>/<MM>/<DD>/_attachments/<HHMM> - <filename>`
-- note contains YAML frontmatter, including `summary`, plus the email plain-text body.
+- note contains YAML frontmatter including `type: transcript` and `summary`, plus the email plain-text body.
 
 5.2 reMarkable handler output
 - saved pdf: `<output>/<YYYY>/<MM>/<DD>/_attachments/<HHMM> - <stem>.pdf`
 - note path: `<output>/<YYYY>/<MM>/<DD>/<HHMM> - <stem>.md`
-- note contains YAML frontmatter, including `summary`, and an embed link to the saved PDF.
+- note contains YAML frontmatter including `type: handwriting`, `summary`, and an embed link to the saved PDF.
 - transcription is generated through the `llm` CLI against model `gemini/gemini-3-flash-preview`.
 - on transcription failure, Weave still writes an error note and marks the message as seen.
 
@@ -85,41 +90,45 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - note path: `<output>/<YYYY>/<MM>/<DD>/<HHMM> - <sanitized-subject>.md`
 - attachment path: `<output>/<YYYY>/<MM>/<DD>/_attachments/<HHMM> - <filename>`
 - subject is sanitized for filesystem safety (colons, quotes, slashes etc. replaced with dashes, trailing dashes stripped, max 100 chars).
-- note contains YAML frontmatter, including `summary`, a `## <subject>` heading, the email plain-text body, and Obsidian embed links for any attachments.
-- daily note line format: `- [ ] TODO: <subject> [[<vault-relative-note-path>]]` (wiki-link, not embed).
+- note contains YAML frontmatter including `type: todo`, `summary`, a `## <subject>` heading, the email plain-text body, and Obsidian embed links for any attachments.
 
 5.4 Calendar scraper output
 - scrapes Google Calendar events from the past 7 days.
 - for each event with Google Doc attachments, exports the doc as markdown.
-- for each event with chat transcript attachments (text/plain ending in "- Chat"), downloads the raw content.
+- for each event with chat transcript attachments (text/plain ending in `- Chat`), downloads the raw content.
 - note path: `<output>/<YYYY>/<MM>/<DD>/<HHMM> - <sanitized-event-name>.md`
 - if multiple doc attachments and one is Gemini notes: `<HHMM> - <event-name> (Gemini).md`
 - chat transcripts: `<HHMM> - <event-name> (chat).md`
-- front matter includes: summary, source, type (meeting_notes/meeting_chat), calendar, event name, date, attended status, doc URL, event URL, attendees list.
-- shared notes (title starts with "Notes - ") are section-extracted for the event date only.
+- front matter includes: `summary`, `source`, `type` (`meeting_notes` or `meeting_chat`), calendar, event name, date, attended status, doc URL, event URL, attendees list.
+- shared notes (title starts with `Notes - `) are section-extracted for the event date only.
 - file-existence check serves as cache; existing files are not re-exported.
 - events without doc or chat attachments are skipped.
-- attendance is determined from the self-attendee's responseStatus; organizer-only events default to attended.
+- attendance is determined from the self-attendee's `responseStatus`; organizer-only events default to attended.
 
-5.5 Daily note entries
-- for each newly written sink markdown note (from any handler), Weave appends an entry line to the corresponding daily note.
-- daily note date uses the event/email timestamp date.
-- line format for notes: `- <type>: [[<vault-relative-note-path>]] - <summary> #weave`
-- line format for TODOs: `- [ ] todo: [[<vault-relative-note-path>]] - <summary> #weave`
-- entry types: `transcript` (voice), `handwriting` (reMarkable), `meeting notes` (calendar docs), `meeting chat` (calendar chats), `todo`, `agent session` (AI agent sessions).
-- links use Obsidian wiki-link syntax `[[path]]` (not embed `![[path]]`) to avoid inline content expansion.
-- each sink markdown note managed by Weave carries a frontmatter property `summary`.
-- daily note generation reads `summary` from the note frontmatter first.
-- if `summary` is empty and a summarizer is configured, Weave generates a one-sentence daily-index summary, writes it back into the note's `summary` frontmatter property, and uses that exact text in the daily note line.
-- if summarization fails or no summarizer is configured, the summary is omitted from the daily note line and the note keeps an empty or missing `summary` value.
-- existing notes without a `summary` property are backfilled the first time Weave needs a summary for them.
-- daily note folder is loaded from `<vault_root>/.obsidian/daily-notes.json` key `folder`.
-- if the daily-notes config file is missing/invalid or folder is empty, Weave uses `<vault_root>/` as daily note folder.
-- managed entries are identified by matching the `[[link]]` destination and `#weave` tag, not by exact line match.
-- if Weave writes a note whose managed line already exists, it replaces that managed line in place so the daily note tracks the note's current `summary` value.
-- once per day, Weave also scans `YYYY-MM-DD.md` files in the configured daily-note folder and rewrites managed `#weave` lines from the linked note's current frontmatter `summary` value, without calling the summarizer again.
-- if a managed daily-note line points at a missing/unreadable note, Weave leaves that line unchanged during sync.
-- daily note file I/O is thread-safe (calendar thread and IMAP thread share the writer).
+5.5 Daily note integration
+- Weave no longer writes generated activity lines directly into the user’s primary personal daily note body.
+- Personal daily note folder is loaded from `<vault_root>/.obsidian/daily-notes.json` key `folder`.
+- Personal daily note format is loaded from `.obsidian/daily-notes.json` key `format`; default is `YYYY-MM-DD` when the key is missing.
+- Weave-generated daily note path is fixed at `<vault_root>/weave/daily/<YYYY>/<MM>/<DD>/<YYYY-MM-DD>.md`.
+- The personal daily note contains only a managed embed region:
+  - `<!-- weave:daily-embed:start -->`
+  - `![[weave/daily/<YYYY>/<MM>/<DD>/<YYYY-MM-DD>.md]]`
+  - `<!-- weave:daily-embed:end -->`
+- In normal operation, that embed region is the only content Weave adds to a personal daily note.
+- Weave-generated daily notes are fully regenerable. They may be deleted and rebuilt from sink notes plus preserved GitHub sections.
+- Weave-generated daily notes render H2 sections in this order when the section has content:
+  - `## TODOs`
+  - `## Meetings`
+  - `## Capture`
+  - `## Agent sessions`
+  - `## GitHub activity`
+- Each generated section is wrapped in deterministic HTML comment markers so it can be rewritten precisely.
+- TODO items render as checkbox bullets with compact aliased wiki-links and optional summaries.
+- meeting notes/chats and capture items render as compact bullets with aliased wiki-links and optional summaries.
+- agent sessions render as a nested list grouped by project; child bullets use a shortened session ID as link text, plus a compact summary and message count.
+- GitHub activity renders as a compact repository index; see section 5.7.
+- Weave still stores/reuses a per-note frontmatter `summary` on generated sink notes. If a sink note has no summary and a summarizer is configured, Weave backfills it into the sink note itself and then reuses it in the Weave-generated daily note.
+- Once per local day, daily-note sync regenerates Weave daily notes from current sink-note metadata and removes legacy inline `#weave` entries / legacy managed GitHub sections from personal daily notes while preserving all non-Weave personal content.
 
 5.6 Agent session scraper output
 - scans `claude/` and `pi/` subdirectories of the configured agent sessions directory for canonical session `.jsonl` files.
@@ -128,47 +137,46 @@ Date directory format: all handlers use nested `YYYY/MM/DD` directories under th
 - parses both Claude Code and Pi Agent JSONL formats, auto-detecting by first line.
 - session identity comes from the harness session ID: Claude usually uses the filename stem; Pi usually uses the session UUID from the timestamp-prefixed filename. Parsed JSONL data can also supply the session ID.
 - for each session with at least one user turn, produces a markdown note with:
-  - YAML front matter: type (agent_session), summary, agent, project, session_id, session_sha256, timestamps, duration, models, token counts, cost (pi only), user turn count, tool call count.
+  - YAML front matter: `type`, compact `summary`, `agent`, `project`, `session_id`, `session_sha256`.
   - an LLM-generated structured summary section (goal, decisions, work completed, topics).
-  - metrics table.
-  - full conversation with user messages and user-directed assistant responses.
+  - a metrics table in the note body.
+  - the full conversation rendered as Obsidian callouts (`note` for user, `quote` for assistant) so markdown/code inside the body still renders normally.
 - note path: `<output>/<YYYY>/<MM>/<DD>/<session-id>.md`
 - date directory is based on session start time.
+- frontmatter `summary` is a separate compact index summary intended for the Weave-generated daily note. The structured summary section in the note body is generated independently.
 - sync state is tracked in a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json` (falling back to `~/.cache/...`). Missing or malformed manifests are treated as cache misses and are regenerated on the next scan.
 - on each scan, agent session files modified within the last 7 days are treated as mutable and are checked against the manifest. Older files are treated as immutable once they have a manifest entry and an existing sink note.
 - the manifest stores per-source-file session ID, SHA-256, sink path, and source mtime for incremental sync.
-- if a mutable file's SHA-256 changes, Weave rewrites the sink note and updates the managed daily-note line.
-- changed agent-session notes are linked into daily notes incrementally as each note is written, rather than only after the entire scan finishes.
+- if a mutable file’s SHA-256 changes, Weave rewrites the sink note and updates that day’s Weave-generated daily note.
+- changed agent-session notes are linked into Weave-generated daily notes incrementally as each note is written, rather than only after the entire scan finishes.
 - zero-byte session files are treated as empty inputs and skipped without warning spam.
 - each agent-session scan emits a JSON sync report to stdout summarizing scanned, imported, updated, unchanged, immutable-skipped, empty-skipped, and failed sessions.
-- daily note entry type: `agent session`.
-- agent session note body summary and frontmatter/daily-note summary are separate outputs with separate prompts.
 
 5.7 GitHub activity import
-- GitHub activity import does not create sink notes; it writes directly into the relevant daily note.
-- Weave reads the recent GitHub user events feed via `gh` and expands pushes through compare requests so commit activity can be rendered directly.
-- imported content is grouped by repository under a managed daily-note section headed `## GitHub activity #weave`.
-- Weave wraps the managed section with internal HTML comment markers so the section can be replaced deterministically if needed.
-- repository headings are markdown links to the repository.
-- event lines are markdown bullets whose timestamp is the primary link target.
-- push events are commit-centric when compare expansion succeeds: each pushed commit becomes its own bullet line, with the timestamp linked to the compare view and the commit SHA linked to the commit.
-- if compare expansion fails, Weave falls back to a single push line.
-- issue lifecycle events render as issue-centric lines, linking to the issue and including the action, issue number, and title. Label changes also include the label name.
-- comment, review, and review-comment lines include compact inline body snippets.
+- GitHub activity import does not create sink notes.
+- Weave reads the recent GitHub user events feed via `gh` and expands pushes through compare requests so commit activity can be counted and linked directly.
+- imported GitHub activity is written into the `## GitHub activity` section of the Weave-generated daily note, not directly into the personal daily note.
+- the managed GitHub section is wrapped with deterministic HTML comment markers so it can be preserved across Weave daily-note rebuilds.
+- repository output is a compact bullet list. There are no per-repository subheadings inside the Weave-generated daily note.
+- each repository bullet links to the repository and summarizes counts by activity kind (for example commits, PRs, comments, issues, branches, tags, pushes, stars).
+- when a kind has 3 or fewer events, the count includes compact linked details in parentheses:
+  - commits use 4-character commit prefixes.
+  - PRs/issues/comments use linked `#<number>` references when available.
+- when a kind has more than 3 events, only the count is shown.
 - Weave never imports the current local day.
 - Weave only imports a completed day once that day has passed a 6-hour stabilization window in the configured local timezone. Concretely, a day becomes eligible at `06:00` on the following local day.
 - once a local day is imported, Weave records that fact in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json` and does not re-render the day on later syncs.
-- if the manifest is missing but the daily note already contains the managed GitHub activity section for that day, Weave treats the day as already imported and rebuilds the manifest entry instead of rewriting the note.
+- if the manifest is missing but the Weave daily note already contains the managed GitHub section for that day, Weave treats the day as already imported and rebuilds the manifest entry instead of rewriting the note.
+- for backward compatibility during upgrades, if the manifest is missing but a legacy managed GitHub section is still present in the personal daily note, Weave also treats that day as already imported until daily-note sync migrates it.
 - days with no GitHub activity are left unchanged; Weave only adds the section when there is activity to render.
 - the import is best-effort and limited by the GitHub user events feed window; if Weave is not running for too long and relevant events fall out of the recent feed, historical backfill is not guaranteed.
 
 6. Message visibility behavior
 
-- a successfully handled routed message is marked `\\Seen` after sink-note writing and daily-note entry updates succeed.
+- a successfully handled routed message is marked `\Seen` after sink-note writing and Weave daily-note regeneration succeed.
 - unrouted messages are left unread.
 - routed messages with disallowed senders are left unread.
 - reMarkable-routed messages without PDF attachments are left unread.
-- duplicate entry lines are not appended.
 
 7. Future extension contract
 

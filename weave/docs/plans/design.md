@@ -1,202 +1,154 @@
 Weave design
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-03-12
 
 1. Module layout
 
-- `src/weave/app.py`: all runtime logic for now, including the integrated `GitHubActivitySyncer` that finalizes recent GitHub activity into daily notes.
-- `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers; fetches recent user events via `gh`, expands pull requests and pushes, normalizes them, and renders grouped markdown sections/reports.
-- `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and agent session tests.
-- `tests/test_github_activity.py`: GitHub activity normalization and rendering tests.
-- `scripts/setup_google_credentials.py`: interactive OAuth setup for Google Calendar/Drive.
+- `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, migration mode, and the integrated `GitHubActivitySyncer`.
+- `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers. It still renders the detailed standalone report, and now also renders the compact per-repository daily-note section used by the daemon.
+- `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, session rendering, and migration tests.
+- `tests/test_github_activity.py`: GitHub activity normalization plus detailed and compact rendering tests.
+- `scripts/setup_google_credentials.py`: interactive OAuth setup.
 - `scripts/parse_session.py`: standalone CLI for parsing/displaying agent session JSONL files.
-- `scripts/render_github_activity.py`: standalone CLI for rendering grouped GitHub activity from the recent user events feed.
-- `docs/research/agent-sessions.md`: research notes on Claude Code and Pi Agent JSONL formats.
-- `docs/research/github-activity.md`: GitHub activity API research and design constraints.
+- `scripts/render_github_activity.py`: standalone CLI for rendering the detailed grouped GitHub activity report.
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args; route variants are hardcoded but allowed senders come from `WEAVE_ALLOWED_SENDERS`. Includes `calendar_source`, `agent_sessions_dir`, `github_activity_user`, and `github_activity_timezone` fields.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args. Route variants are hardcoded, allowed senders come from `WEAVE_ALLOWED_SENDERS`, and GitHub overrides come from args/env.
 - `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
-- `get_variant_address(base_email, variant)`: derives `local+variant@domain` from `WEAVE_BASE_EMAIL`.
 - `IncomingMessage` (dataclass): normalized unread message from IMAP.
 - `Attachment` (dataclass): decoded email attachment.
 - `HandlerResult` (dataclass): whether the message was handled, all created paths, and created sink note paths.
-- `DailyNoteWriter`: resolves daily-note folder, appends timestamped embed lines, and backfills note `summary` frontmatter. Thread-safe via `threading.RLock`.
+- `SessionTurn`, `SessionTokenUsage`, `SessionData` (dataclasses): normalized agent-session model.
+- `DailyIndexEntry` (dataclass): one sink note as rendered in a Weave-generated daily note section.
+- `DailyNoteWriter`: owns both personal daily-note integration and Weave-generated daily-note regeneration.
 
 3. Shared utilities
 
-- `get_date_folder(output_dir, received)`: module-level function that creates `YYYY/MM/DD` nested directory with `_attachments` subfolder. Used by all handlers and the calendar scraper.
-- `sanitize_filename(name)`: strips filesystem-unsafe characters from names.
-
-3.1 GitHub activity prototype rendering
-
-- `scripts/render_github_activity.py` is intentionally standalone and does not write vault notes.
-- output grouping is `date -> repository -> chronological events`; there are no per-type subheadings inside a repository section.
-- repository headings render as markdown links to the repository HTML URL.
-- most events render as a single markdown bullet line whose timestamp is also the primary link target.
-- push expansion is commit-centric: when compare data is available, each pushed commit becomes its own top-level event line and the timestamp links to the compare view while the commit SHA in the summary links to the individual commit.
-- if compare expansion is unavailable, the renderer falls back to a single push line.
-- issue lifecycle events render a single line linking to the issue, including the action, issue number, and title; label changes also include the label name.
-- issue comments, review submissions, and review comments render compact body snippets inline on the main bullet line.
-- leading quote markers are stripped from comment snippets and snippet limits are intentionally short to keep the report scan-friendly.
-- star events render both the timestamp link and the repository name link to the repository HTML URL.
+- `get_date_folder(output_dir, received)`: creates `YYYY/MM/DD` nested directories under the sink root.
+- `sanitize_filename(name)`: strips filesystem-unsafe characters.
+- `render_daily_note_relative_path(day, format_string)`: renders Obsidian-style daily note paths for the supported token subset (`YYYY`, `MM`, `DD`). Used both for normal personal-daily-note resolution and explicit layout migration.
+- `split_front_matter()`, `parse_front_matter_scalar()`, `get_front_matter_fields()`, `get_note_summary()`, `set_note_summary()`: minimal frontmatter parsing/updating without a YAML dependency.
+- `get_managed_section_markers(section_name)`: returns deterministic HTML comment markers for managed Weave sections. GitHub activity keeps its legacy marker names for upgrade compatibility.
 
 4. Runtime flow
 
-1. Parse CLI args (including `--source`, `--github-user`, and `--github-timezone`).
-2. Build `WeaveConfig` from env: route variants (`+vnote`, `+rm2`, `+todo`) resolved from `WEAVE_BASE_EMAIL`, allowed senders from `WEAVE_ALLOWED_SENDERS`, plus optional GitHub overrides.
-3. Validate Google token exists and initialize `CalendarScraper`.
-4. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`, configured timezone, and optional username override.
-5. Connect with `IMAPClient` and select `INBOX`.
-6. Fetch unread messages with envelope + RFC822 payload.
-7. Normalize sender/to-addresses and resolve route.
-8. Dispatch to handler by `handler_key`.
-9. For each created sink note path, append a timestamped embed line to that day's daily note.
-10. If handler result says handled and daily-note updates succeeded, mark message as seen.
-11. In daemon mode, enter IMAP IDLE and repeat on notifications; separate daemon threads handle calendar scraping, agent session scraping, GitHub activity finalization, and once-per-day daily-note sync.
+1. Parse CLI args.
+2. If `--migrate-daily-notes` is set:
+   - construct `DailyNoteWriter`
+   - optionally migrate the personal daily-note layout (`--daily-note-format`)
+   - regenerate Weave daily notes for all discovered days and clean legacy personal daily-note content
+   - exit
+3. Otherwise build `WeaveConfig` from env + CLI args.
+4. Validate Google token exists and initialize `CalendarScraper`.
+5. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
+6. Initialize `AgentSessionScraper` with two summarizers:
+   - structured body summary prompt for the note body
+   - compact index summary prompt for frontmatter / daily-note grouping
+7. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
+8. Connect to IMAP and process unread routed messages.
+9. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
+10. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
 
 5. Handler implementations
 
 5.1 `VoiceNoteHandler`
-- extracts text/plain body from multipart email
-- extracts all attachment parts marked `attachment`
-- writes date folder + `_attachments` via shared `get_date_folder`
-- writes one markdown note with YAML frontmatter, including `summary: ""`, and Obsidian attachment embeds
+- writes `type: transcript` into frontmatter so later Weave-daily-note regeneration can classify the note without relying on the old legacy daily-note entry type.
 
 5.2 `RemarkableSnapshotHandler`
-- extracts `application/pdf` attachments
-- writes each PDF file under `_attachments`
-- asks `PdfTranscriber` for markdown transcription
-- writes markdown note with frontmatter, including `summary: ""`, plus embed and transcription
-- writes failure note when transcription throws `TranscriptionError`
+- writes `type: handwriting` into both successful and failure-note frontmatter.
 
 5.3 `TodoHandler`
-- extracts text/plain body from multipart email
-- extracts all attachment parts marked `attachment`
-- sanitizes subject for use as filename (`sanitize_filename`)
-- writes date folder + `_attachments` via shared `get_date_folder`
-- writes one markdown note with YAML frontmatter, including `summary: ""`, a `## <subject>` heading, body text, and Obsidian attachment embeds
-- returns `todo_entries` on `HandlerResult` instead of `note_paths`, which triggers a `- [ ] TODO:` checkbox line on the daily note
+- writes `type: todo` into frontmatter.
+- the daily-note layer no longer inserts an inline checkbox into the personal daily note. Instead, the TODO is rendered in the generated `## TODOs` section.
 
 5.4 `CalendarScraper`
-- initialized with `output_dir`, `source` tag, and a `DriveExporter` instance
-- `scrape_once()` fetches events from past 7 days via Google Calendar API, iterates events with doc/chat attachments
-- exports Google Docs as markdown via `DriveExporter.export_document()`
-- downloads chat transcripts via `DriveExporter.get_media()`
-- for shared notes (title starts with "Notes - "), extracts only the section matching the event date using `extract_section_for_date()`
-- writes calendar/chat frontmatter with an empty `summary` field so later summary backfills have a stable location
-- uses file-existence check as cache to avoid re-exporting
-- returns `list[tuple[datetime, Path, str]]` for daily note embedding (datetime, path, entry_type)
-- helper predicates: `is_gemini_notes()`, `is_shared_notes()`
+- unchanged at a high level, but its `type` frontmatter (`meeting_notes` / `meeting_chat`) is now consumed by `DailyNoteWriter` when rebuilding Weave daily notes.
 
 5.5 `DailyNoteWriter`
-- reads daily-note folder from `<vault_root>/.obsidian/daily-notes.json` key `folder`
-- falls back to vault root if config is missing/invalid
-- resolves daily note filename as `YYYY-MM-DD.md` from message received date
-- accepts an optional `NoteSummarizer` for generating one-sentence summaries
-- `append_note_entry(received, note_path, entry_type)` reads or backfills the note's frontmatter `summary`, then upserts a managed line rendered as `- <type>: [[path]] - <summary> #weave`
-- `append_todo_entry(received, note_path)` follows the same summary/backfill path and upserts `- [ ] todo: [[path]] - <summary> #weave`
-- helper functions `split_front_matter()`, `get_note_summary()`, and `set_note_summary()` implement minimal summary-field parsing/updating without adding a YAML dependency
-- if a note already has a non-empty `summary` field, Weave reuses it and skips the LLM call
-- if a note lacks frontmatter entirely, `set_note_summary()` prepends a minimal frontmatter block containing only `summary`
-- `sync_all_daily_notes()` scans `YYYY-MM-DD.md` files in the configured daily-note folder and calls `sync_daily_note()` on each
-- `sync_daily_note()` rewrites only managed lines that exactly match the note/todo `#weave` formats; unmanaged lines are preserved verbatim
-- sync resolves the linked path back to a vault file, reads its current frontmatter `summary`, and re-renders the managed line without invoking the summarizer
-- if the linked note is missing or unreadable during sync, the original daily-note line is left untouched
-- all lines end with `#weave` tag for future regeneration of managed lines
-- deduplication and refresh are both link-based: `_upsert_line()` finds an existing managed line for the same `[[link]]` + `#weave` tag and either leaves it unchanged or replaces it in place with the refreshed summary text
-- `upsert_github_activity_section(day, body)` writes a managed section headed `## GitHub activity #weave` and bounded by explicit HTML comment markers so the entire section can be replaced deterministically
-- `has_github_activity_section(day)` is used as a fallback when the GitHub manifest is missing but a daily note already contains the managed section
-- `threading.RLock` protects the full append path, including summary backfill, managed-line writes, and GitHub section writes, for concurrent access from IMAP and maintenance threads
+
+Personal vs generated daily notes:
+- personal daily note path comes from `.obsidian/daily-notes.json` `folder` + `format` (default format `YYYY-MM-DD`).
+- Weave-generated daily note path is fixed at `weave/daily/YYYY/MM/DD/YYYY-MM-DD.md`.
+- personal daily notes get only one managed embed region:
+  - `<!-- weave:daily-embed:start -->`
+  - `![[weave/daily/...]]`
+  - `<!-- weave:daily-embed:end -->`
+- the embed region is appended if missing; other personal content is left intact.
+
+Rebuild strategy:
+- `append_note_entry()` and `append_todo_entry()` no longer append one line directly into the personal daily note.
+- instead they call `_refresh_day(day)`.
+- `_refresh_day(day)`:
+  - reads any existing personal daily note content
+  - preserves an existing GitHub section body from the Weave daily note or legacy personal daily note when no new GitHub body is provided
+  - scans `sink/YYYY/MM/DD/*.md`
+  - classifies each sink note into `todos`, `meetings`, `capture`, or `agent-sessions`
+  - backfills missing sink-note summaries before rendering
+  - renders a fully managed Weave daily note with H2 sections and HTML markers
+  - writes the Weave daily note only if content changed
+  - removes legacy inline `#weave` note lines and legacy managed GitHub sections from the personal daily note
+  - ensures the personal daily note contains the managed embed region when the Weave daily note exists
+
+Section rendering:
+- section order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity.
+- standard note sections render compact bullets with aliased wiki-links and optional summaries.
+- agent sessions render as `project -> nested session bullets`; each child uses a shortened session-id tail, compact frontmatter summary, and message count parsed from the metrics table.
+- GitHub activity is injected as a pre-rendered compact body and wrapped with the GitHub section markers.
+
+Discovery + sync:
+- `sync_all_daily_notes()` discovers days from three sources:
+  - sink note day directories
+  - personal daily notes (recursive under the configured folder, filtered by ISO date filename stem)
+  - existing Weave daily notes
+- each discovered day is rebuilt with `_refresh_day(day)`.
+- `sync_daily_note(path)` now means “rebuild the day identified by this personal daily note path”.
+
+Layout migration:
+- `migrate_personal_daily_layout(format_string)` moves existing personal daily notes to the rendered path for the requested format and writes the new `format` back to `.obsidian/daily-notes.json`.
+- if a destination file already exists with different content, it raises `ConfigError` rather than merging.
+- empty directories left behind by a move are pruned upward until the configured personal daily-note folder root.
 
 5.6 `GitHubActivitySyncer`
-- initialized with the shared `DailyNoteWriter`, a timezone name, an optional username override, and a `GitHubTimelineClient`
-- uses `GhCliGitHubTimelineClient` in production and fetches up to 3 pages of 100 recent user events via `gh`
-- resolves the effective username from config or the authenticated `gh` user
-- imports only stable completed local days; a day is considered stable at `06:00` local time on the following day
-- groups normalized activity by local day, filters out the current/unstable day, and renders one managed daily-note section per eligible day
-- push handling is commit-centric because `collect_activity_records()` expands compare data into individual commit records when available
-- keeps a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json` keyed by `<username>:<YYYY-MM-DD>` so imported days are finalized once and skipped on future runs
-- if the manifest is missing but the daily note already has the managed GitHub section, the syncer records the manifest entry without rewriting the daily note
-- if a stable day has no GitHub records, no section is written and no note is modified
+- still fetches recent user events via `gh` and finalizes only stable completed local days.
+- still uses a manifest keyed by `<username>:<YYYY-MM-DD>`.
+- now calls `render_compact_activity_section()` instead of the detailed per-event renderer.
+- writes the compact GitHub body into the Weave daily note through `DailyNoteWriter.upsert_github_activity_section()`.
+- `has_github_activity_section(day)` checks both the new Weave daily note and the legacy personal daily note so missing-manifest recovery works across upgrades.
 
 5.7 `AgentSessionScraper`
-- initialized with `sessions_dir`, `output_dir`, and optional `NoteSummarizer`
-- `scrape_once()` finds canonical session `.jsonl` files under `claude/` and `pi/` subdirectories, skipping `subagents/` and ignoring non-canonical cache/export artifacts such as `agent-*.jsonl`
-- keeps a JSON manifest at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`; if the file is missing or malformed it is ignored and rebuilt from the source tree
-- manifest entries are keyed by source file path and store `session_id`, `session_sha256`, `sink_path`, and `source_mtime_ns`
-- each scan stats every source file, treats files with an mtime in the last 7 days as mutable, and otherwise trusts the manifest + existing sink note without rereading file contents
-- mutable files skip reparsing when `st_mtime_ns` matches the manifest; otherwise Weave hashes the file and only reparses when the SHA-256 changed or the sink note disappeared
-- session note filenames are the session ID (`<YYYY>/<MM>/<DD>/<session-id>.md`) rather than a project/time slug
-- rendered session notes include frontmatter `summary: ""`, `session_id`, and `session_sha256`, plus the structured LLM summary section, metrics table, and conversation turns
-- `WeaveService` wires the agent-session note-body summarizer to `AGENT_SESSION_SUMMARY_PROMPT`, distinct from the generic daily-index/frontmatter summary prompt
-- `scrape_once(on_result=...)` accepts an optional callback invoked for each changed note as soon as it is written; `WeaveService.run_agent_session_scrape()` uses this to update daily notes incrementally during long scans
-- zero-byte session files are short-circuited as `skipped_empty` before hashing or parsing
-- `scrape_once()` returns both changed-note results and an `AgentSessionSyncReport`; `WeaveService.run_agent_session_scrape()` prints that report as JSON to stdout
+- constructor now accepts two summarizers:
+  - `summarizer`: structured body summary used for the `## Summary` section
+  - `index_summarizer`: compact summary written into frontmatter `summary`
+- `_sync_session()` renders the conversation once, then runs the two summary prompts independently.
+- rendered note filenames remain session-ID based.
 
-5.8 Session parsing
-- `SessionTurn`, `SessionTokenUsage`, `SessionData` dataclasses hold parsed session data
-- `detect_session_format()` reads the first JSONL line to distinguish Claude vs Pi format
-- `parse_claude_session()` handles streaming dedup (multiple records per `message.id`, take last for accurate `output_tokens`)
-- `parse_pi_session()` extracts cost data and tree-structured turns
-- `_is_human_user_msg()` filters out tool results and meta/system messages from Claude sessions
-- `render_session_turns()` produces markdown conversation output
-- `render_session_note()` produces the full markdown file with Jinja2 template
+5.8 Session rendering
+- `render_session_note()` now emits minimal frontmatter: `type`, `summary`, `agent`, `project`, `session_id`, `session_sha256`.
+- note metrics moved into the `## Metrics` table. The table includes message count so `DailyNoteWriter` can render compact agent-session bullets without needing extra frontmatter noise.
+- `render_session_turns()` now produces Obsidian callouts instead of `**USER:**` / `**ASSISTANT:**` prefixes:
+  - `[!note]` for user turns
+  - `[!quote]` for assistant turns
+- tool names are rendered inside the first assistant callout for the turn.
+- because every line is still normal markdown prefixed with `>`, fenced code blocks and inline code render normally inside the callouts.
 
-5.9 `NoteSummarizer` / `LlmNoteSummarizer`
-- protocol: `NoteSummarizer.summarize(content) -> str`
-- concrete: `LlmNoteSummarizer(prompt=..., model=...)` shells out to `llm` CLI with a caller-supplied prompt
-- current prompt wiring uses `SUMMARY_PROMPT` for frontmatter/daily-note summaries and `AGENT_SESSION_SUMMARY_PROMPT` for the agent-session note body summary
-- on failure (process error, command not found), logs warning and returns empty string
-- tests use `StaticSummarizer` that returns predetermined text without mocks
+5.9 `src/weave/github_activity.py`
+- `ActivityRecord` now carries optional compact-render metadata: `event_kind`, `detail_text`, `detail_url`.
+- normalization sets those fields for commits, PRs, issues, comments/reviews, branches/tags, pushes, and stars.
+- the detailed standalone report remains unchanged and still uses `render_activity_report()` / `render_activity_section()`.
+- the new `render_compact_activity_section()` groups records by repo and then by normalized event kind, rendering counts plus detail links only when a kind has 3 or fewer records.
 
-6. Transcription abstraction
+6. Threading model
 
-- protocol: `PdfTranscriber.get_transcription(pdf_path) -> str`
-- concrete: `LlmPdfTranscriber` that shells out to `llm`
-- tests use deterministic in-memory transcriber classes without mocks
+- unchanged structurally: IMAP runs on the main thread, maintenance threads handle calendar, agent sessions, GitHub activity, and daily-note sync.
+- `DailyNoteWriter` still uses one `threading.RLock` around summary backfill, day rebuilds, GitHub section updates, and migration logic so concurrent writers cannot interleave file updates.
 
-7. Drive export abstraction
+7. Notes on compatibility
 
-- protocol: `DriveExporter` with `export_document(file_id) -> bytes` and `get_media(file_id) -> bytes`
-- concrete: `GoogleDriveExporter` wraps `googleapiclient.discovery.build("drive", "v3")`
-- tests use `StaticDriveExporter` that returns predetermined bytes without mocks
-
-8. Threading model
-
-- `WeaveService` owns a `threading.Event` (`_shutdown`) for coordinated shutdown.
-- In daemon mode, the IMAP loop runs on the main thread.
-- A dedicated calendar thread runs `run_calendar_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`.
-- A dedicated agent-session thread runs `run_agent_session_loop()` every 5 minutes via `_shutdown.wait(timeout=300)`. This avoids long agent-session imports blocking calendar scraping.
-- A dedicated GitHub activity thread runs `run_github_activity_loop()` hourly via `_shutdown.wait(timeout=3600)`.
-- A dedicated daily-note thread runs `run_daily_note_sync_loop()` every 5 minutes; `run_daily_note_sync()` uses `WeaveService._last_daily_note_sync_on` to ensure at most one sync pass per local calendar day.
-- `DailyNoteWriter` uses a `threading.RLock` across summary backfill, managed-line writes, and managed-section writes since IMAP, calendar, agent-session, and GitHub activity can all touch the same daily notes.
-- Signal handlers (SIGINT, SIGTERM) set `_shutdown` before exiting.
-- In `--once` mode, calendar scrape, agent session scrape, GitHub activity sync, and one daily-note sync pass run synchronously after the IMAP batch.
-
-9. Credential setup
-
-- `scripts/setup_google_credentials.py` imports `CalendarScraper.get_google_credentials()` and runs the interactive OAuth flow.
-- Credentials stored at `$XDG_CONFIG_HOME/wballenthin/weave/credentials.json` (client secrets) and `token.json` (OAuth token).
-- At startup, `WeaveService` validates the token exists; if missing, raises `ConfigError` directing the user to run the setup script.
-
-10. Consolidation notes from previous scripts
-
-The old standalone scripts had duplicated blocks for:
-- IMAP connection lifecycle
-- unread message scanning
-- envelope decoding
-- date-folder note writing
-- long-running loop and reconnect
-
-Weave keeps one monitor/loop and routes to specialized handlers. The previous per-script behavior is preserved for naming and markdown output shape.
-
-The `scripts/poc.py` calendar scraper was consolidated into the `CalendarScraper` class following the same protocol-based testing pattern as `PdfTranscriber`/`LlmPdfTranscriber`.
-
-11. Planned next refactors
-
-- split `app.py` into `mailbox.py`, `routes.py`, `handlers/`, and `cli.py`
-- add handler for links/quick notes
-- add route-level metrics and broader structured JSON run reports beyond agent-session sync
+- existing sink notes without the new `type` frontmatter are still classified by heuristics:
+  - transcription filename suffix for voice notes
+  - PDF attachment frontmatter for handwriting notes
+  - subject + `##` heading shape for TODOs
+- legacy inline `#weave` personal-daily-note lines remain supported only as migration inputs. `DailyNoteWriter` strips them during daily-note sync and replaces them with the embed-region model.
+- legacy managed GitHub sections in personal daily notes are preserved long enough to seed the new Weave daily note during migration, then removed from the personal note.

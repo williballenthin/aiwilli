@@ -192,10 +192,18 @@ def test_daily_note_writer_uses_obsidian_daily_folder(tmp_path: Path) -> None:
         entry_type="transcript",
     )
 
-    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
-    assert daily_path.exists()
-    assert daily_path.read_text() == (
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] #weave\n"
+    personal_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert personal_path.read_text() == (
+        "<!-- weave:daily-embed:start -->\n"
+        "![[weave/daily/2026/03/01/2026-03-01.md]]\n"
+        "<!-- weave:daily-embed:end -->\n"
+    )
+    assert weave_path.read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]\n"
+        "<!-- weave:section:capture:end -->\n"
     )
 
 
@@ -207,9 +215,9 @@ def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
     note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
     note_path.parent.mkdir(parents=True)
     note_path.write_text("content")
-    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
-    daily_path.parent.mkdir(parents=True)
-    daily_path.write_text("seed\n")
+    personal_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    personal_path.parent.mkdir(parents=True)
+    personal_path.write_text("seed\n")
 
     writer = DailyNoteWriter(vault_root=vault_root)
     writer.append_note_entry(
@@ -223,8 +231,17 @@ def test_daily_note_writer_deduplicates_existing_embed(tmp_path: Path) -> None:
         entry_type="transcript",
     )
 
-    content = daily_path.read_text()
-    assert content.count("[[sink/2026/03/01/1345 - transcription.md]]") == 1
+    content = personal_path.read_text()
+    assert content.count("![[weave/daily/2026/03/01/2026-03-01.md]]") == 1
+    weave_content = (
+        vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    ).read_text()
+    assert (
+        weave_content.count(
+            "[[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]"
+        )
+        == 1
+    )
 
 
 class CallCountSummarizer:
@@ -258,9 +275,9 @@ def test_daily_note_writer_deduplicates_by_link_ignoring_summary(tmp_path: Path)
         entry_type="transcript",
     )
 
-    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
-    content = daily_path.read_text()
-    assert content.count("[[sink/2026/03/01/1345 - transcription.md]]") == 1
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    content = weave_path.read_text()
+    assert content.count("summary attempt 1") == 1
     assert summarizer.call_count == 1
 
 
@@ -271,7 +288,17 @@ def test_daily_note_writer_deduplicates_todo_by_link(tmp_path: Path) -> None:
     (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
     note_path = vault_root / "sink" / "2026/03/01" / "1345 - buy-milk.md"
     note_path.parent.mkdir(parents=True)
-    note_path.write_text("content")
+    note_path.write_text(
+        "---\n"
+        "type: todo\n"
+        'summary: ""\n'
+        'subject: "buy milk"\n'
+        "---\n"
+        "\n"
+        "## buy milk\n"
+        "\n"
+        "content\n"
+    )
 
     summarizer = CallCountSummarizer()
     writer = DailyNoteWriter(vault_root=vault_root, summarizer=summarizer)
@@ -284,9 +311,12 @@ def test_daily_note_writer_deduplicates_todo_by_link(tmp_path: Path) -> None:
         note_path=note_path,
     )
 
-    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
-    content = daily_path.read_text()
-    assert content.count("[[sink/2026/03/01/1345 - buy-milk.md]]") == 1
+    personal_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    assert personal_path.exists()
+    weave_content = (
+        vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    ).read_text()
+    assert weave_content.count("[[sink/2026/03/01/1345 - buy-milk.md|buy milk]]") == 1
     assert summarizer.call_count == 1
 
 
@@ -389,7 +419,17 @@ def test_daily_note_writer_appends_todo_embed(tmp_path: Path) -> None:
     (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "personal/daily"}))
     note_path = vault_root / "sink" / "2026/03/01" / "1345 - Buy groceries.md"
     note_path.parent.mkdir(parents=True)
-    note_path.write_text("content")
+    note_path.write_text(
+        "---\n"
+        "type: todo\n"
+        'summary: ""\n'
+        'subject: "Buy groceries"\n'
+        "---\n"
+        "\n"
+        "## Buy groceries\n"
+        "\n"
+        "content\n"
+    )
 
     writer = DailyNoteWriter(vault_root=vault_root)
     writer.append_todo_entry(
@@ -397,10 +437,19 @@ def test_daily_note_writer_appends_todo_embed(tmp_path: Path) -> None:
         note_path=note_path,
     )
 
-    daily_path = vault_root / "personal" / "daily" / "2026-03-01.md"
-    assert daily_path.exists()
-    assert daily_path.read_text() == (
-        "- [ ] todo: [[sink/2026/03/01/1345 - Buy groceries.md]] #weave\n"
+    personal_path = vault_root / "personal" / "daily" / "2026-03-01.md"
+    assert personal_path.exists()
+    assert personal_path.read_text() == (
+        "<!-- weave:daily-embed:start -->\n"
+        "![[weave/daily/2026/03/01/2026-03-01.md]]\n"
+        "<!-- weave:daily-embed:end -->\n"
+    )
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert weave_path.read_text() == (
+        "## TODOs\n"
+        "<!-- weave:section:todos:start -->\n"
+        "- [ ] [[sink/2026/03/01/1345 - Buy groceries.md|Buy groceries]]\n"
+        "<!-- weave:section:todos:end -->\n"
     )
 
 
@@ -431,10 +480,13 @@ def test_daily_note_writer_includes_summary_when_summarizer_provided(tmp_path: P
         entry_type="transcript",
     )
 
-    daily_path = vault_root / "daily" / "2026-03-01.md"
-    assert daily_path.read_text() == (
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]]"
-        " - Voice memo about project planning. #weave\n"
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert weave_path.read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]"
+        " — Voice memo about project planning.\n"
+        "<!-- weave:section:capture:end -->\n"
     )
     assert note_path.read_text() == (
         '---\nsummary: "Voice memo about project planning."\n---\nSome voice note content here.'
@@ -448,7 +500,17 @@ def test_daily_note_writer_todo_includes_summary(tmp_path: Path) -> None:
     (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
     note_path = vault_root / "sink" / "2026/03/01" / "1345 - Fix bug.md"
     note_path.parent.mkdir(parents=True)
-    note_path.write_text("Fix the login bug.")
+    note_path.write_text(
+        "---\n"
+        "type: todo\n"
+        'summary: ""\n'
+        'subject: "Fix bug"\n'
+        "---\n"
+        "\n"
+        "## Fix bug\n"
+        "\n"
+        "Fix the login bug.\n"
+    )
 
     writer = DailyNoteWriter(
         vault_root=vault_root,
@@ -459,12 +521,23 @@ def test_daily_note_writer_todo_includes_summary(tmp_path: Path) -> None:
         note_path=note_path,
     )
 
-    daily_path = vault_root / "daily" / "2026-03-01.md"
-    assert daily_path.read_text() == (
-        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]] - Bug fix for login flow. #weave\n"
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert weave_path.read_text() == (
+        "## TODOs\n"
+        "<!-- weave:section:todos:start -->\n"
+        "- [ ] [[sink/2026/03/01/1345 - Fix bug.md|Fix bug]] — Bug fix for login flow.\n"
+        "<!-- weave:section:todos:end -->\n"
     )
     assert note_path.read_text() == (
-        '---\nsummary: "Bug fix for login flow."\n---\nFix the login bug.'
+        "---\n"
+        "type: todo\n"
+        'summary: "Bug fix for login flow."\n'
+        'subject: "Fix bug"\n'
+        "---\n"
+        "\n"
+        "## Fix bug\n"
+        "\n"
+        "Fix the login bug.\n"
     )
 
 
@@ -477,6 +550,7 @@ def test_daily_note_writer_uses_stored_frontmatter_summary(tmp_path: Path) -> No
     note_path.parent.mkdir(parents=True)
     note_path.write_text(
         "---\n"
+        'type: transcript\n'
         'subject: "Voice note"\n'
         'summary: "Stored summary."\n'
         "received: 2026-03-01T13:45:00+00:00\n"
@@ -493,9 +567,12 @@ def test_daily_note_writer_uses_stored_frontmatter_summary(tmp_path: Path) -> No
         entry_type="transcript",
     )
 
-    daily_path = vault_root / "daily" / "2026-03-01.md"
-    assert daily_path.read_text() == (
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Stored summary. #weave\n"
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert weave_path.read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|Voice note]] — Stored summary.\n"
+        "<!-- weave:section:capture:end -->\n"
     )
     assert summarizer.call_count == 0
 
@@ -526,8 +603,18 @@ def test_daily_note_writer_syncs_managed_lines_from_note_summary(tmp_path: Path)
     assert writer.sync_all_daily_notes() == 1
     assert daily_path.read_text() == (
         "intro\n"
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Updated summary. #weave\n"
         "tail\n"
+        "\n"
+        "<!-- weave:daily-embed:start -->\n"
+        "![[weave/daily/2026/03/01/2026-03-01.md]]\n"
+        "<!-- weave:daily-embed:end -->\n"
+    )
+    assert (vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md").read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]"
+        " — Updated summary.\n"
+        "<!-- weave:section:capture:end -->\n"
     )
 
 
@@ -540,8 +627,13 @@ def test_daily_note_writer_syncs_todo_lines_without_resummarizing(tmp_path: Path
     note_path.parent.mkdir(parents=True)
     note_path.write_text(
         "---\n"
+        "type: todo\n"
         'summary: ""\n'
+        'subject: "Fix bug"\n'
         "---\n"
+        "\n"
+        "## Fix bug\n"
+        "\n"
         "Body\n"
     )
     daily_path = vault_root / "daily" / "2026-03-01.md"
@@ -557,9 +649,36 @@ def test_daily_note_writer_syncs_todo_lines_without_resummarizing(tmp_path: Path
     assert writer.sync_all_daily_notes() == 1
     assert daily_path.read_text() == (
         "seed\n"
-        "- [ ] todo: [[sink/2026/03/01/1345 - Fix bug.md]] #weave\n"
         "leave me alone #weave\n"
+        "\n"
+        "<!-- weave:daily-embed:start -->\n"
+        "![[weave/daily/2026/03/01/2026-03-01.md]]\n"
+        "<!-- weave:daily-embed:end -->\n"
     )
+    assert (vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md").read_text() == (
+        "## TODOs\n"
+        "<!-- weave:section:todos:start -->\n"
+        "- [ ] [[sink/2026/03/01/1345 - Fix bug.md|Fix bug]]\n"
+        "<!-- weave:section:todos:end -->\n"
+    )
+
+
+def test_daily_note_writer_migrates_personal_note_layout(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    old_path = vault_root / "daily" / "2026-03-01.md"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text("hello\n")
+
+    writer = DailyNoteWriter(vault_root=vault_root)
+    assert writer.migrate_personal_daily_layout("YYYY/MM/DD/YYYY-MM-DD") == 1
+
+    new_path = vault_root / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert new_path.read_text() == "hello\n"
+    settings = json.loads((config_dir / "daily-notes.json").read_text())
+    assert settings["format"] == "YYYY/MM/DD/YYYY-MM-DD"
 
 
 def test_weave_service_runs_daily_note_sync_once_per_day(
@@ -595,8 +714,13 @@ def test_weave_service_runs_daily_note_sync_once_per_day(
     service = WeaveService(config)
 
     assert service.run_daily_note_sync(sync_date=dt_mod.date(2026, 3, 1)) == 1
-    assert daily_path.read_text() == (
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - First summary. #weave\n"
+    weave_path = vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md"
+    assert weave_path.read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]"
+        " — First summary.\n"
+        "<!-- weave:section:capture:end -->\n"
     )
 
     note_path.write_text(
@@ -607,13 +731,21 @@ def test_weave_service_runs_daily_note_sync_once_per_day(
     )
 
     assert service.run_daily_note_sync(sync_date=dt_mod.date(2026, 3, 1)) == 0
-    assert daily_path.read_text() == (
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - First summary. #weave\n"
+    assert weave_path.read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]"
+        " — First summary.\n"
+        "<!-- weave:section:capture:end -->\n"
     )
 
     assert service.run_daily_note_sync(sync_date=dt_mod.date(2026, 3, 2)) == 1
-    assert daily_path.read_text() == (
-        "- transcript: [[sink/2026/03/01/1345 - transcription.md]] - Second summary. #weave\n"
+    assert weave_path.read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]"
+        " — Second summary.\n"
+        "<!-- weave:section:capture:end -->\n"
     )
 
 
@@ -656,9 +788,13 @@ def test_github_activity_syncer_waits_for_stable_day(
     assert not (vault_root / "daily" / "2026-03-10.md").exists()
 
     assert syncer.run_once(now=datetime(2026, 3, 11, 6, 0, tzinfo=UTC)) == 1
-    content = (vault_root / "daily" / "2026-03-10.md").read_text()
-    assert "## GitHub activity #weave" in content
-    assert "commented on issue #9: Looks good to me." in content
+    personal_content = (vault_root / "daily" / "2026-03-10.md").read_text()
+    assert "![[weave/daily/2026/03/10/2026-03-10.md]]" in personal_content
+    weave_content = (
+        vault_root / "weave" / "daily" / "2026/03/10" / "2026-03-10.md"
+    ).read_text()
+    assert "## GitHub activity" in weave_content
+    assert "- [acme/app](https://github.com/acme/app) — 1 comment" in weave_content
 
 
 
@@ -1276,9 +1412,11 @@ def test_render_session_turns_includes_user_and_assistant() -> None:
         ],
     )
     rendered = render_session_turns(session)
-    assert "**USER:** do the thing" in rendered
-    assert "**ASSISTANT:** done." in rendered
-    assert "Edit" in rendered
+    assert "> [!note] User · 11:00:00" in rendered
+    assert "> do the thing" in rendered
+    assert "> [!quote] Assistant" in rendered
+    assert "> done." in rendered
+    assert "tools: Edit" in rendered
 
 
 def test_render_session_note_has_frontmatter() -> None:
@@ -1298,12 +1436,15 @@ def test_render_session_note_has_frontmatter() -> None:
         session,
         "Built a thing.",
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        index_summary="compact summary",
     )
     assert "type: agent_session" in note
+    assert 'summary: "compact summary"' in note
     assert "agent: pi" in note
     assert 'project: "myproject"' in note
     assert "Built a thing." in note
-    assert "**USER:** hi" in note
+    assert "| Messages | 2 |" in note
+    assert "> [!note] User" in note
 
 
 def test_format_duration() -> None:
@@ -1329,6 +1470,7 @@ def test_agent_session_scraper_writes_note(tmp_path: Path, monkeypatch: pytest.M
         sessions_dir=sessions_dir,
         output_dir=output_dir,
         summarizer=StaticSummarizer("Fixed a bug."),
+        index_summarizer=StaticSummarizer("compact summary"),
     )
     run = scraper.scrape_once(on_result=lambda result: seen.append(result.note_path))
 
@@ -1343,6 +1485,7 @@ def test_agent_session_scraper_writes_note(tmp_path: Path, monkeypatch: pytest.M
     assert seen == [note_path]
     content = note_path.read_text()
     assert "type: agent_session" in content
+    assert 'summary: "compact summary"' in content
     assert 'session_id: "abc-123"' in content
     assert "session_sha256:" in content
     assert "Fixed a bug." in content

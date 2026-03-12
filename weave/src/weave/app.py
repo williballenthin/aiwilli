@@ -39,7 +39,7 @@ from weave.github_activity import (
     fetch_user_events,
     get_default_timezone_name,
     get_timezone,
-    render_activity_section,
+    render_compact_activity_section,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ STDERR_CONSOLE = Console(stderr=True)
 
 VOICE_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
+type: transcript
 subject: \"{{ subject }}\"
 summary: ""
 received: {{ received }}
@@ -62,6 +63,7 @@ saved: {{ saved }}
 
 RM2_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
+type: handwriting
 subject: \"{{ subject }}\"
 summary: ""
 attachment: \"{{ attachment_filename }}\"
@@ -77,6 +79,7 @@ transcribed: {{ transcribed }}
 
 RM2_ERROR_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
+type: handwriting
 subject: \"{{ subject }}\"
 summary: ""
 attachment: \"{{ attachment_filename }}\"
@@ -92,6 +95,7 @@ error: \"{{ error }}\"
 
 TODO_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
+type: todo
 subject: \"{{ subject }}\"
 summary: ""
 received: {{ received }}
@@ -109,11 +113,24 @@ saved: {{ saved }}
 )
 
 WEAVE_TAG = "#weave"
+DEFAULT_DAILY_NOTE_FORMAT = "YYYY-MM-DD"
+DEFAULT_NESTED_DAILY_NOTE_FORMAT = "YYYY/MM/DD/YYYY-MM-DD"
+WEAVE_DAILY_RELATIVE_PATH = Path("weave") / "daily"
+PERSONAL_DAILY_EMBED_START = "<!-- weave:daily-embed:start -->"
+PERSONAL_DAILY_EMBED_END = "<!-- weave:daily-embed:end -->"
+LEGACY_GITHUB_ACTIVITY_SECTION_HEADING = "## GitHub activity #weave"
 MANAGED_NOTE_LINE_RE = re.compile(
     r"^- (?P<entry_type>[^:]+): \[\[(?P<link>[^\]]+)\]\](?: - (?P<summary>.*?))? #weave$"
 )
 MANAGED_TODO_LINE_RE = re.compile(
     r"^- \[ \] todo: \[\[(?P<link>[^\]]+)\]\](?: - (?P<summary>.*?))? #weave$"
+)
+WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
+    ("todos", "TODOs"),
+    ("meetings", "Meetings"),
+    ("capture", "Capture"),
+    ("agent-sessions", "Agent sessions"),
+    ("github-activity", "GitHub activity"),
 )
 
 RM2_MODEL = "gemini/gemini-3-flash-preview"
@@ -149,6 +166,12 @@ Provide a structured summary with:
 
 Be concise. Use plain text, no markdown headers."""
 
+AGENT_SESSION_INDEX_SUMMARY_PROMPT = (
+    "Summarize this software engineering agent session in 12 words or fewer."
+    " Focus on the main task or concrete outcome."
+    " Output a single plain-text phrase."
+)
+
 HANDLER_ENTRY_TYPES: dict[str, str] = {
     "voice": "transcript",
     "rm2": "handwriting",
@@ -177,7 +200,7 @@ GITHUB_ACTIVITY_PAGES = 3
 GITHUB_ACTIVITY_PER_PAGE = 100
 GITHUB_ACTIVITY_SYNC_INTERVAL_SECONDS = 3600
 GITHUB_ACTIVITY_STABILIZATION_HOURS = 6
-GITHUB_ACTIVITY_SECTION_HEADING = "## GitHub activity #weave"
+GITHUB_ACTIVITY_SECTION_HEADING = "## GitHub activity"
 GITHUB_ACTIVITY_SECTION_START = "<!-- weave:github-activity:start -->"
 GITHUB_ACTIVITY_SECTION_END = "<!-- weave:github-activity:end -->"
 
@@ -262,6 +285,29 @@ def sanitize_filename(name: str) -> str:
     sanitized = re.sub(r'[/\\:*?"<>|]', "-", name)
     sanitized = sanitized.strip(" -")
     return sanitized[:100] if sanitized else "untitled"
+
+
+def render_daily_note_relative_path(day: dt_mod.date, format_string: str) -> Path:
+    rendered = format_string
+    replacements = {
+        "YYYY": day.strftime("%Y"),
+        "MM": day.strftime("%m"),
+        "DD": day.strftime("%d"),
+    }
+    for token, value in replacements.items():
+        rendered = rendered.replace(token, value)
+    if not rendered.endswith(".md"):
+        rendered = f"{rendered}.md"
+    return Path(rendered)
+
+
+def get_managed_section_markers(section_name: str) -> tuple[str, str]:
+    if section_name == "github-activity":
+        return GITHUB_ACTIVITY_SECTION_START, GITHUB_ACTIVITY_SECTION_END
+    return (
+        f"<!-- weave:section:{section_name}:start -->",
+        f"<!-- weave:section:{section_name}:end -->",
+    )
 
 
 @contextmanager
@@ -1450,54 +1496,56 @@ def _format_duration(td: dt_mod.timedelta) -> str:
     return f"{seconds}s"
 
 
+def render_callout(callout_type: str, title: str, body: str) -> str:
+    lines = [f"> [!{callout_type}] {title}".rstrip()]
+    normalized_body = body.rstrip()
+    if not normalized_body:
+        lines.append(">")
+        return "\n".join(lines)
+    for line in normalized_body.splitlines():
+        if line:
+            lines.append(f"> {line}")
+        else:
+            lines.append(">")
+    return "\n".join(lines)
+
+
+def get_session_message_count(session: SessionData) -> int:
+    return len(session.turns) + sum(len(turn.assistant_texts) for turn in session.turns)
+
+
 def render_session_turns(session: SessionData) -> str:
     parts: list[str] = []
-    for i, turn in enumerate(session.turns, 1):
+    for turn in session.turns:
         ts = turn.timestamp.strftime("%H:%M:%S") if turn.timestamp else "??:??"
-        parts.append(f"### Turn {i} [{ts}]")
+        parts.append(render_callout("note", f"User · {ts}", turn.user_text))
         parts.append("")
-        parts.append(f"**USER:** {turn.user_text}")
-        parts.append("")
+        assistant_prefix = ""
         if turn.tool_names:
-            parts.append(f"*tools: {', '.join(turn.tool_names)}*")
+            assistant_prefix = f"tools: {', '.join(turn.tool_names)}\n\n"
+        assistant_texts = turn.assistant_texts or [""]
+        for index, text in enumerate(assistant_texts):
+            body = text
+            if index == 0 and assistant_prefix:
+                body = f"{assistant_prefix}{body}" if body else assistant_prefix.rstrip()
+            parts.append(render_callout("quote", "Assistant", body))
             parts.append("")
-        for text in turn.assistant_texts:
-            parts.append(f"**ASSISTANT:** {text}")
-            parts.append("")
-    return "\n".join(parts)
+    return "\n".join(parts).strip()
 
 
 AGENT_SESSION_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
     """---
 type: agent_session
-summary: ""
+summary: {{ index_summary_json }}
 agent: {{ agent }}
-project: "{{ project }}"
-session_id: "{{ session_id }}"
-session_sha256: "{{ session_sha256 }}"
-start: {{ start }}
-end: {{ end }}
-duration: "{{ duration }}"
-models:
-{% for m in models %}
-  - "{{ m }}"
-{% endfor %}
-{% if git_branch %}
-git_branch: "{{ git_branch }}"
-{% endif %}
-input_tokens: {{ input_tokens }}
-output_tokens: {{ output_tokens }}
-total_tokens: {{ total_tokens }}
-{% if cost %}
-cost: {{ cost }}
-{% endif %}
-user_turns: {{ user_turns }}
-tool_calls: {{ tool_calls }}
+project: {{ project_json }}
+session_id: {{ session_id_json }}
+session_sha256: {{ session_sha256_json }}
 ---
 
 ## Summary
 
-{{ summary }}
+{{ body_summary }}
 
 ## Metrics
 
@@ -1505,8 +1553,16 @@ tool_calls: {{ tool_calls }}
 |--------|-------|
 | Agent | {{ agent }} |
 | Project | {{ project }} |
+| Started | {{ start }} |
+| Ended | {{ end }} |
 | Duration | {{ duration }} |
 | Model(s) | {{ models_str }} |
+{% if git_branch %}
+| Git branch | {{ git_branch }} |
+{% endif %}
+| Messages | {{ message_count }} |
+| User turns | {{ user_turns }} |
+| Tool calls | {{ tool_calls }} |
 | Input tokens | {{ input_tokens_fmt }} |
 | Output tokens | {{ output_tokens_fmt }} |
 | Cache read | {{ cache_read_fmt }} |
@@ -1515,8 +1571,6 @@ tool_calls: {{ tool_calls }}
 {% if cost %}
 | Cost | ${{ cost }} |
 {% endif %}
-| User turns | {{ user_turns }} |
-| Tool calls | {{ tool_calls }} |
 
 ## Conversation
 
@@ -1525,7 +1579,12 @@ tool_calls: {{ tool_calls }}
 )
 
 
-def render_session_note(session: SessionData, summary: str, session_sha256: str) -> str:
+def render_session_note(
+    session: SessionData,
+    body_summary: str,
+    session_sha256: str,
+    index_summary: str = "",
+) -> str:
     usage = session.usage
     total = (
         usage.input_tokens
@@ -1536,17 +1595,16 @@ def render_session_note(session: SessionData, summary: str, session_sha256: str)
     return AGENT_SESSION_TEMPLATE.render(
         agent=session.agent,
         project=session.project,
-        session_id=session.session_id,
-        session_sha256=session_sha256,
-        start=session.start_time.isoformat(timespec="seconds") if session.start_time else "",
-        end=session.end_time.isoformat(timespec="seconds") if session.end_time else "",
+        project_json=json.dumps(session.project),
+        session_id_json=json.dumps(session.session_id),
+        session_sha256_json=json.dumps(session_sha256),
+        index_summary_json=json.dumps(index_summary),
+        start=session.start_time.isoformat(timespec="seconds") if session.start_time else "unknown",
+        end=session.end_time.isoformat(timespec="seconds") if session.end_time else "unknown",
         duration=_format_duration(session.duration) if session.duration else "unknown",
-        models=session.models,
         models_str=", ".join(session.models) or "unknown",
         git_branch=session.git_branch,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        total_tokens=total,
+        message_count=get_session_message_count(session),
         input_tokens_fmt=f"{usage.input_tokens:,}",
         output_tokens_fmt=f"{usage.output_tokens:,}",
         cache_read_fmt=f"{usage.cache_read_tokens:,}",
@@ -1555,7 +1613,7 @@ def render_session_note(session: SessionData, summary: str, session_sha256: str)
         cost=f"{usage.cost:.4f}" if usage.cost else None,
         user_turns=len(session.turns),
         tool_calls=session.total_tool_calls,
-        summary=summary,
+        body_summary=body_summary,
         conversation=render_session_turns(session),
     )
 
@@ -1566,10 +1624,12 @@ class AgentSessionScraper:
         sessions_dir: Path,
         output_dir: Path,
         summarizer: NoteSummarizer | None = None,
+        index_summarizer: NoteSummarizer | None = None,
     ):
         self.sessions_dir = sessions_dir
         self.output_dir = output_dir
         self.summarizer = summarizer
+        self.index_summarizer = index_summarizer
 
     def scrape_once(
         self,
@@ -1719,12 +1779,20 @@ class AgentSessionScraper:
             if old_path.exists():
                 old_path.unlink()
 
-        summary = ""
+        turns_text = render_session_turns(session)
+        body_summary = ""
         if self.summarizer:
-            turns_text = render_session_turns(session)
-            summary = self.summarizer.summarize(turns_text)
+            body_summary = self.summarizer.summarize(turns_text)
+        index_summary = ""
+        if self.index_summarizer:
+            index_summary = self.index_summarizer.summarize(turns_text)
 
-        content = render_session_note(session, summary, session_sha256)
+        content = render_session_note(
+            session,
+            body_summary,
+            session_sha256,
+            index_summary=index_summary,
+        )
         out_path.write_text(content)
         logger.info("wrote agent session: %s", out_path)
 
@@ -1769,17 +1837,24 @@ def parse_front_matter_scalar(value: str) -> str:
     return stripped
 
 
-def get_note_summary(content: str) -> str:
+def get_front_matter_fields(content: str) -> dict[str, str]:
     parts = split_front_matter(content)
     if parts is None:
-        return ""
+        return {}
     front_matter, _ = parts
+    fields: dict[str, str] = {}
     for line in front_matter.splitlines():
-        if not line.startswith("summary:"):
+        if not line or line.startswith((" ", "\t", "-")):
             continue
-        _, _, value = line.partition(":")
-        return parse_front_matter_scalar(value)
-    return ""
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        fields[key.strip()] = parse_front_matter_scalar(value)
+    return fields
+
+
+def get_note_summary(content: str) -> str:
+    return get_front_matter_fields(content).get("summary", "")
 
 
 def set_note_summary(content: str, summary: str) -> str:
@@ -1860,7 +1935,7 @@ class GitHubActivitySyncer:
                 )
                 manifest_dirty = True
                 continue
-            body = render_activity_section(self._group_records_by_repo(day_records), self.timezone)
+            body = render_compact_activity_section(self._group_records_by_repo(day_records))
             if body:
                 daily_path = self.daily_note_writer.upsert_github_activity_section(day, body)
                 logger.info("updated github activity section %s", daily_path)
@@ -1932,174 +2007,474 @@ class GitHubActivitySyncer:
         manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
 
 
+@dataclass(frozen=True)
+class DailyIndexEntry:
+    category: str
+    entry_type: str
+    note_path: Path
+    label: str
+    summary: str
+    project: str = ""
+    session_id: str = ""
+    message_count: int | None = None
+
+
 class DailyNoteWriter:
     def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
         self.vault_root = vault_root
         self.summarizer = summarizer
         self._lock = threading.RLock()
 
-    def append_line(self, received: datetime, line: str) -> Path:
-        with self._lock:
-            daily_path = self.get_daily_note_path(received)
-            daily_path.parent.mkdir(parents=True, exist_ok=True)
-            if daily_path.exists():
-                content = daily_path.read_text()
-                existing_lines = content.splitlines()
-                if line in existing_lines:
-                    return daily_path
-                separator = "" if content.endswith("\n") or content == "" else "\n"
-                daily_path.write_text(f"{content}{separator}{line}\n")
-                return daily_path
-            daily_path.write_text(f"{line}\n")
-            return daily_path
-
     def append_note_entry(self, received: datetime, note_path: Path, entry_type: str) -> Path:
         with self._lock:
-            daily_path = self.get_daily_note_path(received)
-            link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
-            summary = self._get_or_create_summary(note_path)
-            line = self.render_entry_line(entry_type, note_path, summary)
-            return self._upsert_line(daily_path, link, line)
+            self._get_or_create_summary(note_path)
+            daily_path, _ = self._refresh_day(received.date())
+            return daily_path
 
     def append_todo_entry(self, received: datetime, note_path: Path) -> Path:
         with self._lock:
-            daily_path = self.get_daily_note_path(received)
-            link = f"[[{self._get_relative_path(note_path).as_posix()}]]"
-            summary = self._get_or_create_summary(note_path)
-            line = self.render_todo_line(note_path, summary)
-            return self._upsert_line(daily_path, link, line)
+            self._get_or_create_summary(note_path)
+            daily_path, _ = self._refresh_day(received.date())
+            return daily_path
 
     def has_github_activity_section(self, day: dt_mod.date) -> bool:
         with self._lock:
-            daily_path = self.get_daily_note_path_for_date(day)
-            if not daily_path.exists():
-                return False
-            content = daily_path.read_text()
-            return (
-                GITHUB_ACTIVITY_SECTION_START in content
-                and GITHUB_ACTIVITY_SECTION_END in content
-            )
+            weave_path = self.get_weave_daily_note_path_for_date(day)
+            for path in (weave_path, self.get_daily_note_path_for_date(day)):
+                try:
+                    content = path.read_text()
+                except OSError:
+                    continue
+                if self._get_section_body(content, "github-activity") is not None:
+                    return True
+            return False
 
     def upsert_github_activity_section(self, day: dt_mod.date, body: str) -> Path:
         with self._lock:
-            daily_path = self.get_daily_note_path_for_date(day)
-            section = self.render_github_activity_section(body)
-            return self._upsert_section(daily_path, section)
+            return self._refresh_day(day, github_body=body)[0]
 
     def sync_all_daily_notes(self) -> int:
         with self._lock:
-            daily_folder = self.get_daily_notes_folder()
-            if not daily_folder.exists():
-                return 0
             updated_count = 0
-            for daily_path in sorted(daily_folder.glob("????-??-??.md")):
-                if self.sync_daily_note(daily_path):
+            for day in self._discover_days():
+                _, changed = self._refresh_day(day)
+                if changed:
                     updated_count += 1
             return updated_count
 
     def sync_daily_note(self, daily_path: Path) -> bool:
         with self._lock:
-            if not daily_path.exists():
+            day = self._parse_day_from_path(daily_path)
+            if day is None:
                 return False
-            content = daily_path.read_text()
-            lines = content.splitlines()
-            updated_lines: list[str] = []
-            changed = False
-            for line in lines:
-                updated_line = self._sync_managed_line(line)
-                if updated_line != line:
-                    changed = True
-                updated_lines.append(updated_line)
-            if not changed:
-                return False
-            trailing_newline = "\n" if content.endswith("\n") else ""
-            daily_path.write_text("\n".join(updated_lines) + trailing_newline)
-            return True
+            _, changed = self._refresh_day(day)
+            return changed
 
-    def _sync_managed_line(self, line: str) -> str:
-        parsed = self._parse_managed_line(line)
-        if parsed is None:
-            return line
-        is_todo, entry_type, note_path = parsed
-        summary = self._get_summary_for_sync(note_path)
-        if summary is None:
-            return line
-        if is_todo:
-            return self.render_todo_line(note_path, summary)
-        return self.render_entry_line(entry_type, note_path, summary)
+    def migrate_personal_daily_layout(self, format_string: str) -> int:
+        with self._lock:
+            folder = self.get_daily_notes_folder()
+            settings = self._load_daily_note_settings()
+            moved = 0
+            for old_path in sorted(self._iter_personal_daily_note_paths()):
+                day = self._parse_day_from_path(old_path)
+                if day is None:
+                    continue
+                new_path = folder / render_daily_note_relative_path(day, format_string)
+                if new_path == old_path:
+                    continue
+                new_path.parent.mkdir(parents=True, exist_ok=True)
+                if new_path.exists():
+                    if new_path.read_text() != old_path.read_text():
+                        raise ConfigError(f"daily note destination already exists: {new_path}")
+                    old_path.unlink()
+                else:
+                    old_path.replace(new_path)
+                self._prune_empty_parents(old_path.parent, stop_at=folder)
+                moved += 1
+            settings["format"] = format_string
+            self._write_daily_note_settings(settings)
+            return moved
 
-    def _parse_managed_line(self, line: str) -> tuple[bool, str, Path] | None:
-        todo_match = MANAGED_TODO_LINE_RE.match(line)
-        if todo_match is not None:
-            return True, "todo", self._resolve_note_path(todo_match.group("link"))
-        note_match = MANAGED_NOTE_LINE_RE.match(line)
-        if note_match is None:
-            return None
-        return (
-            False,
-            note_match.group("entry_type"),
-            self._resolve_note_path(note_match.group("link")),
+    def get_daily_note_path(self, received: datetime) -> Path:
+        return self.get_daily_note_path_for_date(received.date())
+
+    def get_daily_note_path_for_date(self, day: dt_mod.date) -> Path:
+        folder = self.get_daily_notes_folder()
+        return folder / render_daily_note_relative_path(day, self.get_daily_note_format())
+
+    def get_weave_daily_note_path_for_date(self, day: dt_mod.date) -> Path:
+        return self.vault_root / WEAVE_DAILY_RELATIVE_PATH / render_daily_note_relative_path(
+            day,
+            DEFAULT_NESTED_DAILY_NOTE_FORMAT,
         )
 
-    def _resolve_note_path(self, link: str) -> Path:
-        link_path = Path(link)
-        if link_path.is_absolute():
-            return link_path
-        return self.vault_root / link_path
+    def get_daily_notes_folder(self) -> Path:
+        settings = self._load_daily_note_settings()
+        folder = settings.get("folder")
+        if isinstance(folder, str) and folder.strip():
+            return self.vault_root / Path(folder)
+        return self.vault_root
 
-    def _upsert_line(self, daily_path: Path, link: str, line: str) -> Path:
-        daily_path.parent.mkdir(parents=True, exist_ok=True)
-        if not daily_path.exists():
-            daily_path.write_text(f"{line}\n")
-            return daily_path
-        content = daily_path.read_text()
+    def get_daily_note_format(self) -> str:
+        settings = self._load_daily_note_settings()
+        format_string = settings.get("format")
+        if isinstance(format_string, str) and format_string.strip():
+            return format_string
+        return DEFAULT_DAILY_NOTE_FORMAT
+
+    def render_entry_line(self, entry_type: str, note_path: Path, summary: str = "") -> str:
+        label = sanitize_filename(note_path.stem)
+        link = self.render_wikilink(note_path, label)
+        parts = [f"- {entry_type}: {link}"]
+        if summary and summary != label:
+            parts.append(f"— {summary}")
+        return " ".join(parts)
+
+    def render_todo_line(self, note_path: Path, summary: str = "") -> str:
+        label = sanitize_filename(note_path.stem)
+        link = self.render_wikilink(note_path, label)
+        parts = [f"- [ ] {link}"]
+        if summary and summary != label:
+            parts.append(f"— {summary}")
+        return " ".join(parts)
+
+    def render_wikilink(self, note_path: Path, label: str | None = None) -> str:
+        relative = self._get_relative_path(note_path).as_posix()
+        if label:
+            safe_label = label.replace("]", "")
+            return f"[[{relative}|{safe_label}]]"
+        return f"[[{relative}]]"
+
+    def render_embed(self, note_path: Path) -> str:
+        relative = self._get_relative_path(note_path).as_posix()
+        return f"![[{relative}]]"
+
+    def render_managed_section(self, heading: str, section_name: str, body: str) -> str:
+        start_marker, end_marker = get_managed_section_markers(section_name)
+        lines = [heading, start_marker]
+        normalized_body = body.rstrip()
+        if normalized_body:
+            lines.extend(normalized_body.splitlines())
+        lines.append(end_marker)
+        return "\n".join(lines)
+
+    def render_github_activity_section(self, body: str) -> str:
+        return self.render_managed_section(GITHUB_ACTIVITY_SECTION_HEADING, "github-activity", body)
+
+    def render_weave_daily_note(
+        self,
+        entries: list[DailyIndexEntry],
+        github_body: str | None = None,
+    ) -> str:
+        sections: list[str] = []
+        for section_name, heading in WEAVE_SECTION_ORDER:
+            if section_name == "github-activity":
+                normalized_github = (github_body or "").strip()
+                if normalized_github:
+                    sections.append(
+                        self.render_managed_section(
+                            heading=f"## {heading}",
+                            section_name=section_name,
+                            body=normalized_github,
+                        )
+                    )
+                continue
+            if section_name == "agent-sessions":
+                body = self._render_agent_session_section(
+                    [entry for entry in entries if entry.category == section_name]
+                )
+            else:
+                body = self._render_standard_section(
+                    [entry for entry in entries if entry.category == section_name]
+                )
+            if body:
+                sections.append(
+                    self.render_managed_section(
+                        heading=f"## {heading}",
+                        section_name=section_name,
+                        body=body,
+                    )
+                )
+        if not sections:
+            return ""
+        return "\n\n".join(sections).rstrip() + "\n"
+
+    def _refresh_day(
+        self,
+        day: dt_mod.date,
+        github_body: str | None = None,
+    ) -> tuple[Path, bool]:
+        personal_path = self.get_daily_note_path_for_date(day)
+        weave_path = self.get_weave_daily_note_path_for_date(day)
+
+        personal_content = ""
+        if personal_path.exists():
+            personal_content = personal_path.read_text()
+
+        resolved_github_body = github_body
+        if resolved_github_body is None and weave_path.exists():
+            resolved_github_body = self._get_section_body(weave_path.read_text(), "github-activity")
+        if resolved_github_body is None:
+            resolved_github_body = self._get_section_body(personal_content, "github-activity")
+
+        entries = self._collect_day_entries(day)
+        new_weave_content = self.render_weave_daily_note(entries, github_body=resolved_github_body)
+        weave_changed = False
+        if new_weave_content:
+            weave_changed = self._write_text_if_changed(weave_path, new_weave_content)
+        elif weave_path.exists():
+            weave_path.unlink()
+            weave_changed = True
+
+        personal_changed = self._sync_personal_daily_note(
+            personal_path=personal_path,
+            weave_path=weave_path,
+            weave_exists=bool(new_weave_content),
+            existing_content=personal_content,
+        )
+        return personal_path, weave_changed or personal_changed
+
+    def _sync_personal_daily_note(
+        self,
+        personal_path: Path,
+        weave_path: Path,
+        weave_exists: bool,
+        existing_content: str,
+    ) -> bool:
+        updated = self._remove_legacy_weave_content(existing_content)
+        if weave_exists:
+            updated = self._upsert_embed_region(updated, weave_path)
+        if not existing_content and not updated:
+            return False
+        if existing_content == updated and personal_path.exists():
+            return False
+        personal_path.parent.mkdir(parents=True, exist_ok=True)
+        personal_path.write_text(updated)
+        return True
+
+    def _remove_legacy_weave_content(self, content: str) -> str:
+        if not content:
+            return ""
         lines = content.splitlines()
-        for index, existing_line in enumerate(lines):
-            if link in existing_line and WEAVE_TAG in existing_line:
-                if existing_line == line:
-                    return daily_path
-                lines[index] = line
-                trailing_newline = "\n" if content.endswith("\n") else ""
-                daily_path.write_text("\n".join(lines) + trailing_newline)
-                return daily_path
-        separator = "" if content.endswith("\n") or content == "" else "\n"
-        daily_path.write_text(f"{content}{separator}{line}\n")
-        return daily_path
+        updated_lines: list[str] = []
+        skip_github = False
+        for line in lines:
+            if line == LEGACY_GITHUB_ACTIVITY_SECTION_HEADING:
+                continue
+            if line == GITHUB_ACTIVITY_SECTION_START:
+                skip_github = True
+                continue
+            if line == GITHUB_ACTIVITY_SECTION_END:
+                skip_github = False
+                continue
+            if skip_github:
+                continue
+            if MANAGED_NOTE_LINE_RE.match(line) or MANAGED_TODO_LINE_RE.match(line):
+                continue
+            updated_lines.append(line)
+        trailing_newline = "\n" if content.endswith("\n") else ""
+        return "\n".join(updated_lines) + trailing_newline
 
-    def _upsert_section(self, daily_path: Path, section: str) -> Path:
-        daily_path.parent.mkdir(parents=True, exist_ok=True)
-        if not daily_path.exists():
-            daily_path.write_text(section)
-            return daily_path
-        content = daily_path.read_text()
-        start = content.find(GITHUB_ACTIVITY_SECTION_START)
-        end = content.find(GITHUB_ACTIVITY_SECTION_END)
+    def _upsert_embed_region(self, content: str, weave_path: Path) -> str:
+        region = (
+            f"{PERSONAL_DAILY_EMBED_START}\n"
+            f"{self.render_embed(weave_path)}\n"
+            f"{PERSONAL_DAILY_EMBED_END}"
+        )
+        start = content.find(PERSONAL_DAILY_EMBED_START)
+        end = content.find(PERSONAL_DAILY_EMBED_END)
         if start != -1 and end != -1 and end >= start:
-            section_start = content.rfind("\n", 0, start)
-            if section_start == -1:
-                section_start = 0
-            else:
-                section_start += 1
-            section_end = content.find("\n", end)
-            if section_end == -1:
-                section_end = len(content)
-            else:
-                section_end += 1
-            new_content = f"{content[:section_start]}{section}{content[section_end:]}"
-            if new_content == content:
-                return daily_path
-            daily_path.write_text(new_content)
-            return daily_path
-        separator = "" if content.endswith("\n") or content == "" else "\n"
-        daily_path.write_text(f"{content}{separator}{section}")
-        return daily_path
+            end += len(PERSONAL_DAILY_EMBED_END)
+            return f"{content[:start]}{region}{content[end:]}"
+        if not content:
+            return f"{region}\n"
+        if content.endswith("\n\n"):
+            separator = ""
+        elif content.endswith("\n"):
+            separator = "\n"
+        else:
+            separator = "\n\n"
+        return f"{content}{separator}{region}\n"
 
-    def _get_summary_for_sync(self, note_path: Path) -> str | None:
+    def _collect_day_entries(self, day: dt_mod.date) -> list[DailyIndexEntry]:
+        day_dir = self.vault_root / SINK_RELATIVE_PATH / day.strftime("%Y/%m/%d")
+        if not day_dir.exists():
+            return []
+        entries: list[DailyIndexEntry] = []
+        for note_path in sorted(day_dir.glob("*.md")):
+            entry = self._build_day_entry(note_path)
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+    def _build_day_entry(self, note_path: Path) -> DailyIndexEntry | None:
         try:
             content = note_path.read_text()
         except OSError:
             return None
-        return get_note_summary(content)
+        fields = get_front_matter_fields(content)
+        summary = self._get_or_create_summary(note_path)
+        note_type = fields.get("type", "")
+        body = split_front_matter(content)
+        body_text = body[1] if body else content
+        label = fields.get("subject") or fields.get("event") or note_path.stem
+
+        if note_type == "todo" or (fields.get("subject") and body_text.lstrip().startswith("## ")):
+            return DailyIndexEntry(
+                category="todos",
+                entry_type="todo",
+                note_path=note_path,
+                label=fields.get("subject") or note_path.stem,
+                summary=summary,
+            )
+        if note_type in {"meeting_notes", "meeting_chat"}:
+            return DailyIndexEntry(
+                category="meetings",
+                entry_type=note_type.replace("_", " "),
+                note_path=note_path,
+                label=label,
+                summary=summary,
+            )
+        if note_type == "agent_session":
+            return DailyIndexEntry(
+                category="agent-sessions",
+                entry_type="agent session",
+                note_path=note_path,
+                label=note_path.stem,
+                summary=summary,
+                project=fields.get("project", "unknown") or "unknown",
+                session_id=fields.get("session_id", note_path.stem),
+                message_count=self._get_message_count(content),
+            )
+        if note_type == "transcript" or note_path.name.endswith("transcription.md"):
+            return DailyIndexEntry(
+                category="capture",
+                entry_type="transcript",
+                note_path=note_path,
+                label=label,
+                summary=summary,
+            )
+        if note_type == "handwriting" or fields.get("attachment", "").endswith(".pdf"):
+            return DailyIndexEntry(
+                category="capture",
+                entry_type="handwriting",
+                note_path=note_path,
+                label=label,
+                summary=summary,
+            )
+        return None
+
+    def _render_standard_section(self, entries: list[DailyIndexEntry]) -> str:
+        if not entries:
+            return ""
+        lines: list[str] = []
+        for entry in entries:
+            if entry.entry_type == "todo":
+                line = f"- [ ] {self.render_wikilink(entry.note_path, entry.label)}"
+            else:
+                line = f"- {entry.entry_type}: {self.render_wikilink(entry.note_path, entry.label)}"
+            if entry.summary and entry.summary != entry.label:
+                line = f"{line} — {entry.summary}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _render_agent_session_section(self, entries: list[DailyIndexEntry]) -> str:
+        if not entries:
+            return ""
+        grouped: dict[str, list[DailyIndexEntry]] = defaultdict(list)
+        for entry in entries:
+            grouped[entry.project].append(entry)
+        lines: list[str] = []
+        for project in sorted(grouped.keys()):
+            lines.append(f"- {project}")
+            for entry in sorted(grouped[project], key=lambda item: item.session_id):
+                short_label = self._get_short_session_label(entry.session_id)
+                line = f"  - {self.render_wikilink(entry.note_path, short_label)}"
+                if entry.summary:
+                    line = f"{line} — {entry.summary}"
+                if entry.message_count is not None:
+                    line = f"{line} ({entry.message_count} messages)"
+                lines.append(line)
+        return "\n".join(lines)
+
+    def _get_short_session_label(self, session_id: str) -> str:
+        tail = session_id.rsplit("/", 1)[-1]
+        compact = re.sub(r"[^0-9a-zA-Z]", "", tail)
+        if len(compact) >= 12:
+            return compact[-12:]
+        if len(tail) <= 12:
+            return tail
+        return tail[-12:]
+
+    def _get_message_count(self, content: str) -> int | None:
+        match = re.search(r"^\| Messages \| (?P<value>.+?) \|$", content, re.MULTILINE)
+        if match is None:
+            return None
+        raw_value = match.group("value").replace(",", "").strip()
+        return int(raw_value) if raw_value.isdigit() else None
+
+    def _discover_days(self) -> list[dt_mod.date]:
+        days: set[dt_mod.date] = set()
+        sink_root = self.vault_root / SINK_RELATIVE_PATH
+        if sink_root.exists():
+            for note_path in sink_root.glob("????/??/??/*.md"):
+                try:
+                    relative = note_path.relative_to(sink_root)
+                    days.add(
+                        dt_mod.date(
+                            int(relative.parts[0]),
+                            int(relative.parts[1]),
+                            int(relative.parts[2]),
+                        )
+                    )
+                except (ValueError, IndexError):
+                    continue
+        for note_path in self._iter_personal_daily_note_paths():
+            day = self._parse_day_from_path(note_path)
+            if day is not None:
+                days.add(day)
+        weave_root = self.vault_root / WEAVE_DAILY_RELATIVE_PATH
+        if weave_root.exists():
+            for note_path in weave_root.rglob("*.md"):
+                day = self._parse_day_from_path(note_path)
+                if day is not None:
+                    days.add(day)
+        return sorted(days)
+
+    def _iter_personal_daily_note_paths(self) -> list[Path]:
+        folder = self.get_daily_notes_folder()
+        if not folder.exists():
+            return []
+        return [path for path in folder.rglob("*.md") if path.is_file()]
+
+    def _parse_day_from_path(self, path: Path) -> dt_mod.date | None:
+        try:
+            return dt_mod.date.fromisoformat(path.stem)
+        except ValueError:
+            return None
+
+    def _get_section_body(self, content: str, section_name: str) -> str | None:
+        if not content:
+            return None
+        start_marker, end_marker = get_managed_section_markers(section_name)
+        start = content.find(start_marker)
+        end = content.find(end_marker)
+        if start == -1 or end == -1 or end < start:
+            return None
+        body_start = content.find("\n", start)
+        if body_start == -1:
+            return ""
+        return content[body_start + 1 : end].strip("\n")
+
+    def _write_text_if_changed(self, path: Path, content: str) -> bool:
+        existing = None
+        if path.exists():
+            existing = path.read_text()
+            if existing == content:
+                return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return True
 
     def _get_or_create_summary(self, note_path: Path) -> str:
         try:
@@ -2117,58 +2492,35 @@ class DailyNoteWriter:
         note_path.write_text(set_note_summary(content, summary))
         return summary
 
-    def get_daily_note_path(self, received: datetime) -> Path:
-        return self.get_daily_note_path_for_date(received.date())
-
-    def get_daily_note_path_for_date(self, day: dt_mod.date) -> Path:
-        folder = self.get_daily_notes_folder()
-        return folder / f"{day.isoformat()}.md"
-
-    def get_daily_notes_folder(self) -> Path:
-        settings_path = self.vault_root / ".obsidian" / "daily-notes.json"
-        if not settings_path.exists():
-            return self.vault_root
-        try:
-            settings = json.loads(settings_path.read_text())
-        except json.JSONDecodeError:
-            return self.vault_root
-        folder = settings.get("folder")
-        if isinstance(folder, str) and folder.strip():
-            return self.vault_root / Path(folder)
-        return self.vault_root
-
     def _get_relative_path(self, note_path: Path) -> Path:
         try:
             return note_path.relative_to(self.vault_root)
         except ValueError:
             return note_path
 
-    def render_entry_line(self, entry_type: str, note_path: Path, summary: str = "") -> str:
-        relative = self._get_relative_path(note_path)
-        parts = [f"- {entry_type}: [[{relative.as_posix()}]]"]
-        if summary:
-            parts.append(f"- {summary}")
-        parts.append(WEAVE_TAG)
-        return " ".join(parts)
+    def _load_daily_note_settings(self) -> dict[str, Any]:
+        settings_path = self.vault_root / ".obsidian" / "daily-notes.json"
+        if not settings_path.exists():
+            return {}
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            return {}
+        return settings if isinstance(settings, dict) else {}
 
-    def render_todo_line(self, note_path: Path, summary: str = "") -> str:
-        relative = self._get_relative_path(note_path)
-        parts = [f"- [ ] todo: [[{relative.as_posix()}]]"]
-        if summary:
-            parts.append(f"- {summary}")
-        parts.append(WEAVE_TAG)
-        return " ".join(parts)
+    def _write_daily_note_settings(self, settings: dict[str, Any]) -> None:
+        settings_path = self.vault_root / ".obsidian" / "daily-notes.json"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True))
 
-    def render_github_activity_section(self, body: str) -> str:
-        normalized_body = body.rstrip()
-        lines = [
-            GITHUB_ACTIVITY_SECTION_HEADING,
-            GITHUB_ACTIVITY_SECTION_START,
-        ]
-        if normalized_body:
-            lines.extend(normalized_body.splitlines())
-        lines.append(GITHUB_ACTIVITY_SECTION_END)
-        return "\n".join(lines) + "\n"
+    def _prune_empty_parents(self, directory: Path, stop_at: Path) -> None:
+        current = directory
+        while current != stop_at and current.exists():
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
 
 
 class WeaveService:
@@ -2202,6 +2554,7 @@ class WeaveService:
             sessions_dir=config.agent_sessions_dir,  # type: ignore[arg-type]
             output_dir=output_dir,
             summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_SUMMARY_PROMPT),
+            index_summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_INDEX_SUMMARY_PROMPT),
         )
         logger.info("agent session scraper enabled: %s", config.agent_sessions_dir)
 
@@ -2498,6 +2851,19 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Timezone for GitHub activity day boundaries (or set WEAVE_GITHUB_TIMEZONE)",
     )
+    parser.add_argument(
+        "--migrate-daily-notes",
+        action="store_true",
+        help="Regenerate weave daily notes, clean legacy managed content, and exit",
+    )
+    parser.add_argument(
+        "--daily-note-format",
+        default=None,
+        help=(
+            "When used with --migrate-daily-notes, update Obsidian daily note layout "
+            "to this format and move existing daily notes"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -2507,6 +2873,17 @@ def main(argv: list[str] | None = None) -> None:
     if not args.vault_root.exists():
         logger.error("vault root does not exist: %s", args.vault_root)
         raise SystemExit(1)
+    if args.migrate_daily_notes:
+        writer = DailyNoteWriter(
+            vault_root=args.vault_root,
+            summarizer=LlmNoteSummarizer(prompt=SUMMARY_PROMPT),
+        )
+        if args.daily_note_format:
+            moved = writer.migrate_personal_daily_layout(args.daily_note_format)
+            logger.info("migrated %s personal daily note(s)", moved)
+        count = writer.sync_all_daily_notes()
+        logger.info("regenerated %s weave daily note day(s)", count)
+        return
     try:
         config = WeaveConfig.from_runtime(
             vault_root=args.vault_root,
