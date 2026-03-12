@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import subprocess
 from collections import defaultdict
 from collections.abc import Generator, Sequence
@@ -28,6 +29,11 @@ COMMENT_SNIPPET_LIMIT = 68
 COMMIT_SNIPPET_LIMIT = 72
 ISSUE_TITLE_LIMIT = 72
 COMPACT_DETAIL_LIMIT = 3
+LEGACY_REPO_HEADING_RE = re.compile(r"^### \[(?P<repo>[^\]]+)\]\((?P<url>[^)]+)\)$")
+LEGACY_ACTIVITY_BULLET_RE = re.compile(
+    r"^- \[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\) (?P<summary>.*)$"
+)
+MARKDOWN_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<url>[^)]+)\)")
 COMPACT_KIND_ORDER = (
     "commit",
     "pr",
@@ -798,6 +804,100 @@ def render_activity_section(
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
+
+
+def compact_legacy_activity_section(body: str) -> str:
+    """Convert a legacy detailed GitHub activity section into compact form."""
+    normalized_body = body.strip()
+    if not normalized_body:
+        return ""
+    if not normalized_body.startswith("### "):
+        return normalized_body
+
+    grouped: dict[str, list[ActivityRecord]] = defaultdict(list)
+    current_repo: str | None = None
+    for line in normalized_body.splitlines():
+        repo_match = LEGACY_REPO_HEADING_RE.match(line)
+        if repo_match is not None:
+            current_repo = repo_match.group("repo")
+            continue
+        bullet_match = LEGACY_ACTIVITY_BULLET_RE.match(line)
+        if bullet_match is None or current_repo is None:
+            continue
+        record = build_compact_record_from_legacy(
+            repo=current_repo,
+            primary_url=bullet_match.group("url"),
+            summary=bullet_match.group("summary"),
+            event_id=f"legacy:{current_repo}:{len(grouped[current_repo])}",
+        )
+        grouped[current_repo].append(record)
+    if not grouped:
+        return normalized_body
+    return render_compact_activity_section(grouped)
+
+
+def build_compact_record_from_legacy(
+    repo: str,
+    primary_url: str,
+    summary: str,
+    event_id: str,
+) -> ActivityRecord:
+    """Build a compact activity record from a legacy rendered bullet line."""
+    detail_text: str | None = None
+    detail_url: str | None = None
+    event_kind = "event"
+    links = [
+        (match.group("text"), match.group("url"))
+        for match in MARKDOWN_LINK_RE.finditer(summary)
+    ]
+
+    if summary.startswith("committed "):
+        event_kind = "commit"
+        if links:
+            detail_text = links[0][0][:4]
+            detail_url = links[0][1]
+    elif summary.startswith("commented on "):
+        event_kind = "comment"
+    elif summary.startswith("submitted "):
+        event_kind = "comment"
+    elif summary.startswith("left review comment "):
+        event_kind = "comment"
+    elif summary.startswith("created branch "):
+        event_kind = "branch"
+        detail_text = summary.removeprefix("created branch ").strip()
+        detail_url = primary_url
+    elif summary.startswith("created tag "):
+        event_kind = "tag"
+        detail_text = summary.removeprefix("created tag ").strip()
+        detail_url = primary_url
+    elif summary.startswith("pushed to "):
+        event_kind = "push"
+        hash_match = re.search(r"\(([0-9a-fA-F]{4,})\)", summary)
+        if hash_match is not None:
+            detail_text = hash_match.group(1)[:4]
+            detail_url = primary_url
+    elif summary.startswith("starred the repository"):
+        event_kind = "star"
+    elif "PR #" in summary or "pull request" in summary:
+        event_kind = "pr"
+    elif "issue #" in summary or summary.startswith(("opened issue", "closed issue")):
+        event_kind = "issue"
+
+    number_match = re.search(r"(?:PR|issue) #(?P<number>\d+)", summary)
+    if number_match is not None and event_kind in {"pr", "issue", "comment"}:
+        detail_text = f"#{number_match.group('number')}"
+        detail_url = detail_url or primary_url
+
+    return ActivityRecord(
+        event_id=event_id,
+        repo=repo,
+        occurred_at=datetime(1970, 1, 1, tzinfo=UTC),
+        url=primary_url,
+        summary=summary,
+        event_kind=event_kind,
+        detail_text=detail_text,
+        detail_url=detail_url,
+    )
 
 
 def render_compact_activity_section(grouped_records: dict[str, list[ActivityRecord]] | None) -> str:

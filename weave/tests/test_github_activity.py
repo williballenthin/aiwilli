@@ -9,6 +9,7 @@ from weave.github_activity import (
     GitHubEventModel,
     GitHubTimelineClient,
     collect_activity_records,
+    compact_legacy_activity_section,
     render_activity_report,
     render_compact_activity_section,
 )
@@ -405,6 +406,28 @@ def test_render_compact_activity_section_summarizes_repo_activity() -> None:
         "- [acme/app](https://github.com/acme/app) — "
         "2 commits ([abc1](https://github.com/acme/app/commit/abc12345), "
         "[def6](https://github.com/acme/app/commit/def67890)), "
+        "1 PR ([#42](https://github.com/acme/app/pull/42)), "
+        "1 comment ([#9](https://github.com/acme/app/issues/9#issuecomment-1))"
+    )
+
+
+def test_compact_legacy_activity_section_rewrites_detailed_markdown() -> None:
+    legacy_body = "\n".join(
+        (
+            "### [acme/app](https://github.com/acme/app)",
+            "- [09:00:00](https://github.com/acme/app/compare/aaaa...bbbb) committed "
+            "[abc1234](https://github.com/acme/app/commit/abc12345) to main: "
+            "Fix parser crash",
+            "- [10:00:00](https://github.com/acme/app/pull/42) opened PR #42: "
+            "Add activity renderer",
+            "- [11:00:00](https://github.com/acme/app/issues/9#issuecomment-1) "
+            "commented on issue #9: I think this needs one more test case.",
+        )
+    )
+
+    assert compact_legacy_activity_section(legacy_body) == (
+        "- [acme/app](https://github.com/acme/app) — "
+        "1 commit ([abc1](https://github.com/acme/app/commit/abc12345)), "
         "1 PR ([#42](https://github.com/acme/app/pull/42)), "
         "1 comment ([#9](https://github.com/acme/app/issues/9#issuecomment-1))"
     )

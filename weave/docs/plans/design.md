@@ -144,6 +144,7 @@ Layout migration:
 - normalization sets those fields for commits, PRs, issues, comments/reviews, branches/tags, pushes, and stars.
 - the detailed standalone report remains unchanged and still uses `render_activity_report()` / `render_activity_section()`.
 - the new `render_compact_activity_section()` groups records by repo and then by normalized event kind, rendering counts plus detail links only when a kind has 3 or fewer records.
+- `compact_legacy_activity_section()` parses the old verbose markdown section format and rewrites it into the compact repository-summary format during preview generation and migration, so existing GitHub history benefits from the new layout even when the original feed data is no longer fetchable.
 
 6. Threading model
 

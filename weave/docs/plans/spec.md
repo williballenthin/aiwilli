@@ -170,6 +170,7 @@ Date directory format: sink handlers and calendar/session imports use nested `YY
 - once a local day is imported, Weave records that fact in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json` and does not re-render the day on later syncs.
 - if the manifest is missing but the Weave daily note already contains the managed GitHub section for that day, Weave treats the day as already imported and rebuilds the manifest entry instead of rewriting the note.
 - for backward compatibility during upgrades, if the manifest is missing but a legacy managed GitHub section is still present in the personal daily note, Weave also treats that day as already imported until daily-note sync migrates it.
+- when Weave rebuilds daily notes from an existing legacy detailed GitHub section, it compacts that legacy section into the new repository-summary format instead of preserving the old verbose event list.
 - days with no GitHub activity are left unchanged; Weave only adds the section when there is activity to render.
 - the import is best-effort and limited by the GitHub user events feed window; if Weave is not running for too long and relevant events fall out of the recent feed, historical backfill is not guaranteed.
 

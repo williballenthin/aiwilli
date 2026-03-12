@@ -36,6 +36,7 @@ from weave.github_activity import (
     GitHubActivityError,
     GitHubTimelineClient,
     collect_activity_records,
+    compact_legacy_activity_section,
     fetch_user_events,
     get_default_timezone_name,
     get_timezone,
@@ -2226,6 +2227,8 @@ class DailyNoteWriter:
             resolved_github_body = self._get_section_body(weave_path.read_text(), "github-activity")
         if resolved_github_body is None:
             resolved_github_body = self._get_section_body(personal_content, "github-activity")
+        if resolved_github_body is not None:
+            resolved_github_body = compact_legacy_activity_section(resolved_github_body)
 
         entries = self._collect_day_entries(day)
         new_weave_content = self.render_weave_daily_note(entries, github_body=resolved_github_body)
