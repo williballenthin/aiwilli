@@ -51,26 +51,6 @@ Run daemon:
 uv --directory weave run weave /path/to/obsidian-vault
 ```
 
-Regenerate only the Weave daily notes, without touching sink notes or personal daily notes:
-
-```bash
-uv --directory weave run weave /path/to/obsidian-vault --generate-weave-daily-notes-only
-```
-
-Regenerate Weave daily notes and clean legacy inline `#weave` content out of personal daily notes:
-
-```bash
-uv --directory weave run weave /path/to/obsidian-vault --migrate-daily-notes
-```
-
-Regenerate Weave daily notes and also migrate the personal daily-note layout to nested `YYYY/MM/DD/YYYY-MM-DD` paths:
-
-```bash
-uv --directory weave run weave /path/to/obsidian-vault \
-  --migrate-daily-notes \
-  --daily-note-format YYYY/MM/DD/YYYY-MM-DD
-```
-
 Development checks:
 
 ```bash

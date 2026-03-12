@@ -2874,24 +2874,6 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Timezone for GitHub activity day boundaries (or set WEAVE_GITHUB_TIMEZONE)",
     )
-    parser.add_argument(
-        "--generate-weave-daily-notes-only",
-        action="store_true",
-        help="Regenerate weave daily notes without touching personal daily notes, then exit",
-    )
-    parser.add_argument(
-        "--migrate-daily-notes",
-        action="store_true",
-        help="Regenerate weave daily notes, clean legacy managed content, and exit",
-    )
-    parser.add_argument(
-        "--daily-note-format",
-        default=None,
-        help=(
-            "When used with --migrate-daily-notes, update Obsidian daily note layout "
-            "to this format and move existing daily notes"
-        ),
-    )
     return parser.parse_args(argv)
 
 
@@ -2901,30 +2883,6 @@ def main(argv: list[str] | None = None) -> None:
     if not args.vault_root.exists():
         logger.error("vault root does not exist: %s", args.vault_root)
         raise SystemExit(1)
-    if args.generate_weave_daily_notes_only and args.migrate_daily_notes:
-        logger.error(
-            "choose either --generate-weave-daily-notes-only or --migrate-daily-notes"
-        )
-        raise SystemExit(1)
-    if args.generate_weave_daily_notes_only and args.daily_note_format:
-        logger.error("--daily-note-format requires --migrate-daily-notes")
-        raise SystemExit(1)
-    if args.generate_weave_daily_notes_only:
-        writer = DailyNoteWriter(vault_root=args.vault_root)
-        count = writer.generate_all_weave_daily_notes()
-        logger.info("regenerated %s weave daily note day(s)", count)
-        return
-    if args.migrate_daily_notes:
-        writer = DailyNoteWriter(
-            vault_root=args.vault_root,
-            summarizer=LlmNoteSummarizer(prompt=SUMMARY_PROMPT),
-        )
-        if args.daily_note_format:
-            moved = writer.migrate_personal_daily_layout(args.daily_note_format)
-            logger.info("migrated %s personal daily note(s)", moved)
-        count = writer.sync_all_daily_notes()
-        logger.info("regenerated %s weave daily note day(s)", count)
-        return
     try:
         config = WeaveConfig.from_runtime(
             vault_root=args.vault_root,

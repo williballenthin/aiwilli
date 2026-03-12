@@ -5,7 +5,7 @@ Last updated: 2026-03-12
 
 1. Module layout
 
-- `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, preview-generation mode, migration mode, and the integrated `GitHubActivitySyncer`.
+- `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, and the integrated `GitHubActivitySyncer`.
 - `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers. It still renders the detailed standalone report, and now also renders the compact per-repository daily-note section used by the daemon.
 - `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, session rendering, and migration tests.
 - `tests/test_github_activity.py`: GitHub activity normalization plus detailed and compact rendering tests.
@@ -35,25 +35,16 @@ Last updated: 2026-03-12
 4. Runtime flow
 
 1. Parse CLI args.
-2. If `--generate-weave-daily-notes-only` is set:
-   - construct `DailyNoteWriter` without a summarizer
-   - regenerate Weave daily notes for all discovered days without touching sink notes or personal daily notes
-   - exit
-3. If `--migrate-daily-notes` is set:
-   - construct `DailyNoteWriter`
-   - optionally migrate the personal daily-note layout (`--daily-note-format`)
-   - regenerate Weave daily notes for all discovered days and clean legacy personal daily-note content
-   - exit
-4. Otherwise build `WeaveConfig` from env + CLI args.
-5. Validate Google token exists and initialize `CalendarScraper`.
-6. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
-7. Initialize `AgentSessionScraper` with two summarizers:
+2. Build `WeaveConfig` from env + CLI args.
+3. Validate Google token exists and initialize `CalendarScraper`.
+4. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
+5. Initialize `AgentSessionScraper` with two summarizers:
    - structured body summary prompt for the note body
    - compact index summary prompt for frontmatter / daily-note grouping
-8. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
-9. Connect to IMAP and process unread routed messages.
-10. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
-11. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
+6. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
+7. Connect to IMAP and process unread routed messages.
+8. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
+9. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
 
 5. Handler implementations
 
@@ -84,7 +75,6 @@ Personal vs generated daily notes:
 Rebuild strategy:
 - `append_note_entry()` and `append_todo_entry()` no longer append one line directly into the personal daily note.
 - instead they call `_refresh_day(day)`.
-- `generate_all_weave_daily_notes()` calls `_refresh_day(day, sync_personal=False)` for preview generation, so only the Weave-generated daily note tree is updated.
 - `_refresh_day(day)`:
   - reads any existing personal daily note content
   - preserves an existing GitHub section body from the Weave daily note or legacy personal daily note when no new GitHub body is provided
@@ -145,7 +135,7 @@ Layout migration:
 - normalization sets those fields for commits, PRs, issues, comments/reviews, branches/tags, pushes, and stars.
 - the detailed standalone report remains unchanged and still uses `render_activity_report()` / `render_activity_section()`.
 - the new `render_compact_activity_section()` groups records by repo and then by normalized event kind, rendering counts plus detail links only when a kind has 3 or fewer records.
-- `compact_legacy_activity_section()` parses the old verbose markdown section format and rewrites it into the compact repository-summary format during preview generation and migration, so existing GitHub history benefits from the new layout even when the original feed data is no longer fetchable.
+- `compact_legacy_activity_section()` parses the old verbose markdown section format and rewrites it into the compact repository-summary format during daily-note regeneration, so existing GitHub history benefits from the new layout even when the original feed data is no longer fetchable.
 
 6. Threading model
 

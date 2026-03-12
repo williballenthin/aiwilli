@@ -10,7 +10,7 @@ Weave monitors one IMAP inbox and routes unread emails to handler logic based on
 2. Invocation
 
 Command:
-- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ] [--generate-weave-daily-notes-only] [--migrate-daily-notes] [--daily-note-format FORMAT]`
+- `weave <vault_root> [--poll-interval N] [--once] [--verbose] [--quiet] [--source TAG] [--agent-sessions DIR] [--github-user USER] [--github-timezone TZ]`
 
 Behavior:
 - `--once` processes one unread batch plus one calendar scrape plus one agent session scan plus one GitHub activity sync pass, runs one daily-note sync pass, then exits.
@@ -19,9 +19,6 @@ Behavior:
 - calendar scraping and agent session scraping repeat every 5 minutes while the process is running.
 - GitHub activity sync checks hourly.
 - daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
-- `--generate-weave-daily-notes-only` skips IMAP/calendar/GitHub startup, regenerates Weave daily notes from existing vault content, does not modify sink notes or personal daily notes, then exits.
-- `--migrate-daily-notes` skips IMAP/calendar/GitHub startup, regenerates Weave daily notes from existing vault content, cleans legacy managed Weave content out of personal daily notes, optionally migrates the personal daily-note layout when `--daily-note-format` is also provided, then exits.
-- `--daily-note-format FORMAT` is only meaningful with `--migrate-daily-notes`. It updates `.obsidian/daily-notes.json` key `format` and moves existing personal daily notes to the rendered path layout. Supported token handling is the Obsidian-style subset used by this repository: `YYYY`, `MM`, `DD`.
 - `<vault_root>` must exist.
 - `--source TAG` sets the calendar source tag in front matter (default: `@hex-rays.com`).
 - calendar scraping is always enabled in normal daemon/once mode.
@@ -50,7 +47,6 @@ GitHub activity import also requires:
 - optional `WEAVE_GITHUB_USER` to override the account whose activity is imported.
 - optional `WEAVE_GITHUB_TIMEZONE` to set local day boundaries and the stabilization cutoff.
 
-Generation/migration modes (`--generate-weave-daily-notes-only`, `--migrate-daily-notes`) only require the vault path. They do not require IMAP credentials or Google credentials.
 
 4. Routing behavior
 
@@ -130,8 +126,7 @@ Date directory format: sink handlers and calendar/session imports use nested `YY
 - when an existing agent-session note already carries a longer legacy summary, the Weave daily-note renderer truncates it to roughly 12 words for scanability without modifying the note itself.
 - GitHub activity renders as a compact repository index; see section 5.7.
 - Weave still stores/reuses a per-note frontmatter `summary` on generated sink notes. If a sink note has no summary and a summarizer is configured, Weave backfills it into the sink note itself and then reuses it in the Weave-generated daily note.
-- `--generate-weave-daily-notes-only` regenerates only the Weave daily notes. It leaves sink notes and personal daily notes untouched.
-- Once per local day, normal daily-note sync regenerates Weave daily notes from current sink-note metadata and removes legacy inline `#weave` entries / legacy managed GitHub sections from personal daily notes while preserving all non-Weave personal content.
+- Once per local day, daily-note sync regenerates Weave daily notes from current sink-note metadata and removes legacy inline `#weave` entries / legacy managed GitHub sections from personal daily notes while preserving all non-Weave personal content.
 
 5.6 Agent session scraper output
 - scans `claude/` and `pi/` subdirectories of the configured agent sessions directory for canonical session `.jsonl` files.
