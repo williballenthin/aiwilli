@@ -19,7 +19,7 @@ Behavior:
 - calendar scraping and agent session scraping repeat every 5 minutes while the process is running.
 - GitHub activity sync checks hourly.
 - daily-note sync checks every 5 minutes but performs work at most once per local calendar day.
-- `--generate-weave-daily-notes-only` skips IMAP/calendar/GitHub startup, regenerates Weave daily notes from existing vault content, does not modify personal daily notes, then exits.
+- `--generate-weave-daily-notes-only` skips IMAP/calendar/GitHub startup, regenerates Weave daily notes from existing vault content, does not modify sink notes or personal daily notes, then exits.
 - `--migrate-daily-notes` skips IMAP/calendar/GitHub startup, regenerates Weave daily notes from existing vault content, cleans legacy managed Weave content out of personal daily notes, optionally migrates the personal daily-note layout when `--daily-note-format` is also provided, then exits.
 - `--daily-note-format FORMAT` is only meaningful with `--migrate-daily-notes`. It updates `.obsidian/daily-notes.json` key `format` and moves existing personal daily notes to the rendered path layout. Supported token handling is the Obsidian-style subset used by this repository: `YYYY`, `MM`, `DD`.
 - `<vault_root>` must exist.
@@ -129,7 +129,7 @@ Date directory format: sink handlers and calendar/session imports use nested `YY
 - agent sessions render as a nested list grouped by project; child bullets use a shortened session ID as link text, plus a compact summary and message count.
 - GitHub activity renders as a compact repository index; see section 5.7.
 - Weave still stores/reuses a per-note frontmatter `summary` on generated sink notes. If a sink note has no summary and a summarizer is configured, Weave backfills it into the sink note itself and then reuses it in the Weave-generated daily note.
-- `--generate-weave-daily-notes-only` regenerates only the Weave daily notes. It leaves personal daily notes untouched.
+- `--generate-weave-daily-notes-only` regenerates only the Weave daily notes. It leaves sink notes and personal daily notes untouched.
 - Once per local day, normal daily-note sync regenerates Weave daily notes from current sink-note metadata and removes legacy inline `#weave` entries / legacy managed GitHub sections from personal daily notes while preserving all non-Weave personal content.
 
 5.6 Agent session scraper output

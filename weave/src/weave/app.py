@@ -2900,10 +2900,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("--daily-note-format requires --migrate-daily-notes")
         raise SystemExit(1)
     if args.generate_weave_daily_notes_only:
-        writer = DailyNoteWriter(
-            vault_root=args.vault_root,
-            summarizer=LlmNoteSummarizer(prompt=SUMMARY_PROMPT),
-        )
+        writer = DailyNoteWriter(vault_root=args.vault_root)
         count = writer.generate_all_weave_daily_notes()
         logger.info("regenerated %s weave daily note day(s)", count)
         return

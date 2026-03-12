@@ -693,6 +693,27 @@ def test_generate_all_weave_daily_notes_leaves_personal_notes_unchanged(tmp_path
     )
 
 
+def test_generate_all_weave_daily_notes_does_not_backfill_sink_summaries(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "1345 - transcription.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("Body\n")
+
+    writer = DailyNoteWriter(vault_root=vault_root)
+
+    assert writer.generate_all_weave_daily_notes() == 1
+    assert note_path.read_text() == "Body\n"
+    assert (vault_root / "weave" / "daily" / "2026/03/01" / "2026-03-01.md").read_text() == (
+        "## Capture\n"
+        "<!-- weave:section:capture:start -->\n"
+        "- transcript: [[sink/2026/03/01/1345 - transcription.md|1345 - transcription]]\n"
+        "<!-- weave:section:capture:end -->\n"
+    )
+
+
 def test_daily_note_writer_migrates_personal_note_layout(tmp_path: Path) -> None:
     vault_root = tmp_path
     config_dir = vault_root / ".obsidian"

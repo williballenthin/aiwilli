@@ -36,8 +36,8 @@ Last updated: 2026-03-12
 
 1. Parse CLI args.
 2. If `--generate-weave-daily-notes-only` is set:
-   - construct `DailyNoteWriter`
-   - regenerate Weave daily notes for all discovered days without touching personal daily notes
+   - construct `DailyNoteWriter` without a summarizer
+   - regenerate Weave daily notes for all discovered days without touching sink notes or personal daily notes
    - exit
 3. If `--migrate-daily-notes` is set:
    - construct `DailyNoteWriter`

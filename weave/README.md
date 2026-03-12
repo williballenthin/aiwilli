@@ -51,7 +51,7 @@ Run daemon:
 uv --directory weave run weave /path/to/obsidian-vault
 ```
 
-Regenerate only the Weave daily notes, without touching personal daily notes:
+Regenerate only the Weave daily notes, without touching sink notes or personal daily notes:
 
 ```bash
 uv --directory weave run weave /path/to/obsidian-vault --generate-weave-daily-notes-only
