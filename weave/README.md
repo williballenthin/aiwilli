@@ -1,57 +1,59 @@
 weave
 
-Weave is a single-process email ingress and activity import tool for an Obsidian vault.
+Weave imports outside activity into an Obsidian vault.
 
 Implemented workflows:
-- IMAP email routing into sink notes
+- IMAP email routing into day-local notes
 - Google Calendar meeting note/chat export
 - AI agent session import from Claude Code and Pi JSONL logs
-- GitHub activity import into daily notes
+- GitHub activity snapshots plus daily-note rendering
 
 Storage model:
-- sink notes live under `sink/YYYY/MM/DD/`
-- attachments live under `sink/YYYY/MM/DD/_attachments/`
-- Weave-generated daily notes live under `weave/daily/YYYY/MM/DD/YYYY-MM-DD.md`
-- personal daily notes keep only a managed embed of the matching Weave daily note
+- Weave writes into `daily/YYYY/MM/DD/`
+- attachments live in `daily/YYYY/MM/DD/_attachments/`
+- GitHub snapshots live in `daily/YYYY/MM/DD/_weave/github activity.md`
+- Weave-generated daily notes live at `daily/YYYY/MM/DD/YYYY-MM-DD weave.md`
+- imported notes live under category subdirectories:
+  - `agent sessions/`
+  - `meeting notes/`
+  - `transcriptions/`
+  - `scans/`
+  - `todo/`
+- the personal daily note path comes from `.obsidian/daily-notes.json`
 
 Email routes:
-- `+vnote` — voice note transcription: saves a markdown note plus attachments
-- `+rm2` — reMarkable snapshots: saves PDF attachment, transcribes through `llm`, writes embed note
-- `+todo` — TODO items: saves a note with subject/body/attachments and renders it in the generated `## TODOs` section
-
-Generated sink notes include a reusable `summary` frontmatter property. Weave backfills that summary when needed and reuses it in generated daily-note sections.
+- `+vnote` — saves a transcription note plus attachments under `transcriptions/`
+- `+rm2` — saves a PDF under `_attachments/`, writes a note under `scans/`, and stores the OCR/transcription inside a managed `weave:transcription` region
+- `+todo` — saves a note with subject/body/attachments under `todo/`
 
 Agent session notes:
-- stored in `sink/YYYY/MM/DD/<session-id>.md`
-- frontmatter is intentionally minimal: `type`, `summary`, `agent`, `project`, `session_id`, `session_sha256`
-- body contains a structured summary, metrics table, and callout-rendered conversation
+- stored in `daily/YYYY/MM/DD/agent sessions/<session-id>.md`
+- frontmatter: `type`, `summary`, `agent`, `project`, `session_id`, `session_sha256`
+- body contains a managed `weave:summary` region, metrics table, and callout-rendered conversation
 - sync state lives at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`
 
 GitHub activity:
-- imported directly into the generated Weave daily note, not as sink notes
-- rendered as a compact repository index with counts per activity kind
+- imported into `_weave/github activity.md`
+- copied verbatim into the managed `## GitHub activity` section of the generated Weave daily note
 - finalized days are tracked in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json`
 
-Recommended environment variables for deployed daemon/once mode:
+Recommended environment variables for deployed monitor/email sync:
 - `IMAP_HOST`
 - `IMAP_USER`
 - `IMAP_PASSWORD`
 - `WEAVE_BASE_EMAIL`
 - `WEAVE_ALLOWED_SENDERS`
-- `WEAVE_VAULT_ROOT` (`OBSIDIAN_VAULT_ROOT` is also accepted as a fallback)
+- `WEAVE_VAULT_ROOT` (`OBSIDIAN_VAULT_ROOT` is accepted as a fallback)
 
-For deployed runs, prefer setting the vault path in your environment file and running `weave` without a positional vault argument. The positional `<vault_root>` argument remains available as an override.
-
-Run once:
+Commands:
 
 ```bash
-uv --directory weave run weave --once
-```
-
-Run daemon:
-
-```bash
-uv --directory weave run weave
+uv --directory weave run weave monitor
+uv --directory weave run weave sync
+uv --directory weave run weave import calendar --days 365
+uv --directory weave run weave import agent-sessions
+uv --directory weave run weave import github
+uv --directory weave run weave rebuild daily
 ```
 
 Development checks:

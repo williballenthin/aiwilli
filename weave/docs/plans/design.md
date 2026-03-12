@@ -5,146 +5,135 @@ Last updated: 2026-03-12
 
 1. Module layout
 
-- `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, and the integrated `GitHubActivitySyncer`.
-- `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers. It still renders the detailed standalone report, and now also renders the compact per-repository daily-note section used by the daemon.
-- `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, and session rendering tests.
-- `tests/test_github_activity.py`: GitHub activity normalization plus detailed and compact rendering tests.
-- `scripts/setup_google_credentials.py`: interactive OAuth setup.
-- `scripts/parse_session.py`: standalone CLI for parsing/displaying agent session JSONL files.
-- `scripts/render_github_activity.py`: standalone CLI for rendering the detailed grouped GitHub activity report.
+- `src/weave/app.py`: runtime logic, handlers, scrapers, session parsing/rendering, daily-note generation, and GitHub sync integration
+- `src/weave/cli.py`: click-based CLI with subcommands for monitor/sync/import/rebuild
+- `src/weave/layout.py`: central vault path layout helper for `daily/YYYY/MM/DD/...`
+- `src/weave/github_activity.py`: GitHub fetch/normalize/render helpers
+- `tests/test_app.py`: core behavior tests
+- `tests/test_cli.py`: CLI smoke tests
+- `tests/test_github_activity.py`: GitHub normalization/rendering tests
 
 2. Core types
 
-- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args after vault-root resolution. Route variants are hardcoded, allowed senders come from `WEAVE_ALLOWED_SENDERS`, and GitHub overrides come from args/env.
-- `RouteConfig` (Pydantic): route metadata (`to_address`, `allowed_senders`, `handler_key`, sink path).
-- `IncomingMessage` (dataclass): normalized unread message from IMAP.
-- `Attachment` (dataclass): decoded email attachment.
-- `HandlerResult` (dataclass): whether the message was handled, all created paths, and created sink note paths.
-- `SessionTurn`, `SessionTokenUsage`, `SessionData` (dataclasses): normalized agent-session model.
-- `DailyIndexEntry` (dataclass): one sink note as rendered in a Weave-generated daily note section.
-- `DailyNoteWriter`: owns both personal daily-note integration and Weave-generated daily-note regeneration.
+- `WeaveConfig` (Pydantic): runtime config loaded from env + CLI args for IMAP-backed commands
+- `RouteConfig` (Pydantic): route metadata
+- `IncomingMessage` (dataclass): normalized unread email
+- `Attachment` (dataclass): decoded email attachment
+- `HandlerResult` (dataclass): handled flag plus created paths and note paths
+- `SessionTurn`, `SessionTokenUsage`, `SessionData` (dataclasses): normalized agent-session model
+- `DailyIndexEntry` (dataclass): one imported note as rendered in the generated daily note
+- `VaultLayout`: canonical path helper for day roots, category directories, `_attachments`, `_weave`, generated daily notes, and GitHub snapshot files
+- `DailyNoteWriter`: owns generated daily-note rendering, personal-note embed synchronization, GitHub snapshot consumption, and legacy cleanup
 
-3. Shared utilities
+3. Path model
 
-- `get_date_folder(output_dir, received)`: creates `YYYY/MM/DD` nested directories under the sink root.
-- `sanitize_filename(name)`: strips filesystem-unsafe characters.
-- `resolve_vault_root(cli_vault_root)`: resolves the Obsidian vault root from the positional CLI argument, then `WEAVE_VAULT_ROOT`, then legacy `OBSIDIAN_VAULT_ROOT`.
-- `render_daily_note_relative_path(day, format_string)`: renders Obsidian-style daily note paths for the supported token subset (`YYYY`, `MM`, `DD`). Used for personal daily-note resolution and the fixed Weave daily-note path layout.
-- `split_front_matter()`, `parse_front_matter_scalar()`, `get_front_matter_fields()`, `get_note_summary()`, `set_note_summary()`: minimal frontmatter parsing/updating without a YAML dependency.
-- `get_managed_section_markers(section_name)`: returns deterministic HTML comment markers for managed Weave sections. GitHub activity keeps its legacy marker names for upgrade compatibility.
+The canonical Weave path model is now rooted at `daily/YYYY/MM/DD/`.
+
+`VaultLayout` provides the fixed paths used by writers:
+- `daily/YYYY/MM/DD/_attachments/`
+- `daily/YYYY/MM/DD/_weave/`
+- `daily/YYYY/MM/DD/YYYY-MM-DD weave.md`
+- `daily/YYYY/MM/DD/agent sessions/`
+- `daily/YYYY/MM/DD/meeting notes/`
+- `daily/YYYY/MM/DD/transcriptions/`
+- `daily/YYYY/MM/DD/scans/`
+- `daily/YYYY/MM/DD/todo/`
+
+The personal daily note path is still resolved from `.obsidian/daily-notes.json` via `folder` and `format`.
 
 4. Runtime flow
 
-1. Parse CLI args.
-2. Resolve the vault root from the positional CLI argument or environment fallback.
-3. Build `WeaveConfig` from env + CLI args.
-4. Validate Google token exists and initialize `CalendarScraper`.
-5. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
-6. Initialize `AgentSessionScraper` with two summarizers:
-   - structured body summary prompt for the note body
-   - a dedicated compact index summarizer for frontmatter / daily-note grouping that targets about 12 words, enforces a 12-word cap, and runs a repair pass when the first LLM output is verbose or misformatted
-7. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
-8. Connect to IMAP and process unread routed messages.
-9. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
-10. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
+For `monitor`:
+1. Resolve vault root.
+2. Build `WeaveConfig` from env + CLI args.
+3. Initialize `WeaveService`.
+4. Start maintenance threads for calendar, agent sessions, GitHub activity, and daily-note sync.
+5. Stay connected to IMAP with IDLE and process routed unread mail.
+
+For one-shot commands:
+- `sync` uses `WeaveService.run_single_batch()`.
+- `import email` uses `WeaveService.run_email_sync()`.
+- `import calendar`, `import agent-sessions`, `import github`, and `rebuild daily` instantiate only the components they need instead of forcing the full IMAP runtime.
 
 5. Handler implementations
 
 5.1 `VoiceNoteHandler`
-- writes `type: transcript` into frontmatter so later Weave-daily-note regeneration can classify the note without relying on the old legacy daily-note entry type.
+- writes notes into `transcriptions/`
+- writes attachments into `_attachments/`
+- emits relative attachment embeds from the note to the day attachment directory
 
 5.2 `RemarkableSnapshotHandler`
-- writes `type: handwriting` into both successful and failure-note frontmatter.
+- writes notes into `scans/`
+- writes PDFs into `_attachments/`
+- wraps the OCR/transcription body in `weave:transcription` markers so it can be replaced later without rewriting unrelated note content
 
 5.3 `TodoHandler`
-- writes `type: todo` into frontmatter.
-- the daily-note layer no longer inserts an inline checkbox into the personal daily note. Instead, the TODO is rendered in the generated `## TODOs` section.
+- writes notes into `todo/`
+- keeps standalone note files because TODO emails may include attachments and richer context
 
 5.4 `CalendarScraper`
-- unchanged at a high level, but its `type` frontmatter (`meeting_notes` / `meeting_chat`) is now consumed by `DailyNoteWriter` when rebuilding Weave daily notes.
+- writes notes/chats into `meeting notes/`
+- `scrape_once(days_back=N)` controls the import/backfill window
+- the daemon still uses a short recurring window; manual CLI use can backfill farther back
 
-5.5 `DailyNoteWriter`
-
-Personal vs generated daily notes:
-- personal daily note path comes from `.obsidian/daily-notes.json` `folder` + `format` (default format `YYYY-MM-DD`).
-- Weave-generated daily note path is fixed at `weave/daily/YYYY/MM/DD/YYYY-MM-DD.md`.
-- personal daily notes get only one managed embed region:
-  - `<!-- weave:daily-embed:start -->`
-  - `![[weave/daily/...]]`
-  - `<!-- weave:daily-embed:end -->`
-- the embed region is appended if missing; other personal content is left intact.
-
-Rebuild strategy:
-- `append_note_entry()` and `append_todo_entry()` no longer append one line directly into the personal daily note.
-- instead they call `_refresh_day(day)`.
-- `_refresh_day(day)`:
-  - reads any existing personal daily note content
-  - preserves an existing GitHub section body from the Weave daily note or legacy personal daily note when no new GitHub body is provided
-  - scans `sink/YYYY/MM/DD/*.md`
-  - classifies each sink note into `todos`, `meetings`, `capture`, or `agent-sessions`
-  - backfills missing sink-note summaries before rendering
-  - renders a fully managed Weave daily note with H2 sections and HTML markers
-  - writes the Weave daily note only if content changed
-  - when `sync_personal=True`, removes legacy inline `#weave` note lines and legacy managed GitHub sections from the personal daily note
-  - when `sync_personal=True`, ensures the personal daily note contains the managed embed region when the Weave daily note exists
-  - when `sync_personal=False`, leaves the personal daily note unchanged
-
-Section rendering:
-- section order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity.
-- standard note sections render compact bullets with aliased wiki-links and optional summaries.
-- agent sessions render as `project -> nested session bullets`; each child uses a shortened session-id tail, compact frontmatter summary, and message count parsed from the metrics table.
-- current imports aim to keep agent-session frontmatter summaries short at generation time; legacy long summaries are still truncated at render time to keep the generated daily note dense without rewriting the underlying sink note.
-- GitHub activity is injected as a pre-rendered compact body and wrapped with the GitHub section markers.
-
-Discovery + sync:
-- `sync_all_daily_notes()` discovers days from three sources:
-  - sink note day directories
-  - personal daily notes (recursive under the configured folder, filtered by ISO date filename stem)
-  - existing Weave daily notes
-- each discovered day is rebuilt with `_refresh_day(day)`.
-- `sync_daily_note(path)` now means “rebuild the day identified by this personal daily note path”.
+5.5 `AgentSessionScraper`
+- writes notes into `agent sessions/`
+- still uses a manifest for incremental sync
+- keeps two summarizers:
+  - structured body summary for the note body
+  - compact frontmatter summary for daily-note rendering
+- the note body summary is wrapped in `weave:summary` markers
 
 5.6 `GitHubActivitySyncer`
-- still fetches recent user events via `gh` and finalizes only stable completed local days.
-- still uses a manifest keyed by `<username>:<YYYY-MM-DD>`.
-- now calls `render_compact_activity_section()` instead of the detailed per-event renderer.
-- writes the compact GitHub body into the Weave daily note through `DailyNoteWriter.upsert_github_activity_section()`.
-- `has_github_activity_section(day)` checks both the new Weave daily note and the legacy personal daily note so missing-manifest recovery works across upgrades.
+- still fetches recent user events via `gh`
+- still finalizes only stable completed local days
+- no longer treats the generated daily note as the source of truth
+- instead it writes the compact rendered body through `DailyNoteWriter.upsert_github_activity_section()`, which stores a per-day snapshot file under `_weave/github activity.md` and then refreshes the daily note
 
-5.7 `AgentSessionScraper`
-- constructor now accepts two summarizers:
-  - `summarizer`: structured body summary used for the `## Summary` section
-  - `index_summarizer`: compact summary written into frontmatter `summary`
-- the default agent-session index summarizer is now a dedicated class that normalizes the first non-empty response line, validates that it is a compact one-line summary of at most 12 words, and asks the LLM to rewrite verbose output instead of relying on daily-note truncation.
-- `_sync_session()` renders the conversation once, then runs the two summary prompts independently.
-- rendered note filenames remain session-ID based.
+6. `DailyNoteWriter`
 
-5.8 Session rendering
-- `render_session_note()` now emits minimal frontmatter: `type`, `summary`, `agent`, `project`, `session_id`, `session_sha256`.
-- note metrics moved into the `## Metrics` table. The table includes message count so `DailyNoteWriter` can render compact agent-session bullets without needing extra frontmatter noise.
-- `render_session_turns()` now produces Obsidian callouts instead of `**USER:**` / `**ASSISTANT:**` prefixes:
-  - `[!note]` for user turns
-  - `[!quote]` for assistant turns
-- tool names are rendered inside the first assistant callout for the turn.
-- because every line is still normal markdown prefixed with `>`, fenced code blocks and inline code render normally inside the callouts.
+Personal vs generated daily notes:
+- personal daily note path comes from `.obsidian/daily-notes.json`
+- generated Weave daily note path is fixed at `daily/YYYY/MM/DD/YYYY-MM-DD weave.md`
+- personal daily notes get only one managed embed region pointing at the generated Weave daily note
 
-5.9 `src/weave/github_activity.py`
-- `ActivityRecord` now carries optional compact-render metadata: `event_kind`, `detail_text`, `detail_url`.
-- normalization sets those fields for commits, PRs, issues, comments/reviews, branches/tags, pushes, and stars.
-- the detailed standalone report remains unchanged and still uses `render_activity_report()` / `render_activity_section()`.
-- the new `render_compact_activity_section()` groups records by repo and then by normalized event kind, rendering counts plus detail links only when a kind has 3 or fewer records.
-- `compact_legacy_activity_section()` parses the old verbose markdown section format and rewrites it into the compact repository-summary format during daily-note regeneration, so existing GitHub history benefits from the new layout even when the original feed data is no longer fetchable.
+Rebuild strategy:
+- `append_note_entry()` and `append_todo_entry()` call `_refresh_day(day)`
+- `_refresh_day(day)`:
+  - reads the current personal daily note
+  - reads GitHub content from `_weave/github activity.md` when present
+  - collects imported note entries from the day category directories
+  - also reads legacy `sink/YYYY/MM/DD/*.md` files during migration compatibility
+  - backfills missing frontmatter summaries when a summarizer is configured
+  - renders the generated daily note with deterministic section markers
+  - writes the generated daily note only if content changed
+  - removes legacy inline `#weave` content from the personal daily note
+  - ensures the personal daily note contains the managed embed region when the generated daily note exists
 
-6. Threading model
+Section rendering:
+- order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity
+- standard sections render compact bullets with aliased wiki-links and optional summaries
+- agent sessions render as project-grouped nested lists using shortened session IDs and parsed message counts
+- GitHub activity is copied verbatim from the `_weave/github activity.md` snapshot into the managed daily-note section
 
-- unchanged structurally: IMAP runs on the main thread, maintenance threads handle calendar, agent sessions, GitHub activity, and daily-note sync.
-- `DailyNoteWriter` still uses one `threading.RLock` around summary backfill, day rebuilds, and GitHub section updates so concurrent writers cannot interleave file updates.
+Discovery:
+- `sync_all_daily_notes()` discovers days from canonical `daily/YYYY/MM/DD/` directories, legacy `sink/YYYY/MM/DD/*.md` paths, and personal daily note paths parsed from filename stems
 
-7. Notes on compatibility
+7. Compatibility notes
 
-- existing sink notes without the new `type` frontmatter are still classified by heuristics:
-  - transcription filename suffix for voice notes
-  - PDF attachment frontmatter for handwriting notes
-  - subject + `##` heading shape for TODOs
-- legacy inline `#weave` personal-daily-note lines remain supported as cleanup inputs. `DailyNoteWriter` strips them during daily-note sync and replaces them with the embed-region model.
-- legacy managed GitHub sections in personal daily notes are preserved long enough to seed the new Weave daily note during regeneration, then removed from the personal note.
+- legacy `sink/YYYY/MM/DD/*.md` files are still recognized during daily-note rebuild so the vault can be migrated in stages
+- legacy inline `#weave` personal-note lines are still cleanup inputs
+- legacy managed GitHub sections are no longer preserved as source material; the new source of truth is `_weave/github activity.md`
+
+8. CLI structure
+
+`src/weave/cli.py` exposes:
+- `weave monitor`
+- `weave sync`
+- `weave import email`
+- `weave import calendar --days N`
+- `weave import agent-sessions`
+- `weave import github`
+- `weave rebuild daily`
+
+The CLI uses click because the tool now has multiple operational modes instead of one daemon-only entry point.

@@ -1,3 +1,3 @@
-from weave.app import main
+from weave.cli import main
 
 __all__ = ["main"]

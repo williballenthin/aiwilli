@@ -36,12 +36,12 @@ from weave.github_activity import (
     GitHubActivityError,
     GitHubTimelineClient,
     collect_activity_records,
-    compact_legacy_activity_section,
     fetch_user_events,
     get_default_timezone_name,
     get_timezone,
     render_compact_activity_section,
 )
+from weave.layout import VaultLayout
 
 logger = logging.getLogger(__name__)
 STDERR_CONSOLE = Console(stderr=True)
@@ -72,9 +72,11 @@ received: {{ received }}
 transcribed: {{ transcribed }}
 ---
 
-![[_attachments/{{ attachment_filename }}]]
+{{ attachment_link }}
 
+<!-- weave:transcription:start -->
 {{ content }}
+<!-- weave:transcription:end -->
 """
 )
 
@@ -88,7 +90,7 @@ received: {{ received }}
 error: \"{{ error }}\"
 ---
 
-![[_attachments/{{ attachment_filename }}]]
+{{ attachment_link }}
 
 <!-- TRANSCRIPTION_FAILED: {{ error }} -->
 """
@@ -323,6 +325,14 @@ def get_managed_section_markers(section_name: str) -> tuple[str, str]:
         f"<!-- weave:section:{section_name}:start -->",
         f"<!-- weave:section:{section_name}:end -->",
     )
+
+
+def render_note_relative_path(source_path: Path, target_path: Path) -> str:
+    return Path(os.path.relpath(target_path, start=source_path.parent)).as_posix()
+
+
+def render_note_embed(source_path: Path, target_path: Path) -> str:
+    return f"![[{render_note_relative_path(source_path, target_path)}]]"
 
 
 @contextmanager
@@ -760,26 +770,33 @@ class AgentSessionIndexSummarizer:
 
 
 class VoiceNoteHandler:
-    def __init__(self, output_dir: Path):
-        self.output_dir = output_dir
+    def __init__(self, layout: VaultLayout | None = None, output_dir: Path | None = None):
+        if layout is None:
+            if output_dir is None:
+                raise ConfigError("voice handler requires a vault layout or output directory")
+            layout = VaultLayout(output_dir)
+        self.layout = layout
 
     def handle_message(self, message: IncomingMessage) -> HandlerResult:
-        date_folder = get_date_folder(self.output_dir, message.received)
+        day = message.received.date()
+        note_dir = self.layout.get_transcriptions_dir(day)
         timestamp = message.received.strftime("%H%M")
-        note_path = date_folder / f"{timestamp} - transcription.md"
+        note_path = note_dir / f"{timestamp} - transcription.md"
         if note_path.exists():
             logger.debug("voice note already exists at %s", note_path)
             return HandlerResult(handled=True, created_paths=[], note_paths=[])
         parsed = email.message_from_bytes(message.raw_email)
         body = self.get_plain_text_body(parsed)
         attachments = self.get_attachments(parsed)
+        attachment_dir = self.layout.get_attachments_dir(day)
         attachment_paths: list[Path] = []
         for attachment in attachments:
-            path = date_folder / "_attachments" / f"{timestamp} - {attachment.filename}"
-            path.parent.mkdir(exist_ok=True)
+            path = attachment_dir / f"{timestamp} - {attachment.filename}"
             path.write_bytes(attachment.content)
             attachment_paths.append(path)
-        attachment_links = "\n".join(f"![[_attachments/{path.name}]]" for path in attachment_paths)
+        attachment_links = "\n".join(
+            render_note_embed(note_path, path) for path in attachment_paths
+        )
         content = VOICE_TEMPLATE.render(
             subject=message.subject,
             received=message.received.isoformat(timespec="seconds"),
@@ -842,27 +859,34 @@ class VoiceNoteHandler:
 
 
 class TodoHandler:
-    def __init__(self, output_dir: Path):
-        self.output_dir = output_dir
+    def __init__(self, layout: VaultLayout | None = None, output_dir: Path | None = None):
+        if layout is None:
+            if output_dir is None:
+                raise ConfigError("todo handler requires a vault layout or output directory")
+            layout = VaultLayout(output_dir)
+        self.layout = layout
 
     def handle_message(self, message: IncomingMessage) -> HandlerResult:
-        date_folder = get_date_folder(self.output_dir, message.received)
+        day = message.received.date()
+        note_dir = self.layout.get_todo_dir(day)
         timestamp = message.received.strftime("%H%M")
         slug = sanitize_filename(message.subject)
-        note_path = date_folder / f"{timestamp} - {slug}.md"
+        note_path = note_dir / f"{timestamp} - {slug}.md"
         if note_path.exists():
             logger.debug("todo note already exists at %s", note_path)
             return HandlerResult(handled=True, created_paths=[], note_paths=[])
         parsed = email.message_from_bytes(message.raw_email)
         body = self.get_plain_text_body(parsed)
         attachments = self.get_attachments(parsed)
+        attachment_dir = self.layout.get_attachments_dir(day)
         attachment_paths: list[Path] = []
         for attachment in attachments:
-            path = date_folder / "_attachments" / f"{timestamp} - {attachment.filename}"
-            path.parent.mkdir(exist_ok=True)
+            path = attachment_dir / f"{timestamp} - {attachment.filename}"
             path.write_bytes(attachment.content)
             attachment_paths.append(path)
-        attachment_links = "\n".join(f"![[_attachments/{path.name}]]" for path in attachment_paths)
+        attachment_links = "\n".join(
+            render_note_embed(note_path, path) for path in attachment_paths
+        )
         content = TODO_TEMPLATE.render(
             subject=message.subject,
             received=message.received.isoformat(timespec="seconds"),
@@ -930,8 +954,17 @@ class TodoHandler:
 
 
 class RemarkableSnapshotHandler:
-    def __init__(self, output_dir: Path, transcriber: PdfTranscriber):
-        self.output_dir = output_dir
+    def __init__(
+        self,
+        transcriber: PdfTranscriber,
+        layout: VaultLayout | None = None,
+        output_dir: Path | None = None,
+    ):
+        if layout is None:
+            if output_dir is None:
+                raise ConfigError("remarkable handler requires a vault layout or output directory")
+            layout = VaultLayout(output_dir)
+        self.layout = layout
         self.transcriber = transcriber
 
     def handle_message(self, message: IncomingMessage) -> HandlerResult:
@@ -940,16 +973,17 @@ class RemarkableSnapshotHandler:
         if not attachments:
             logger.debug("message %s has no PDF attachments", message.uid)
             return HandlerResult(handled=False, created_paths=[], note_paths=[])
-        date_folder = get_date_folder(self.output_dir, message.received)
+        day = message.received.date()
+        note_dir = self.layout.get_scans_dir(day)
+        attachment_dir = self.layout.get_attachments_dir(day)
         timestamp = message.received.strftime("%H%M")
         created_paths: list[Path] = []
         note_paths: list[Path] = []
         for attachment in attachments:
             stem = Path(attachment.filename).stem
             pdf_filename = f"{timestamp} - {stem}.pdf"
-            pdf_path = date_folder / "_attachments" / pdf_filename
+            pdf_path = attachment_dir / pdf_filename
             if not pdf_path.exists():
-                pdf_path.parent.mkdir(exist_ok=True)
                 pdf_path.write_bytes(attachment.content)
                 created_paths.append(pdf_path)
             with show_spinner(f"Transcribing {pdf_filename}"):
@@ -959,8 +993,8 @@ class RemarkableSnapshotHandler:
                 except TranscriptionError as exc:
                     content = None
                     error = str(exc)
-            md_path = date_folder / f"{timestamp} - {stem}.md"
-            rendered = self.get_markdown(message, pdf_filename, content, error)
+            md_path = note_dir / f"{timestamp} - {stem}.md"
+            rendered = self.get_markdown(message, md_path, pdf_filename, pdf_path, content, error)
             md_path.write_text(rendered)
             created_paths.append(md_path)
             note_paths.append(md_path)
@@ -997,14 +1031,18 @@ class RemarkableSnapshotHandler:
     def get_markdown(
         self,
         message: IncomingMessage,
+        note_path: Path,
         pdf_filename: str,
+        pdf_path: Path,
         content: str | None,
         error: str | None,
     ) -> str:
+        attachment_link = render_note_embed(note_path, pdf_path)
         if content is not None:
             return RM2_TEMPLATE.render(
                 subject=message.subject,
                 attachment_filename=pdf_filename,
+                attachment_link=attachment_link,
                 received=message.received.isoformat(timespec="seconds"),
                 transcribed=datetime.now(tz=UTC).isoformat(timespec="seconds"),
                 content=content,
@@ -1012,6 +1050,7 @@ class RemarkableSnapshotHandler:
         return RM2_ERROR_TEMPLATE.render(
             subject=message.subject,
             attachment_filename=pdf_filename,
+            attachment_link=attachment_link,
             received=message.received.isoformat(timespec="seconds"),
             error=error or "Unknown error",
         )
@@ -1077,8 +1116,19 @@ class GoogleDriveExporter:
 
 
 class CalendarScraper:
-    def __init__(self, output_dir: Path, source: str, drive_exporter: DriveExporter):
-        self.output_dir = output_dir
+    def __init__(
+        self,
+        source: str,
+        drive_exporter: DriveExporter,
+        layout: VaultLayout | None = None,
+        output_dir: Path | None = None,
+    ):
+        if layout is None:
+            if output_dir is None:
+                raise ConfigError("calendar scraper requires a vault layout or output directory")
+            layout = VaultLayout(output_dir)
+        self.layout = layout
+        self.output_dir = layout.daily_root
         self.source = source
         self.drive_exporter = drive_exporter
 
@@ -1103,7 +1153,7 @@ class CalendarScraper:
             GOOGLE_TOKEN_PATH.write_text(creds.to_json())
         return creds
 
-    def scrape_once(self) -> list[tuple[datetime, Path, str]]:
+    def scrape_once(self, days_back: int = 7) -> list[tuple[datetime, Path, str]]:
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
 
@@ -1111,14 +1161,14 @@ class CalendarScraper:
         cal = build("calendar", "v3", credentials=creds)
 
         now = datetime.now(tz=UTC)
-        week_ago = (now - dt_mod.timedelta(days=7)).isoformat()
+        since = (now - dt_mod.timedelta(days=days_back)).isoformat()
 
-        logger.info("fetching calendar events from past 7 days")
+        logger.info("fetching calendar events from past %d days", days_back)
         events: list[dict[str, Any]] = (
             cal.events()
             .list(
                 calendarId="primary",
-                timeMin=week_ago,
+                timeMin=since,
                 timeMax=now.isoformat(),
                 singleEvents=True,
                 orderBy="startTime",
@@ -1160,7 +1210,7 @@ class CalendarScraper:
             if not doc_attachments and not chat_attachments:
                 continue
 
-            day_dir = get_date_folder(self.output_dir, start_dt)
+            note_dir = self.layout.get_meeting_notes_dir(start_dt.date())
             time_prefix = start_dt.strftime("%H%M")
             base_name = f"{time_prefix} - {event_name}"
             has_multiple_docs = len(doc_attachments) > 1
@@ -1174,7 +1224,7 @@ class CalendarScraper:
                 else:
                     name = base_name
 
-                out_path = day_dir / f"{name}.md"
+                out_path = note_dir / f"{name}.md"
                 if out_path.exists():
                     logger.debug("calendar note cached: %s", out_path)
                     results.append((start_dt, out_path, "meeting notes"))
@@ -1214,7 +1264,7 @@ class CalendarScraper:
             for att in chat_attachments:
                 file_id = att["fileId"]
                 name = f"{base_name} (chat)"
-                out_path = day_dir / f"{name}.md"
+                out_path = note_dir / f"{name}.md"
 
                 if out_path.exists():
                     logger.debug("calendar chat cached: %s", out_path)
@@ -1638,7 +1688,9 @@ session_sha256: {{ session_sha256_json }}
 
 ## Summary
 
+<!-- weave:summary:start -->
 {{ body_summary }}
+<!-- weave:summary:end -->
 
 ## Metrics
 
@@ -1715,12 +1767,20 @@ class AgentSessionScraper:
     def __init__(
         self,
         sessions_dir: Path,
-        output_dir: Path,
         summarizer: NoteSummarizer | None = None,
         index_summarizer: NoteSummarizer | None = None,
+        layout: VaultLayout | None = None,
+        output_dir: Path | None = None,
     ):
+        if layout is None:
+            if output_dir is None:
+                raise ConfigError(
+                    "agent session scraper requires a vault layout or output directory"
+                )
+            layout = VaultLayout(output_dir)
         self.sessions_dir = sessions_dir
-        self.output_dir = output_dir
+        self.layout = layout
+        self.output_dir = layout.daily_root
         self.summarizer = summarizer
         self.index_summarizer = index_summarizer
 
@@ -1822,9 +1882,9 @@ class AgentSessionScraper:
     def _output_path_for_session(self, session: SessionData) -> Path | None:
         if session.start_time is None or not session.session_id:
             return None
-        day_dir = get_date_folder(self.output_dir, session.start_time)
+        note_dir = self.layout.get_agent_sessions_dir(session.start_time.date())
         name = sanitize_filename(session.session_id)
-        return day_dir / f"{name}.md"
+        return note_dir / f"{name}.md"
 
     def _sync_session(
         self,
@@ -2115,6 +2175,7 @@ class DailyIndexEntry:
 class DailyNoteWriter:
     def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
         self.vault_root = vault_root
+        self.layout = VaultLayout(vault_root)
         self.summarizer = summarizer
         self._lock = threading.RLock()
 
@@ -2132,18 +2193,12 @@ class DailyNoteWriter:
 
     def has_github_activity_section(self, day: dt_mod.date) -> bool:
         with self._lock:
-            weave_path = self.get_weave_daily_note_path_for_date(day)
-            for path in (weave_path, self.get_daily_note_path_for_date(day)):
-                try:
-                    content = path.read_text()
-                except OSError:
-                    continue
-                if self._get_section_body(content, "github-activity") is not None:
-                    return True
-            return False
+            return self.get_github_activity_snapshot_path_for_date(day).exists()
 
     def upsert_github_activity_section(self, day: dt_mod.date, body: str) -> Path:
         with self._lock:
+            snapshot_path = self.get_github_activity_snapshot_path_for_date(day)
+            self._write_text_if_changed(snapshot_path, body.rstrip() + "\n")
             return self._refresh_day(day, github_body=body)[0]
 
     def generate_all_weave_daily_notes(self) -> int:
@@ -2180,10 +2235,10 @@ class DailyNoteWriter:
         return folder / render_daily_note_relative_path(day, self.get_daily_note_format())
 
     def get_weave_daily_note_path_for_date(self, day: dt_mod.date) -> Path:
-        return self.vault_root / WEAVE_DAILY_RELATIVE_PATH / render_daily_note_relative_path(
-            day,
-            DEFAULT_NESTED_DAILY_NOTE_FORMAT,
-        )
+        return self.layout.get_weave_daily_note_path(day)
+
+    def get_github_activity_snapshot_path_for_date(self, day: dt_mod.date) -> Path:
+        return self.layout.get_github_activity_snapshot_path(day)
 
     def get_daily_notes_folder(self) -> Path:
         settings = self._load_daily_note_settings()
@@ -2290,12 +2345,9 @@ class DailyNoteWriter:
             personal_content = personal_path.read_text()
 
         resolved_github_body = github_body
-        if resolved_github_body is None and weave_path.exists():
-            resolved_github_body = self._get_section_body(weave_path.read_text(), "github-activity")
-        if resolved_github_body is None:
-            resolved_github_body = self._get_section_body(personal_content, "github-activity")
-        if resolved_github_body is not None:
-            resolved_github_body = compact_legacy_activity_section(resolved_github_body)
+        snapshot_path = self.get_github_activity_snapshot_path_for_date(day)
+        if resolved_github_body is None and snapshot_path.exists():
+            resolved_github_body = snapshot_path.read_text()
 
         entries = self._collect_day_entries(day)
         new_weave_content = self.render_weave_daily_note(entries, github_body=resolved_github_body)
@@ -2380,14 +2432,32 @@ class DailyNoteWriter:
         return f"{content}{separator}{region}\n"
 
     def _collect_day_entries(self, day: dt_mod.date) -> list[DailyIndexEntry]:
-        day_dir = self.vault_root / SINK_RELATIVE_PATH / day.strftime("%Y/%m/%d")
-        if not day_dir.exists():
-            return []
         entries: list[DailyIndexEntry] = []
-        for note_path in sorted(day_dir.glob("*.md")):
-            entry = self._build_day_entry(note_path)
-            if entry is not None:
-                entries.append(entry)
+        seen_paths: set[Path] = set()
+        day_dir = self.layout.get_day_dir(day)
+        category_dirs = (
+            day_dir / "todo",
+            day_dir / "meeting notes",
+            day_dir / "transcriptions",
+            day_dir / "scans",
+            day_dir / "agent sessions",
+        )
+        for category_dir in category_dirs:
+            if not category_dir.exists():
+                continue
+            for note_path in sorted(category_dir.glob("*.md")):
+                seen_paths.add(note_path)
+                entry = self._build_day_entry(note_path)
+                if entry is not None:
+                    entries.append(entry)
+        legacy_day_dir = self.vault_root / SINK_RELATIVE_PATH / day.strftime("%Y/%m/%d")
+        if legacy_day_dir.exists():
+            for note_path in sorted(legacy_day_dir.glob("*.md")):
+                if note_path in seen_paths:
+                    continue
+                entry = self._build_day_entry(note_path)
+                if entry is not None:
+                    entries.append(entry)
         return entries
 
     def _build_day_entry(self, note_path: Path) -> DailyIndexEntry | None:
@@ -2505,6 +2575,18 @@ class DailyNoteWriter:
 
     def _discover_days(self) -> list[dt_mod.date]:
         days: set[dt_mod.date] = set()
+        for day_dir in self.layout.iter_day_dirs():
+            try:
+                relative = day_dir.relative_to(self.layout.daily_root)
+                days.add(
+                    dt_mod.date(
+                        int(relative.parts[0]),
+                        int(relative.parts[1]),
+                        int(relative.parts[2]),
+                    )
+                )
+            except (ValueError, IndexError):
+                continue
         sink_root = self.vault_root / SINK_RELATIVE_PATH
         if sink_root.exists():
             for note_path in sink_root.glob("????/??/??/*.md"):
@@ -2523,12 +2605,6 @@ class DailyNoteWriter:
             day = self._parse_day_from_path(note_path)
             if day is not None:
                 days.add(day)
-        weave_root = self.vault_root / WEAVE_DAILY_RELATIVE_PATH
-        if weave_root.exists():
-            for note_path in weave_root.rglob("*.md"):
-                day = self._parse_day_from_path(note_path)
-                if day is not None:
-                    days.add(day)
         return sorted(days)
 
     def _iter_personal_daily_note_paths(self) -> list[Path]:
@@ -2538,8 +2614,9 @@ class DailyNoteWriter:
         return [path for path in folder.rglob("*.md") if path.is_file()]
 
     def _parse_day_from_path(self, path: Path) -> dt_mod.date | None:
+        stem = path.stem.removesuffix(" weave")
         try:
-            return dt_mod.date.fromisoformat(path.stem)
+            return dt_mod.date.fromisoformat(stem)
         except ValueError:
             return None
 
@@ -2625,10 +2702,9 @@ class WeaveService:
     def _init_agent_session_scraper(self, config: WeaveConfig) -> None:
         if config.agent_sessions_dir and not config.agent_sessions_dir.is_dir():
             raise ConfigError(f"Agent sessions directory not found: {config.agent_sessions_dir}")
-        output_dir = config.vault_root / SINK_RELATIVE_PATH
         self.agent_session_scraper = AgentSessionScraper(
             sessions_dir=config.agent_sessions_dir,  # type: ignore[arg-type]
-            output_dir=output_dir,
+            layout=VaultLayout(config.vault_root),
             summarizer=LlmNoteSummarizer(prompt=AGENT_SESSION_SUMMARY_PROMPT),
             index_summarizer=AgentSessionIndexSummarizer(),
         )
@@ -2641,35 +2717,34 @@ class WeaveService:
                 "Run: python scripts/setup_google_credentials.py"
             )
         creds = CalendarScraper.get_google_credentials()
-        output_dir = config.vault_root / SINK_RELATIVE_PATH
         self.calendar_scraper = CalendarScraper(
-            output_dir=output_dir,
+            layout=VaultLayout(config.vault_root),
             source=config.calendar_source,
             drive_exporter=GoogleDriveExporter(creds),
         )
 
     def get_handlers(self, config: WeaveConfig) -> dict[str, MessageHandler]:
         handlers: dict[str, MessageHandler] = {}
+        layout = VaultLayout(config.vault_root)
         for route in config.routes:
-            output_dir = config.vault_root / route.sink_relative
             if route.handler_key == "voice":
-                handlers[route.name] = VoiceNoteHandler(output_dir=output_dir)
+                handlers[route.name] = VoiceNoteHandler(layout=layout)
             elif route.handler_key == "rm2":
                 handlers[route.name] = RemarkableSnapshotHandler(
-                    output_dir=output_dir,
+                    layout=layout,
                     transcriber=LlmPdfTranscriber(),
                 )
             elif route.handler_key == "todo":
-                handlers[route.name] = TodoHandler(output_dir=output_dir)
+                handlers[route.name] = TodoHandler(layout=layout)
             else:
                 raise ConfigError(f"Unknown handler key: {route.handler_key}")
         return handlers
 
-    def run_calendar_scrape(self) -> int:
+    def run_calendar_scrape(self, days_back: int = 7) -> int:
         if self.calendar_scraper is None:
             return 0
         try:
-            results = self.calendar_scraper.scrape_once()
+            results = self.calendar_scraper.scrape_once(days_back=days_back)
         except Exception as exc:
             logger.warning("calendar scrape failed: %s", exc)
             return 0
@@ -2760,9 +2835,15 @@ class WeaveService:
                 logger.info("daily note sync: %d daily note(s)", count)
             self._shutdown.wait(timeout=interval)
 
-    def run_single_batch(self) -> int:
+    def run_email_sync(self) -> int:
         with self.monitor.connect() as client:
-            email_count = self.get_processed_count(client)
+            return self.get_processed_count(client)
+
+    def rebuild_daily_notes(self) -> int:
+        return self.daily_note_writer.sync_all_daily_notes()
+
+    def run_single_batch(self) -> int:
+        email_count = self.run_email_sync()
         cal_count = self.run_calendar_scrape()
         session_count = self.run_agent_session_scrape()
         github_count = self.run_github_activity_sync()
