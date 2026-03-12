@@ -42,7 +42,7 @@ Last updated: 2026-03-12
 5. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
 6. Initialize `AgentSessionScraper` with two summarizers:
    - structured body summary prompt for the note body
-   - a dedicated compact index summarizer for frontmatter / daily-note grouping that targets about 12 words and runs a repair pass when the first LLM output is verbose or misformatted
+   - a dedicated compact index summarizer for frontmatter / daily-note grouping that targets about 12 words, enforces a 12-word cap, and runs a repair pass when the first LLM output is verbose or misformatted
 7. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
 8. Connect to IMAP and process unread routed messages.
 9. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
@@ -115,7 +115,7 @@ Discovery + sync:
 - constructor now accepts two summarizers:
   - `summarizer`: structured body summary used for the `## Summary` section
   - `index_summarizer`: compact summary written into frontmatter `summary`
-- the default agent-session index summarizer is now a dedicated class that normalizes the first non-empty response line, validates that it looks like a compact one-line summary, and asks the LLM to rewrite verbose output instead of relying on daily-note truncation.
+- the default agent-session index summarizer is now a dedicated class that normalizes the first non-empty response line, validates that it is a compact one-line summary of at most 12 words, and asks the LLM to rewrite verbose output instead of relying on daily-note truncation.
 - `_sync_session()` renders the conversation once, then runs the two summary prompts independently.
 - rendered note filenames remain session-ID based.
 

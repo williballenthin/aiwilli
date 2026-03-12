@@ -171,14 +171,14 @@ AGENT_SESSION_INDEX_SUMMARY_PROMPT = (
     "You are writing the YAML frontmatter summary for a software engineering"
     " agent session note."
     " Write one compact plain-text phrase of about 12 words describing the"
-    " main task or concrete outcome."
+    " main task or concrete outcome, but never use more than 12 words."
     " Return exactly one line."
     " No markdown, no quotes, no bullet markers, no code fences, and no"
     ' preamble like "This session".'
 )
 AGENT_SESSION_INDEX_SUMMARY_REPAIR_PROMPT = (
     "Rewrite this software engineering agent-session summary as one compact"
-    " plain-text phrase of about 12 words."
+    " plain-text phrase of about 12 words, but never use more than 12 words."
     " Focus on the main task or concrete outcome."
     " Return exactly one line."
     " No markdown, no quotes, no bullet markers, no code fences, and no"
@@ -756,7 +756,7 @@ class AgentSessionIndexSummarizer:
         if not value or any(marker in value for marker in ("```", "\n")):
             return False
         word_count = len(value.split())
-        return 6 <= word_count <= 16
+        return 6 <= word_count <= 12
 
 
 class VoiceNoteHandler:
