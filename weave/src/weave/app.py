@@ -2053,6 +2053,15 @@ class DailyNoteWriter:
         with self._lock:
             return self._refresh_day(day, github_body=body)[0]
 
+    def generate_all_weave_daily_notes(self) -> int:
+        with self._lock:
+            updated_count = 0
+            for day in self._discover_days():
+                _, changed = self._refresh_day(day, sync_personal=False)
+                if changed:
+                    updated_count += 1
+            return updated_count
+
     def sync_all_daily_notes(self) -> int:
         with self._lock:
             updated_count = 0
@@ -2203,6 +2212,7 @@ class DailyNoteWriter:
         self,
         day: dt_mod.date,
         github_body: str | None = None,
+        sync_personal: bool = True,
     ) -> tuple[Path, bool]:
         personal_path = self.get_daily_note_path_for_date(day)
         weave_path = self.get_weave_daily_note_path_for_date(day)
@@ -2226,13 +2236,16 @@ class DailyNoteWriter:
             weave_path.unlink()
             weave_changed = True
 
-        personal_changed = self._sync_personal_daily_note(
-            personal_path=personal_path,
-            weave_path=weave_path,
-            weave_exists=bool(new_weave_content),
-            existing_content=personal_content,
-        )
-        return personal_path, weave_changed or personal_changed
+        personal_changed = False
+        if sync_personal:
+            personal_changed = self._sync_personal_daily_note(
+                personal_path=personal_path,
+                weave_path=weave_path,
+                weave_exists=bool(new_weave_content),
+                existing_content=personal_content,
+            )
+        result_path = personal_path if sync_personal else weave_path
+        return result_path, weave_changed or personal_changed
 
     def _sync_personal_daily_note(
         self,
@@ -2852,6 +2865,11 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Timezone for GitHub activity day boundaries (or set WEAVE_GITHUB_TIMEZONE)",
     )
     parser.add_argument(
+        "--generate-weave-daily-notes-only",
+        action="store_true",
+        help="Regenerate weave daily notes without touching personal daily notes, then exit",
+    )
+    parser.add_argument(
         "--migrate-daily-notes",
         action="store_true",
         help="Regenerate weave daily notes, clean legacy managed content, and exit",
@@ -2873,6 +2891,22 @@ def main(argv: list[str] | None = None) -> None:
     if not args.vault_root.exists():
         logger.error("vault root does not exist: %s", args.vault_root)
         raise SystemExit(1)
+    if args.generate_weave_daily_notes_only and args.migrate_daily_notes:
+        logger.error(
+            "choose either --generate-weave-daily-notes-only or --migrate-daily-notes"
+        )
+        raise SystemExit(1)
+    if args.generate_weave_daily_notes_only and args.daily_note_format:
+        logger.error("--daily-note-format requires --migrate-daily-notes")
+        raise SystemExit(1)
+    if args.generate_weave_daily_notes_only:
+        writer = DailyNoteWriter(
+            vault_root=args.vault_root,
+            summarizer=LlmNoteSummarizer(prompt=SUMMARY_PROMPT),
+        )
+        count = writer.generate_all_weave_daily_notes()
+        logger.info("regenerated %s weave daily note day(s)", count)
+        return
     if args.migrate_daily_notes:
         writer = DailyNoteWriter(
             vault_root=args.vault_root,

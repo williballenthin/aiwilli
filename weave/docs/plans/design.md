@@ -5,7 +5,7 @@ Last updated: 2026-03-12
 
 1. Module layout
 
-- `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, migration mode, and the integrated `GitHubActivitySyncer`.
+- `src/weave/app.py`: main runtime logic, including IMAP handling, calendar scraping, agent-session parsing/rendering, daily-note integration, preview-generation mode, migration mode, and the integrated `GitHubActivitySyncer`.
 - `src/weave/github_activity.py`: GitHub activity fetching and rendering helpers. It still renders the detailed standalone report, and now also renders the compact per-repository daily-note section used by the daemon.
 - `tests/test_app.py`: route, handler, daily-note writer, calendar scraper, session rendering, and migration tests.
 - `tests/test_github_activity.py`: GitHub activity normalization plus detailed and compact rendering tests.
@@ -35,21 +35,25 @@ Last updated: 2026-03-12
 4. Runtime flow
 
 1. Parse CLI args.
-2. If `--migrate-daily-notes` is set:
+2. If `--generate-weave-daily-notes-only` is set:
+   - construct `DailyNoteWriter`
+   - regenerate Weave daily notes for all discovered days without touching personal daily notes
+   - exit
+3. If `--migrate-daily-notes` is set:
    - construct `DailyNoteWriter`
    - optionally migrate the personal daily-note layout (`--daily-note-format`)
    - regenerate Weave daily notes for all discovered days and clean legacy personal daily-note content
    - exit
-3. Otherwise build `WeaveConfig` from env + CLI args.
-4. Validate Google token exists and initialize `CalendarScraper`.
-5. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
-6. Initialize `AgentSessionScraper` with two summarizers:
+4. Otherwise build `WeaveConfig` from env + CLI args.
+5. Validate Google token exists and initialize `CalendarScraper`.
+6. Initialize `DailyNoteWriter` with the generic sink-note summary backfill summarizer.
+7. Initialize `AgentSessionScraper` with two summarizers:
    - structured body summary prompt for the note body
    - compact index summary prompt for frontmatter / daily-note grouping
-7. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
-8. Connect to IMAP and process unread routed messages.
-9. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
-10. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
+8. Initialize `GitHubActivitySyncer` with the shared `DailyNoteWriter`.
+9. Connect to IMAP and process unread routed messages.
+10. Each created sink note triggers `DailyNoteWriter.append_note_entry()` / `append_todo_entry()`, which backfills the sink note summary if necessary, rebuilds that day’s Weave daily note, and ensures the personal daily note has the managed embed region.
+11. Background maintenance threads handle calendar scraping, agent-session scraping, GitHub activity finalization, and once-per-day Weave daily-note regeneration.
 
 5. Handler implementations
 
@@ -80,6 +84,7 @@ Personal vs generated daily notes:
 Rebuild strategy:
 - `append_note_entry()` and `append_todo_entry()` no longer append one line directly into the personal daily note.
 - instead they call `_refresh_day(day)`.
+- `generate_all_weave_daily_notes()` calls `_refresh_day(day, sync_personal=False)` for preview generation, so only the Weave-generated daily note tree is updated.
 - `_refresh_day(day)`:
   - reads any existing personal daily note content
   - preserves an existing GitHub section body from the Weave daily note or legacy personal daily note when no new GitHub body is provided
@@ -88,8 +93,9 @@ Rebuild strategy:
   - backfills missing sink-note summaries before rendering
   - renders a fully managed Weave daily note with H2 sections and HTML markers
   - writes the Weave daily note only if content changed
-  - removes legacy inline `#weave` note lines and legacy managed GitHub sections from the personal daily note
-  - ensures the personal daily note contains the managed embed region when the Weave daily note exists
+  - when `sync_personal=True`, removes legacy inline `#weave` note lines and legacy managed GitHub sections from the personal daily note
+  - when `sync_personal=True`, ensures the personal daily note contains the managed embed region when the Weave daily note exists
+  - when `sync_personal=False`, leaves the personal daily note unchanged
 
 Section rendering:
 - section order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity.
