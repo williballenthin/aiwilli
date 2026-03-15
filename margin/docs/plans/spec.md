@@ -20,24 +20,35 @@ Shared option behavior:
 - `--open` opens the generated HTML in the default browser after writing it
 - `--verbose` enables debug logging
 - `--quiet` reduces logging to errors only
+- successful commands print the written HTML path to stdout
 
 GitHub mode options:
 - `--ref <ref>` checks out a specific branch, tag, or commit before snapshot generation
 
-3. Input sources
+3. Required runtime environment
 
-3.1 Local path mode
+Local path mode requires:
+- Python runtime for the `margin` CLI
+- `git` installed when reviewing a git repository and when GitHub mode is used internally
+
+GitHub mode also requires:
+- `gh` CLI installed and authenticated
+- repository read access through the current `gh` login
+
+4. Input sources
+
+4.1 Local path mode
 - input is a local directory path
 - if the directory is a git repository root, Margin uses the current working tree snapshot and records the current `HEAD` commit SHA as the snapshot identifier
 - if the directory is not a git repository root, Margin still generates a review from the directory contents and uses a deterministic content hash as the snapshot identifier
 
-3.2 GitHub mode
+4.2 GitHub mode
 - input is a GitHub repository identifier like `owner/repo`
 - Margin uses authenticated `gh` access to create a temporary checkout, including private repositories when the current `gh` login can read them
 - if `--ref` is given, Margin reviews that ref; otherwise it reviews the repository default branch
 - the temporary checkout is internal implementation detail and is not part of the exported review artifact
 
-4. Output artifact
+5. Output artifact
 
 Margin generates one self-contained HTML file.
 
@@ -50,7 +61,7 @@ The file contains:
 
 The artifact must be usable without a server after generation.
 
-5. Repository inclusion rules
+6. Repository inclusion rules
 
 - binary files are excluded
 - git administrative files are excluded
@@ -58,7 +69,7 @@ The artifact must be usable without a server after generation.
 - local git repositories respect git ignore rules for untracked files
 - Margin is optimized for small to medium repositories that can be embedded into one HTML artifact
 
-6. Review model
+7. Review model
 
 6.1 Snapshot scope
 - each review is tied to exactly one snapshot
@@ -86,7 +97,7 @@ Each comment stores:
 - required body text
 - creation and update timestamps
 
-7. Review UI behavior
+8. Review UI behavior
 
 7.1 Desktop layout
 The generated HTML presents three primary areas:
@@ -124,7 +135,7 @@ The mobile layout may stack or collapse panels, but it must still allow:
 - shows repository comments plus comments relevant to the current file
 - supports editing and deleting existing comments
 
-8. Persistence behavior
+9. Persistence behavior
 
 8.1 Local autosave
 - review state is automatically stored in browser local storage
@@ -136,7 +147,7 @@ The mobile layout may stack or collapse panels, but it must still allow:
 - users can import a previously exported JSON review state into the same snapshot
 - JSON import into a different snapshot is rejected
 
-9. Markdown export
+10. Markdown export
 
 The generated review UI supports download of a markdown report containing open comments only.
 
@@ -150,7 +161,7 @@ Each exported comment includes:
 
 The markdown is intended to be directly pasted into or referenced from a coding-agent session.
 
-10. Search behavior
+11. Search behavior
 
 Margin does not provide repository-wide application search in the first version.
 
@@ -158,7 +169,7 @@ Expected search behavior:
 - browser find works on whatever content is currently visible in the document
 - Margin does not promise cross-file search beyond that visible content behavior
 
-11. Out of scope for first version
+12. Out of scope for first version
 
 - threaded discussions
 - collaborative multi-user review
@@ -166,3 +177,4 @@ Expected search behavior:
 - symbol-aware or AST-aware anchors
 - comment migration across snapshots
 - repository-wide full-text search beyond visible browser content
+- built-in long-running server mode

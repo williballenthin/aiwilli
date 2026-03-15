@@ -5,14 +5,18 @@ Last updated: 2026-03-15
 
 1. Code layout
 
-Planned module layout:
-- `src/margin/cli.py`: argparse entrypoint, logging setup, browser opening, command dispatch
-- `src/margin/app.py`: top-level build orchestration for local and GitHub sources
-- `src/margin/models.py`: Pydantic models for snapshots, files, and build configuration
-- `src/margin/sources.py`: local directory scanning and optional GitHub temporary checkout helpers
-- `src/margin/render.py`: syntax highlighting, snapshot JSON embedding, and self-contained HTML rendering
+Current module layout:
+- `src/margin/__main__.py`: module entrypoint
+- `src/margin/cli.py`: argparse entrypoint, Rich logging setup, spinner-wrapped command dispatch
+- `src/margin/app.py`: top-level build orchestration and output writing
+- `src/margin/models.py`: Pydantic models for source files and snapshots
+- `src/margin/sources.py`: local directory scanning, git-aware enumeration, snapshot hashing, and GitHub temporary checkout helpers
+- `src/margin/render.py`: syntax highlighting, review-data preparation, safe JSON embedding, and HTML rendering
 - `src/margin/templates/review.html.j2`: inline HTML, CSS, and JavaScript UI template
-- `tests/`: CLI, scanning, and rendering tests
+- `tests/test_app.py`: local build orchestration test
+- `tests/test_cli.py`: CLI build flow test
+- `tests/test_render.py`: safe HTML embedding test
+- `tests/test_sources.py`: git-aware enumeration, hashing, and GitHub command tests
 
 2. Build pipeline
 
@@ -29,13 +33,13 @@ The browser session owns mutable review state. Python only produces the snapshot
 3.1 Local directory source
 - resolve the input path
 - determine whether it is a git repository root
-- if it is a git root, gather files via git-aware enumeration so ignore rules are respected
-- otherwise walk the filesystem directly with a small default exclude set
+- if it is a git root, gather files via `git ls-files --cached --others --exclude-standard -z` so ignore rules are respected
+- otherwise walk the filesystem directly with a small default exclude set plus an optional root `.gitignore` pathspec
 
 3.2 GitHub source
 - create a temporary working directory
-- run `gh repo clone` into that directory
-- use a shallow checkout and optional `--ref` branch selection
+- run `gh repo clone <repo> <dir> -- --depth=1`
+- if `--ref` is provided, run `git fetch --depth=1 origin <ref>` followed by `git checkout --detach FETCH_HEAD`
 - render the temporary checkout exactly like a local directory source
 - discard the checkout after rendering
 
@@ -43,10 +47,21 @@ GitHub support is intentionally implemented as a preprocessing step rather than 
 
 4. Snapshot model
 
-Planned Pydantic models:
-- `FileSnapshot`: relative path, language label, line count, syntax-highlighted HTML lines, content digest
-- `ReviewSnapshot`: source kind, source label, review title, snapshot identifier, generated timestamp, files
-- `BuildRequest`: source description, output path, optional ref, title override, browser-open flag
+Implemented Python-side models:
+- `SourceFile`: relative path, decoded text, content digest
+- `SourceSnapshot`: source kind, source label, review title, snapshot identifier, generated timestamp, files
+
+Request/result dataclasses in `app.py`:
+- `LocalBuildRequest`
+- `GitHubBuildRequest`
+- `BuildResult`
+
+The browser-side review payload is built in `render.py` as a plain JSON object containing rendered files with:
+- path
+- language
+- line count
+- syntax-highlighted HTML lines
+- content digest
 
 Snapshot identifiers:
 - git sources use `HEAD` commit SHA
@@ -138,18 +153,19 @@ Python does not post-process review state after the artifact is built.
 11. Logging and CLI behavior
 
 - `cli.py` configures Rich logging to stderr
-- stdout is reserved for command output and user-facing error lines
+- stdout is reserved for command output and user-facing error lines; successful runs print the written HTML path
 - `--verbose` enables debug logging and tracebacks
 - `--quiet` reduces logging verbosity
-- longer steps such as GitHub checkout and repository scan use transient spinner status output on stderr
+- longer steps such as local builds and GitHub builds are wrapped in `rich.live.Live` with `Spinner(..., transient=True)` on stderr
 
 12. Test strategy
 
-Initial tests should cover:
+Current tests cover:
 - git-aware file enumeration and ignore behavior
 - non-git directory snapshot hashing
 - HTML rendering and safe JSON embedding
+- local app build flow writing an output artifact
 - CLI build flow writing an output artifact
-- GitHub clone command construction without requiring network access
+- GitHub clone/fetch/checkout command construction without requiring network access
 
-The test suite should stay filesystem-oriented and avoid mocks.
+The test suite stays filesystem-oriented and avoids mocks.

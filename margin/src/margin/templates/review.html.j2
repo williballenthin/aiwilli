@@ -1,0 +1,1452 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --panel-border: #d8dce5;
+        --text: #18202a;
+        --muted: #596579;
+        --accent: #2457d6;
+        --accent-soft: rgba(36, 87, 214, 0.12);
+        --comment: #b7791f;
+        --comment-soft: rgba(183, 121, 31, 0.16);
+        --selection-soft: rgba(36, 87, 214, 0.16);
+        --reviewed: #197055;
+        --danger: #b42318;
+        --shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f141b;
+          --panel: #171d26;
+          --panel-border: #2a3342;
+          --text: #e8edf4;
+          --muted: #96a2b4;
+          --accent: #7aa2ff;
+          --accent-soft: rgba(122, 162, 255, 0.16);
+          --comment: #f0b45c;
+          --comment-soft: rgba(240, 180, 92, 0.18);
+          --selection-soft: rgba(122, 162, 255, 0.2);
+          --reviewed: #5bc49c;
+          --danger: #ff6b6b;
+          --shadow: none;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      button,
+      input,
+      textarea,
+      label {
+        font: inherit;
+      }
+
+      button,
+      .button-like {
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        color: var(--text);
+        border-radius: 0.6rem;
+        padding: 0.55rem 0.85rem;
+        cursor: pointer;
+      }
+
+      button:hover,
+      .button-like:hover {
+        border-color: var(--accent);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      input[type="text"],
+      textarea {
+        width: 100%;
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        color: var(--text);
+        border-radius: 0.6rem;
+        padding: 0.65rem 0.75rem;
+      }
+
+      textarea {
+        min-height: 10rem;
+        resize: vertical;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .app-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--panel-border);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+
+      .app-title {
+        margin: 0;
+        font-size: 1.1rem;
+      }
+
+      .app-meta,
+      .helper-text,
+      .comment-meta,
+      .file-meta {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .header-actions,
+      .toolbar-row,
+      .composer-actions,
+      .code-actions,
+      .summary-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: center;
+      }
+
+      .button-like {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+      }
+
+      .button-like input {
+        display: none;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr) minmax(18rem, 26rem);
+        gap: 1rem;
+        padding: 1rem;
+        align-items: start;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 0.9rem;
+        box-shadow: var(--shadow);
+        min-height: 70vh;
+      }
+
+      .panel-header,
+      .panel-body {
+        padding: 1rem;
+      }
+
+      .panel-header {
+        border-bottom: 1px solid var(--panel-border);
+      }
+
+      .panel h2,
+      .panel h3 {
+        margin-top: 0;
+      }
+
+      .file-filters {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .toggle-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+
+      .toggle-row label,
+      .review-toggle {
+        display: inline-flex;
+        gap: 0.45rem;
+        align-items: center;
+        color: var(--muted);
+      }
+
+      #file-tree {
+        padding: 0.25rem 1rem 1rem 1rem;
+      }
+
+      .tree-folder,
+      .tree-file {
+        margin: 0;
+      }
+
+      .tree-folder > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 0.25rem 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .tree-folder > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .tree-folder-name::before {
+        content: "▸";
+        color: var(--muted);
+        margin-right: 0.35rem;
+      }
+
+      .tree-folder[open] > summary .tree-folder-name::before {
+        content: "▾";
+      }
+
+      .tree-children {
+        margin-left: 1rem;
+        border-left: 1px solid var(--panel-border);
+        padding-left: 0.75rem;
+      }
+
+      .tree-file-button {
+        width: 100%;
+        border: none;
+        background: transparent;
+        color: inherit;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.4rem 0.5rem;
+        border-radius: 0.55rem;
+        text-align: left;
+      }
+
+      .tree-file-button:hover,
+      .tree-file-button.active {
+        background: var(--accent-soft);
+      }
+
+      .tree-file-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .tree-file-status,
+      .tree-folder-status {
+        display: inline-flex;
+        gap: 0.35rem;
+        align-items: center;
+        flex-shrink: 0;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.5rem;
+        padding: 0.15rem 0.4rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        border: 1px solid var(--panel-border);
+        color: var(--muted);
+      }
+
+      .badge.comment {
+        color: var(--comment);
+        border-color: color-mix(in srgb, var(--comment) 45%, var(--panel-border));
+      }
+
+      .badge.reviewed {
+        color: var(--reviewed);
+        border-color: color-mix(in srgb, var(--reviewed) 45%, var(--panel-border));
+      }
+
+      .code-header {
+        display: grid;
+        gap: 0.8rem;
+      }
+
+      .selection-summary {
+        border: 1px dashed var(--panel-border);
+        border-radius: 0.7rem;
+        padding: 0.7rem 0.8rem;
+        color: var(--muted);
+      }
+
+      .selection-summary.active {
+        background: var(--selection-soft);
+        color: var(--text);
+        border-style: solid;
+      }
+
+      #code-view {
+        padding: 0.75rem 1rem 1rem 1rem;
+      }
+
+      .code-row {
+        display: grid;
+        grid-template-columns: auto auto minmax(0, 1fr);
+        gap: 0.55rem;
+        align-items: start;
+        border-radius: 0.4rem;
+      }
+
+      .code-row.selected {
+        background: var(--selection-soft);
+      }
+
+      .code-row.commented {
+        background: var(--comment-soft);
+      }
+
+      .line-number,
+      .comment-marker,
+      .comment-marker-spacer {
+        margin-top: 0.05rem;
+      }
+
+      .line-number {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        min-width: 3rem;
+        padding: 0.1rem 0.4rem;
+        text-align: right;
+        border-radius: 0.35rem;
+      }
+
+      .line-number:hover {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .comment-marker,
+      .comment-marker-spacer {
+        width: 1.85rem;
+        min-height: 1.8rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .comment-marker {
+        border: none;
+        background: var(--comment-soft);
+        color: var(--comment);
+        border-radius: 999px;
+        font-size: 0.8rem;
+      }
+
+      .comment-marker:hover {
+        border: none;
+      }
+
+      .line-code {
+        white-space: pre;
+        font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 0.93rem;
+        overflow-x: auto;
+        padding: 0.1rem 0;
+      }
+
+      .empty-state {
+        color: var(--muted);
+        border: 1px dashed var(--panel-border);
+        border-radius: 0.75rem;
+        padding: 1rem;
+      }
+
+      .composer {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .composer-title {
+        margin-bottom: 0.25rem;
+      }
+
+      .composer-section {
+        padding: 1rem;
+        border-bottom: 1px solid var(--panel-border);
+      }
+
+      .composer-section:last-child {
+        border-bottom: none;
+      }
+
+      .comments-list {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      .comment-card {
+        border: 1px solid var(--panel-border);
+        border-radius: 0.8rem;
+        padding: 0.85rem;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .comment-card.focused {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .comment-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        align-items: start;
+      }
+
+      .comment-id {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        color: var(--accent);
+      }
+
+      .comment-title {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .comment-body {
+        margin: 0;
+        white-space: pre-wrap;
+      }
+
+      .comment-excerpt {
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.85rem;
+        color: var(--muted);
+        padding: 0.65rem;
+        border-radius: 0.65rem;
+        background: color-mix(in srgb, var(--panel) 70%, var(--bg));
+      }
+
+      .danger-button {
+        color: var(--danger);
+      }
+
+      .hidden {
+        display: none;
+      }
+
+{{ syntax_css }}
+
+      @media (max-width: 960px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .panel {
+          min-height: auto;
+        }
+
+        .app-header {
+          position: static;
+        }
+
+        .line-number {
+          min-width: 2.6rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1 class="app-title">{{ page_title }}</h1>
+        <div class="app-meta">{{ source_label }} · snapshot {{ snapshot_id }} · generated {{ generated_at }} · {{ file_count }} files</div>
+      </div>
+      <div class="header-actions">
+        <button type="button" id="add-repo-comment">Add repo comment</button>
+        <button type="button" id="export-markdown">Export markdown</button>
+        <button type="button" id="export-json">Export JSON</button>
+        <label class="button-like" for="import-json">Import JSON<input id="import-json" type="file" accept="application/json,.json"></label>
+      </div>
+    </header>
+    <div class="layout">
+      <aside class="panel">
+        <div class="panel-header">
+          <h2>Files</h2>
+          <div class="file-filters">
+            <input type="text" id="path-filter" placeholder="Filter paths">
+            <div class="toggle-row">
+              <label><input type="checkbox" id="filter-commented"> Commented only</label>
+              <label><input type="checkbox" id="filter-unreviewed"> Unreviewed only</label>
+            </div>
+          </div>
+        </div>
+        <div id="file-tree"></div>
+      </aside>
+      <main class="panel">
+        <div class="panel-header code-header">
+          <div>
+            <h2 id="current-file-title">No file selected</h2>
+            <div class="file-meta" id="current-file-meta"></div>
+          </div>
+          <div class="code-actions">
+            <button type="button" id="add-file-comment">Add file comment</button>
+            <label class="review-toggle"><input type="checkbox" id="reviewed-toggle"> Mark reviewed</label>
+            <button type="button" id="clear-selection">Clear selection</button>
+          </div>
+          <div class="selection-summary" id="selection-summary">Choose a line number to start a range. Choose another line number to finish it.</div>
+          <div class="summary-row helper-text" id="review-summary"></div>
+        </div>
+        <div id="code-view"></div>
+      </main>
+      <aside class="panel">
+        <section class="composer-section">
+          <h2 class="composer-title">Comment composer</h2>
+          <div class="helper-text" id="composer-target"></div>
+          <form id="comment-form" class="composer">
+            <input type="text" id="comment-title" placeholder="Optional title">
+            <textarea id="comment-body" placeholder="Write your review comment here"></textarea>
+            <div class="composer-actions">
+              <button type="submit" id="save-comment">Save comment</button>
+              <button type="button" id="cancel-comment">Reset composer</button>
+            </div>
+          </form>
+        </section>
+        <section class="composer-section">
+          <h2>Open comments</h2>
+          <div class="comments-list" id="comment-list"></div>
+        </section>
+      </aside>
+    </div>
+    <script id="snapshot-data" type="application/json">{{ snapshot_json | safe }}</script>
+    <script>
+      (() => {
+        const snapshot = JSON.parse(document.getElementById("snapshot-data").textContent);
+        const fileIndex = new Map(snapshot.files.map((file) => [file.path, file]));
+        const storageKey = `margin:${snapshot.snapshotId}`;
+        const ui = {
+          addFileComment: document.getElementById("add-file-comment"),
+          addRepoComment: document.getElementById("add-repo-comment"),
+          cancelComment: document.getElementById("cancel-comment"),
+          clearSelection: document.getElementById("clear-selection"),
+          codeView: document.getElementById("code-view"),
+          commentBody: document.getElementById("comment-body"),
+          commentForm: document.getElementById("comment-form"),
+          commentList: document.getElementById("comment-list"),
+          commentTitle: document.getElementById("comment-title"),
+          composerTarget: document.getElementById("composer-target"),
+          currentFileMeta: document.getElementById("current-file-meta"),
+          currentFileTitle: document.getElementById("current-file-title"),
+          exportJson: document.getElementById("export-json"),
+          exportMarkdown: document.getElementById("export-markdown"),
+          fileTree: document.getElementById("file-tree"),
+          filterCommented: document.getElementById("filter-commented"),
+          filterUnreviewed: document.getElementById("filter-unreviewed"),
+          importJson: document.getElementById("import-json"),
+          pathFilter: document.getElementById("path-filter"),
+          reviewSummary: document.getElementById("review-summary"),
+          reviewedToggle: document.getElementById("reviewed-toggle"),
+          selectionSummary: document.getElementById("selection-summary"),
+        };
+
+        let state = loadState();
+        let currentFilePath = snapshot.files[0]?.path ?? null;
+        let pendingRangeStart = null;
+        let rangeSelection = null;
+        let focusedCommentId = null;
+        let composerState = defaultComposerState();
+
+        wireEvents();
+        renderAll();
+
+        function wireEvents() {
+          ui.addRepoComment.addEventListener("click", () => {
+            focusedCommentId = null;
+            pendingRangeStart = null;
+            rangeSelection = null;
+            composerState = {
+              scope: "repo",
+              path: null,
+              startLine: null,
+              endLine: null,
+              excerpt: null,
+              editId: null,
+            };
+            clearForm();
+            updateComposerTarget();
+            renderFile();
+          });
+
+          ui.addFileComment.addEventListener("click", () => {
+            if (!currentFilePath) {
+              return;
+            }
+            focusedCommentId = null;
+            pendingRangeStart = null;
+            rangeSelection = null;
+            composerState = {
+              scope: "file",
+              path: currentFilePath,
+              startLine: null,
+              endLine: null,
+              excerpt: null,
+              editId: null,
+            };
+            clearForm();
+            updateComposerTarget();
+            renderFile();
+          });
+
+          ui.cancelComment.addEventListener("click", () => {
+            resetComposer();
+            renderFile();
+          });
+
+          ui.clearSelection.addEventListener("click", () => {
+            pendingRangeStart = null;
+            rangeSelection = null;
+            if (composerState.scope === "range" && composerState.editId === null) {
+              resetComposer();
+            }
+            renderFile();
+            updateSelectionSummary();
+          });
+
+          ui.commentForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            saveComment();
+          });
+
+          ui.reviewedToggle.addEventListener("change", () => {
+            if (!currentFilePath) {
+              return;
+            }
+            const reviewedFiles = new Set(state.reviewedFiles);
+            if (ui.reviewedToggle.checked) {
+              reviewedFiles.add(currentFilePath);
+            } else {
+              reviewedFiles.delete(currentFilePath);
+            }
+            state.reviewedFiles = Array.from(reviewedFiles).sort();
+            saveState();
+            renderTree();
+            renderSummary();
+          });
+
+          ui.pathFilter.addEventListener("input", renderTree);
+          ui.filterCommented.addEventListener("change", renderTree);
+          ui.filterUnreviewed.addEventListener("change", renderTree);
+
+          ui.exportMarkdown.addEventListener("click", () => {
+            downloadText(`${makeFileStem()}.md`, buildMarkdownReport(), "text/markdown;charset=utf-8");
+          });
+
+          ui.exportJson.addEventListener("click", () => {
+            downloadText(`${makeFileStem()}.json`, JSON.stringify(exportState(), null, 2), "application/json;charset=utf-8");
+          });
+
+          ui.importJson.addEventListener("change", async (event) => {
+            const file = event.target.files?.[0];
+            if (!file) {
+              return;
+            }
+            const text = await file.text();
+            try {
+              const rawState = JSON.parse(text);
+              if (!rawState || rawState.snapshotId !== snapshot.snapshotId) {
+                window.alert("Imported review belongs to a different snapshot.");
+                return;
+              }
+              const importedState = normalizeState(rawState);
+              state = importedState;
+              saveState();
+              focusedCommentId = null;
+              resetComposer();
+              renderAll();
+            } catch (error) {
+              window.alert(`Failed to import review JSON: ${error}`);
+            } finally {
+              ui.importJson.value = "";
+            }
+          });
+        }
+
+        function defaultComposerState() {
+          if (currentFilePath) {
+            return {
+              scope: "file",
+              path: currentFilePath,
+              startLine: null,
+              endLine: null,
+              excerpt: null,
+              editId: null,
+            };
+          }
+          return {
+            scope: "repo",
+            path: null,
+            startLine: null,
+            endLine: null,
+            excerpt: null,
+            editId: null,
+          };
+        }
+
+        function defaultState() {
+          return {
+            version: 1,
+            snapshotId: snapshot.snapshotId,
+            nextSequence: 1,
+            reviewedFiles: [],
+            comments: [],
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        function loadState() {
+          const stored = window.localStorage.getItem(storageKey);
+          if (!stored) {
+            return defaultState();
+          }
+          try {
+            return normalizeState(JSON.parse(stored));
+          } catch (error) {
+            console.warn("Failed to parse saved state", error);
+            return defaultState();
+          }
+        }
+
+        function normalizeState(candidate) {
+          const base = defaultState();
+          if (!candidate || candidate.snapshotId !== snapshot.snapshotId) {
+            return base;
+          }
+          const reviewedFiles = Array.isArray(candidate.reviewedFiles)
+            ? Array.from(new Set(candidate.reviewedFiles.filter((path) => fileIndex.has(path)))).sort()
+            : [];
+          const comments = Array.isArray(candidate.comments)
+            ? candidate.comments.filter(isValidComment).map(normalizeComment)
+            : [];
+          const nextSequence = Number.isInteger(candidate.nextSequence) && candidate.nextSequence > 0
+            ? candidate.nextSequence
+            : comments.reduce((currentMax, comment) => {
+                const match = /^RV-(\d+)$/.exec(comment.id);
+                if (!match) {
+                  return currentMax;
+                }
+                return Math.max(currentMax, Number(match[1]) + 1);
+              }, 1);
+          return {
+            version: 1,
+            snapshotId: snapshot.snapshotId,
+            nextSequence,
+            reviewedFiles,
+            comments,
+            updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : base.updatedAt,
+          };
+        }
+
+        function isValidComment(comment) {
+          if (!comment || typeof comment !== "object") {
+            return false;
+          }
+          if (!(["repo", "file", "range"].includes(comment.scope))) {
+            return false;
+          }
+          if (typeof comment.body !== "string" || !comment.body.trim()) {
+            return false;
+          }
+          if (comment.scope !== "repo" && (typeof comment.path !== "string" || !fileIndex.has(comment.path))) {
+            return false;
+          }
+          if (comment.scope === "range") {
+            if (!Number.isInteger(comment.startLine) || !Number.isInteger(comment.endLine)) {
+              return false;
+            }
+          }
+          return true;
+        }
+
+        function normalizeComment(comment) {
+          return {
+            id: typeof comment.id === "string" ? comment.id : "RV-000",
+            scope: comment.scope,
+            path: typeof comment.path === "string" ? comment.path : null,
+            startLine: Number.isInteger(comment.startLine) ? comment.startLine : null,
+            endLine: Number.isInteger(comment.endLine) ? comment.endLine : null,
+            excerpt: typeof comment.excerpt === "string" && comment.excerpt.trim() ? comment.excerpt : null,
+            title: typeof comment.title === "string" ? comment.title.trim() : "",
+            body: comment.body.trim(),
+            createdAt: typeof comment.createdAt === "string" ? comment.createdAt : new Date().toISOString(),
+            updatedAt: typeof comment.updatedAt === "string" ? comment.updatedAt : new Date().toISOString(),
+          };
+        }
+
+        function saveState() {
+          state.updatedAt = new Date().toISOString();
+          window.localStorage.setItem(storageKey, JSON.stringify(state));
+        }
+
+        function exportState() {
+          return {
+            version: state.version,
+            snapshotId: state.snapshotId,
+            nextSequence: state.nextSequence,
+            reviewedFiles: [...state.reviewedFiles],
+            comments: sortComments(state.comments),
+            updatedAt: state.updatedAt,
+          };
+        }
+
+        function renderAll() {
+          if (!currentFilePath && snapshot.files[0]) {
+            currentFilePath = snapshot.files[0].path;
+          }
+          resetComposer(false);
+          renderTree();
+          renderFile();
+          renderComments();
+          renderSummary();
+          updateComposerTarget();
+          updateSelectionSummary();
+        }
+
+        function renderSummary() {
+          const reviewedCount = state.reviewedFiles.length;
+          const totalFiles = snapshot.files.length;
+          const commentCount = state.comments.length;
+          ui.reviewSummary.textContent = `${commentCount} open comments · ${reviewedCount}/${totalFiles} files reviewed`;
+        }
+
+        function renderTree() {
+          const tree = buildTree(getVisiblePaths());
+          ui.fileTree.replaceChildren();
+          if (tree.children.size === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty-state";
+            empty.textContent = "No files match the current filters.";
+            ui.fileTree.appendChild(empty);
+            return;
+          }
+          const wrapper = document.createElement("div");
+          wrapper.className = "panel-body";
+          for (const child of Array.from(tree.children.values()).sort(compareNodes)) {
+            wrapper.appendChild(renderTreeNode(child, 0));
+          }
+          ui.fileTree.appendChild(wrapper);
+        }
+
+        function buildTree(paths) {
+          const root = { kind: "dir", name: snapshot.sourceLabel, path: "", children: new Map() };
+          for (const path of paths) {
+            const parts = path.split("/");
+            let node = root;
+            for (let index = 0; index < parts.length; index += 1) {
+              const part = parts[index];
+              const isFile = index === parts.length - 1;
+              if (!node.children.has(part)) {
+                node.children.set(part, {
+                  kind: isFile ? "file" : "dir",
+                  name: part,
+                  path: isFile ? path : parts.slice(0, index + 1).join("/"),
+                  children: new Map(),
+                });
+              }
+              node = node.children.get(part);
+            }
+          }
+          return root;
+        }
+
+        function compareNodes(left, right) {
+          if (left.kind !== right.kind) {
+            return left.kind === "dir" ? -1 : 1;
+          }
+          return left.name.localeCompare(right.name);
+        }
+
+        function renderTreeNode(node, depth) {
+          if (node.kind === "file") {
+            return renderFileNode(node);
+          }
+          const details = document.createElement("details");
+          details.className = "tree-folder";
+          details.open = depth < 1;
+          const summary = document.createElement("summary");
+          const name = document.createElement("span");
+          name.className = "tree-folder-name";
+          name.textContent = node.name;
+          const status = document.createElement("span");
+          status.className = "tree-folder-status";
+          const commentCount = countCommentsForPrefix(node.path);
+          if (commentCount > 0) {
+            status.appendChild(createBadge(String(commentCount), "comment"));
+          }
+          summary.append(name, status);
+          details.appendChild(summary);
+          const children = document.createElement("div");
+          children.className = "tree-children";
+          for (const child of Array.from(node.children.values()).sort(compareNodes)) {
+            children.appendChild(renderTreeNode(child, depth + 1));
+          }
+          details.appendChild(children);
+          return details;
+        }
+
+        function renderFileNode(node) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "tree-file";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "tree-file-button";
+          if (node.path === currentFilePath) {
+            button.classList.add("active");
+          }
+          button.addEventListener("click", () => {
+            currentFilePath = node.path;
+            resetComposer();
+            renderFile();
+            renderComments();
+            renderTree();
+          });
+          const name = document.createElement("span");
+          name.className = "tree-file-name";
+          name.textContent = node.name;
+          const status = document.createElement("span");
+          status.className = "tree-file-status";
+          const commentCount = countCommentsForFile(node.path);
+          if (commentCount > 0) {
+            status.appendChild(createBadge(String(commentCount), "comment"));
+          }
+          if (state.reviewedFiles.includes(node.path)) {
+            status.appendChild(createBadge("✓", "reviewed"));
+          }
+          button.append(name, status);
+          wrapper.appendChild(button);
+          return wrapper;
+        }
+
+        function createBadge(text, className) {
+          const badge = document.createElement("span");
+          badge.className = `badge ${className}`;
+          badge.textContent = text;
+          return badge;
+        }
+
+        function getVisiblePaths() {
+          const filterText = ui.pathFilter.value.trim().toLowerCase();
+          return snapshot.files
+            .map((file) => file.path)
+            .filter((path) => {
+              if (filterText && !path.toLowerCase().includes(filterText)) {
+                return false;
+              }
+              if (ui.filterCommented.checked && countCommentsForFile(path) === 0) {
+                return false;
+              }
+              if (ui.filterUnreviewed.checked && state.reviewedFiles.includes(path)) {
+                return false;
+              }
+              return true;
+            });
+        }
+
+        function countCommentsForFile(path) {
+          return state.comments.filter((comment) => comment.path === path).length;
+        }
+
+        function countCommentsForPrefix(prefix) {
+          const normalizedPrefix = `${prefix}/`;
+          return state.comments.filter((comment) => comment.path && comment.path.startsWith(normalizedPrefix)).length;
+        }
+
+        function renderFile() {
+          ui.codeView.replaceChildren();
+          if (!currentFilePath) {
+            ui.currentFileTitle.textContent = "No file selected";
+            ui.currentFileMeta.textContent = "";
+            ui.reviewedToggle.checked = false;
+            ui.reviewedToggle.disabled = true;
+            ui.addFileComment.disabled = true;
+            ui.codeView.appendChild(buildEmptyState("This review contains no files."));
+            updateSelectionSummary();
+            return;
+          }
+          const file = fileIndex.get(currentFilePath);
+          ui.currentFileTitle.textContent = file.path;
+          ui.currentFileMeta.textContent = `${file.language} · ${file.lineCount} lines`;
+          ui.reviewedToggle.disabled = false;
+          ui.reviewedToggle.checked = state.reviewedFiles.includes(currentFilePath);
+          ui.addFileComment.disabled = false;
+          if (file.lines.length === 0) {
+            ui.codeView.appendChild(buildEmptyState("Empty file."));
+            updateSelectionSummary();
+            return;
+          }
+          const fragment = document.createDocumentFragment();
+          for (let index = 0; index < file.lines.length; index += 1) {
+            const lineNumber = index + 1;
+            const row = document.createElement("div");
+            row.className = "code-row";
+            row.dataset.lineNumber = String(lineNumber);
+            const comments = getRangeCommentsForLine(currentFilePath, lineNumber);
+            if (comments.length > 0) {
+              row.classList.add("commented");
+            }
+            if (isLineSelected(currentFilePath, lineNumber)) {
+              row.classList.add("selected");
+            }
+
+            const lineNumberButton = document.createElement("button");
+            lineNumberButton.type = "button";
+            lineNumberButton.className = "line-number";
+            lineNumberButton.textContent = String(lineNumber);
+            lineNumberButton.addEventListener("click", () => handleLineSelection(lineNumber));
+
+            const commentMarker = comments.length > 0 ? buildCommentMarker(comments) : buildCommentMarkerSpacer();
+            const lineCode = document.createElement("div");
+            lineCode.className = "line-code syntax";
+            lineCode.innerHTML = file.lines[index] || "&nbsp;";
+
+            row.append(lineNumberButton, commentMarker, lineCode);
+            fragment.appendChild(row);
+          }
+          ui.codeView.appendChild(fragment);
+          updateSelectionSummary();
+        }
+
+        function buildCommentMarker(comments) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "comment-marker";
+          button.textContent = String(comments.length);
+          button.title = comments.map((comment) => comment.id).join(", ");
+          button.addEventListener("click", () => focusComment(comments[0].id));
+          return button;
+        }
+
+        function buildCommentMarkerSpacer() {
+          const spacer = document.createElement("span");
+          spacer.className = "comment-marker-spacer";
+          return spacer;
+        }
+
+        function handleLineSelection(lineNumber) {
+          if (!currentFilePath) {
+            return;
+          }
+          focusedCommentId = null;
+          if (pendingRangeStart === null) {
+            pendingRangeStart = lineNumber;
+            rangeSelection = { path: currentFilePath, startLine: lineNumber, endLine: lineNumber };
+            updateSelectionSummary();
+            renderFile();
+            return;
+          }
+          const startLine = Math.min(pendingRangeStart, lineNumber);
+          const endLine = Math.max(pendingRangeStart, lineNumber);
+          pendingRangeStart = null;
+          rangeSelection = { path: currentFilePath, startLine, endLine };
+          composerState = {
+            scope: "range",
+            path: currentFilePath,
+            startLine,
+            endLine,
+            excerpt: getSelectedExcerpt(currentFilePath, startLine, endLine),
+            editId: null,
+          };
+          clearForm();
+          updateComposerTarget();
+          renderFile();
+        }
+
+        function isLineSelected(path, lineNumber) {
+          if (pendingRangeStart !== null && path === currentFilePath && lineNumber === pendingRangeStart) {
+            return true;
+          }
+          if (!rangeSelection || rangeSelection.path !== path) {
+            return false;
+          }
+          return lineNumber >= rangeSelection.startLine && lineNumber <= rangeSelection.endLine;
+        }
+
+        function getRangeCommentsForLine(path, lineNumber) {
+          return sortComments(
+            state.comments.filter(
+              (comment) =>
+                comment.scope === "range" &&
+                comment.path === path &&
+                lineNumber >= comment.startLine &&
+                lineNumber <= comment.endLine,
+            ),
+          );
+        }
+
+        function getSelectedExcerpt(path, startLine, endLine) {
+          const file = fileIndex.get(path);
+          const lines = file.lines.slice(startLine - 1, endLine);
+          const scratch = document.createElement("div");
+          scratch.innerHTML = lines.join("\n");
+          return scratch.textContent?.trim() || null;
+        }
+
+        function renderComments() {
+          ui.commentList.replaceChildren();
+          const comments = sortComments(getRelevantComments());
+          if (comments.length === 0) {
+            ui.commentList.appendChild(buildEmptyState("No open comments for this view yet."));
+            return;
+          }
+          const fragment = document.createDocumentFragment();
+          for (const comment of comments) {
+            fragment.appendChild(buildCommentCard(comment));
+          }
+          ui.commentList.appendChild(fragment);
+        }
+
+        function getRelevantComments() {
+          return state.comments.filter((comment) => {
+            if (comment.scope === "repo") {
+              return true;
+            }
+            if (!currentFilePath) {
+              return false;
+            }
+            return comment.path === currentFilePath;
+          });
+        }
+
+        function buildCommentCard(comment) {
+          const card = document.createElement("article");
+          card.className = "comment-card";
+          if (comment.id === focusedCommentId) {
+            card.classList.add("focused");
+          }
+          const header = document.createElement("div");
+          header.className = "comment-header";
+          const titleBlock = document.createElement("div");
+          const commentId = document.createElement("div");
+          commentId.className = "comment-id";
+          commentId.textContent = comment.id;
+          const title = document.createElement("h3");
+          title.className = "comment-title";
+          title.textContent = comment.title || deriveCommentTitle(comment);
+          const meta = document.createElement("div");
+          meta.className = "comment-meta";
+          meta.textContent = describeComment(comment);
+          titleBlock.append(commentId, title, meta);
+          const actions = document.createElement("div");
+          actions.className = "toolbar-row";
+          actions.append(
+            buildCardButton("Focus", () => focusComment(comment.id)),
+            buildCardButton("Edit", () => editComment(comment.id)),
+            buildCardButton("Delete", () => deleteComment(comment.id), "danger-button"),
+          );
+          header.append(titleBlock, actions);
+          const body = document.createElement("p");
+          body.className = "comment-body";
+          body.textContent = comment.body;
+          card.append(header, body);
+          if (comment.excerpt) {
+            const excerpt = document.createElement("div");
+            excerpt.className = "comment-excerpt";
+            excerpt.textContent = comment.excerpt;
+            card.appendChild(excerpt);
+          }
+          return card;
+        }
+
+        function buildCardButton(label, onClick, className = "") {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = label;
+          if (className) {
+            button.classList.add(className);
+          }
+          button.addEventListener("click", onClick);
+          return button;
+        }
+
+        function deriveCommentTitle(comment) {
+          const body = comment.body.trim().split(/\s+/).slice(0, 10).join(" ");
+          return body || "Untitled comment";
+        }
+
+        function describeComment(comment) {
+          if (comment.scope === "repo") {
+            return "Repository comment";
+          }
+          if (comment.scope === "file") {
+            return `${comment.path} · file comment`;
+          }
+          return `${comment.path} · lines ${comment.startLine}-${comment.endLine}`;
+        }
+
+        function focusComment(commentId) {
+          const comment = state.comments.find((item) => item.id === commentId);
+          if (!comment) {
+            return;
+          }
+          focusedCommentId = comment.id;
+          if (comment.path) {
+            currentFilePath = comment.path;
+          }
+          if (comment.scope === "range") {
+            rangeSelection = {
+              path: comment.path,
+              startLine: comment.startLine,
+              endLine: comment.endLine,
+            };
+          } else {
+            rangeSelection = null;
+          }
+          pendingRangeStart = null;
+          renderTree();
+          renderFile();
+          renderComments();
+          updateSelectionSummary();
+          if (comment.scope === "range") {
+            window.requestAnimationFrame(() => scrollToLine(comment.startLine));
+          }
+        }
+
+        function editComment(commentId) {
+          const comment = state.comments.find((item) => item.id === commentId);
+          if (!comment) {
+            return;
+          }
+          focusedCommentId = comment.id;
+          if (comment.path) {
+            currentFilePath = comment.path;
+          }
+          pendingRangeStart = null;
+          rangeSelection = comment.scope === "range"
+            ? { path: comment.path, startLine: comment.startLine, endLine: comment.endLine }
+            : null;
+          composerState = {
+            scope: comment.scope,
+            path: comment.path,
+            startLine: comment.startLine,
+            endLine: comment.endLine,
+            excerpt: comment.excerpt,
+            editId: comment.id,
+          };
+          ui.commentTitle.value = comment.title;
+          ui.commentBody.value = comment.body;
+          renderTree();
+          renderFile();
+          renderComments();
+          updateComposerTarget();
+          updateSelectionSummary();
+        }
+
+        function deleteComment(commentId) {
+          const comment = state.comments.find((item) => item.id === commentId);
+          if (!comment) {
+            return;
+          }
+          if (!window.confirm(`Delete ${comment.id}?`)) {
+            return;
+          }
+          state.comments = state.comments.filter((item) => item.id !== commentId);
+          saveState();
+          if (focusedCommentId === commentId) {
+            focusedCommentId = null;
+          }
+          if (composerState.editId === commentId) {
+            resetComposer();
+          }
+          renderTree();
+          renderFile();
+          renderComments();
+          renderSummary();
+        }
+
+        function saveComment() {
+          const body = ui.commentBody.value.trim();
+          const title = ui.commentTitle.value.trim();
+          if (!body) {
+            window.alert("Comment body is required.");
+            return;
+          }
+          const now = new Date().toISOString();
+          const existingIndex = state.comments.findIndex((comment) => comment.id === composerState.editId);
+          const commentId = composerState.editId || createCommentId(state.nextSequence);
+          const comment = {
+            id: commentId,
+            scope: composerState.scope,
+            path: composerState.path,
+            startLine: composerState.scope === "range" ? composerState.startLine : null,
+            endLine: composerState.scope === "range" ? composerState.endLine : null,
+            excerpt: composerState.scope === "range" ? composerState.excerpt : null,
+            title,
+            body,
+            createdAt: existingIndex >= 0 ? state.comments[existingIndex].createdAt : now,
+            updatedAt: now,
+          };
+          if (existingIndex >= 0) {
+            state.comments.splice(existingIndex, 1, comment);
+          } else {
+            state.comments.push(comment);
+            state.nextSequence += 1;
+          }
+          saveState();
+          focusedCommentId = comment.id;
+          resetComposer();
+          renderTree();
+          renderFile();
+          renderComments();
+          renderSummary();
+        }
+
+        function resetComposer(clearInputs = true) {
+          composerState = defaultComposerState();
+          focusedCommentId = null;
+          pendingRangeStart = null;
+          rangeSelection = null;
+          if (clearInputs) {
+            clearForm();
+          }
+          updateComposerTarget();
+          updateSelectionSummary();
+        }
+
+        function clearForm() {
+          ui.commentTitle.value = "";
+          ui.commentBody.value = "";
+        }
+
+        function updateComposerTarget() {
+          if (composerState.editId) {
+            ui.composerTarget.textContent = `Editing ${composerState.editId} · ${describeComment(composerState)}`;
+            return;
+          }
+          if (composerState.scope === "repo") {
+            ui.composerTarget.textContent = "Repository comment";
+            return;
+          }
+          if (composerState.scope === "file") {
+            ui.composerTarget.textContent = `${composerState.path} · file comment`;
+            return;
+          }
+          ui.composerTarget.textContent = `${composerState.path} · lines ${composerState.startLine}-${composerState.endLine}`;
+        }
+
+        function updateSelectionSummary() {
+          if (pendingRangeStart !== null && currentFilePath) {
+            ui.selectionSummary.classList.add("active");
+            ui.selectionSummary.textContent = `${currentFilePath} · start at line ${pendingRangeStart}. Choose another line to finish the range.`;
+            return;
+          }
+          if (rangeSelection && rangeSelection.path === currentFilePath) {
+            ui.selectionSummary.classList.add("active");
+            ui.selectionSummary.textContent = `${rangeSelection.path} · selected lines ${rangeSelection.startLine}-${rangeSelection.endLine}`;
+            return;
+          }
+          ui.selectionSummary.classList.remove("active");
+          ui.selectionSummary.textContent = "Choose a line number to start a range. Choose another line number to finish it.";
+        }
+
+        function scrollToLine(lineNumber) {
+          const line = ui.codeView.querySelector(`[data-line-number="${lineNumber}"]`);
+          line?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+
+        function createCommentId(sequence) {
+          return `RV-${String(sequence).padStart(3, "0")}`;
+        }
+
+        function sortComments(comments) {
+          return [...comments].sort((left, right) => left.id.localeCompare(right.id));
+        }
+
+        function buildMarkdownReport() {
+          const lines = [
+            `# ${snapshot.title}`,
+            "",
+            `source: ${snapshot.sourceLabel}`,
+            `snapshot: ${snapshot.snapshotId}`,
+            `generated_at: ${snapshot.generatedAt}`,
+            `comment_count: ${state.comments.length}`,
+            "",
+          ];
+          for (const comment of sortComments(state.comments)) {
+            lines.push(`## ${comment.id}`);
+            lines.push(`scope: ${comment.scope}`);
+            if (comment.path) {
+              lines.push(`path: ${comment.path}`);
+            }
+            if (comment.scope === "range") {
+              lines.push(`lines: ${comment.startLine}-${comment.endLine}`);
+            }
+            if (comment.title) {
+              lines.push(`title: ${comment.title}`);
+            }
+            lines.push("");
+            lines.push(comment.body);
+            if (comment.excerpt) {
+              lines.push("");
+              lines.push("excerpt:");
+              lines.push("~~~");
+              lines.push(comment.excerpt);
+              lines.push("~~~");
+            }
+            lines.push("");
+          }
+          return lines.join("\n");
+        }
+
+        function makeFileStem() {
+          const stem = snapshot.title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+          return stem || "margin-review";
+        }
+
+        function downloadText(filename, text, mimeType) {
+          const blob = new Blob([text], { type: mimeType });
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.URL.revokeObjectURL(url);
+        }
+
+        function buildEmptyState(message) {
+          const empty = document.createElement("div");
+          empty.className = "empty-state";
+          empty.textContent = message;
+          return empty;
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -47,5 +47,9 @@ strict = true
 warn_unused_ignores = true
 warn_return_any = true
 
+[[tool.mypy.overrides]]
+module = ["pathspec", "pygments", "pygments.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
