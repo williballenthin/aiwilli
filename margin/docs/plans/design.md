@@ -7,26 +7,28 @@ Last updated: 2026-03-15
 
 Current module layout:
 - `src/margin/__main__.py`: module entrypoint
-- `src/margin/cli.py`: argparse entrypoint, Rich logging setup, spinner-wrapped command dispatch
+- `src/margin/cli.py`: argparse entrypoint, Rich logging setup, command dispatch, and serve-mode orchestration
 - `src/margin/app.py`: top-level build orchestration and output writing
 - `src/margin/models.py`: Pydantic models for source files and snapshots
 - `src/margin/sources.py`: local directory scanning, git-aware enumeration, snapshot hashing, and GitHub temporary checkout helpers
 - `src/margin/render.py`: syntax highlighting, review-data preparation, safe JSON embedding, and HTML rendering
+- `src/margin/server.py`: lightweight HTTP serving helpers for generated review artifacts
 - `src/margin/templates/review.html.j2`: inline HTML, CSS, and JavaScript UI template
 - `tests/test_app.py`: local build orchestration test
-- `tests/test_cli.py`: CLI build flow test
-- `tests/test_render.py`: safe HTML embedding test
+- `tests/test_cli.py`: CLI parser and build flow tests
+- `tests/test_render.py`: HTML embedding and UI-presence tests
+- `tests/test_server.py`: real HTTP serving test
 - `tests/test_sources.py`: git-aware enumeration, hashing, and GitHub command tests
 
 2. Build pipeline
 
-The first implementation uses an offline build pipeline:
+Margin uses an offline snapshot pipeline:
 1. resolve the requested source
 2. create a normalized snapshot model
 3. render the snapshot into one static HTML document
-4. optionally open the output in a browser
+4. optionally open the document directly in a browser or serve it over local HTTP
 
-The browser session owns mutable review state. Python only produces the snapshot artifact.
+The browser session owns mutable review state. Python only produces or serves the snapshot artifact.
 
 3. Source resolution
 
@@ -43,7 +45,7 @@ The browser session owns mutable review state. Python only produces the snapshot
 - render the temporary checkout exactly like a local directory source
 - discard the checkout after rendering
 
-GitHub support is intentionally implemented as a preprocessing step rather than browser-side fetching. This avoids auth, CORS, and API pagination concerns inside the generated HTML.
+GitHub support is implemented as a preprocessing step rather than browser-side fetching. This avoids auth, CORS, and API pagination concerns inside the generated HTML.
 
 4. Snapshot model
 
@@ -78,21 +80,35 @@ For each included file:
 
 The snapshot keeps one highlighted HTML string per rendered line. This keeps the browser renderer simple and avoids client-side lexing.
 
-6. HTML rendering strategy
+6. Local server flow
+
+`server.py` provides the small HTTP-serving layer used by `margin serve` and `margin serve-github`:
+- `create_http_server()` builds a `ThreadingHTTPServer` rooted at a directory
+- `run_http_server()` serves until interrupted
+- `start_http_server()` exists for tests and starts the same server in a background thread
+- `build_review_url()` generates the browser URL for the served artifact and normalizes `0.0.0.0` to `127.0.0.1` for browser use
+
+Serve commands write `review.html` into either:
+- a caller-specified `--output-dir`, or
+- a temporary directory owned by `ExitStack`
+
+The HTTP server serves the artifact directory directly. There is no separate app server, API, or runtime state on the Python side.
+
+7. HTML rendering strategy
 
 The generated document is fully self-contained.
 
 Rendering pieces:
 - metadata header and controls
 - embedded snapshot JSON inside a non-executing script tag
-- inline CSS for layout, typography, and syntax highlighting
-- inline JavaScript for navigation, comment editing, persistence, and export
+- inline CSS for layout, typography, mobile tabs, presets, and syntax highlighting
+- inline JavaScript for navigation, comment editing, persistence, preset handling, and export
 
 The snapshot JSON must escape `</script>`-like sequences so source code cannot terminate the embedding script element.
 
-7. Browser UI state model
+8. Browser state model
 
-Client-side mutable state is stored as JSON with fields similar to:
+Client-side mutable review state is stored as JSON with fields:
 - `snapshotId`
 - `nextSequence`
 - `reviewedFiles`
@@ -111,12 +127,14 @@ Each comment stores:
 - `createdAt`
 - `updatedAt`
 
-The browser loads state in this order:
+Separate browser-local preset state is stored under its own local-storage key and contains a deduplicated string list.
+
+The browser loads review state in this order:
 1. explicit imported JSON when the user chooses import
 2. previously autosaved local-storage state for the same snapshot
 3. empty default state
 
-8. DOM strategy
+9. DOM and interaction strategy
 
 The HTML artifact embeds all files as data, but the code pane mounts one file at a time.
 
@@ -125,9 +143,7 @@ Reasoning:
 - still preserves the self-contained single-file artifact model
 - accepts that browser find only works on currently visible content
 
-The file tree is rendered as nested folders using `details` and `summary` elements.
-
-9. Interaction model
+The file tree uses nested `details` and `summary` elements.
 
 Line-range comments are created by selecting start and end lines rather than arbitrary text spans.
 
@@ -136,27 +152,36 @@ Reasoning:
 - more robust on mobile Safari and touch input
 - stable enough for review export anchored by line range plus excerpt
 
-The right sidebar contains one comment composer used for:
-- repository comments
-- file comments
-- range comments
-- editing existing comments
+On narrow screens, the document switches to an explicit Files / Code / Comments panel model. The JavaScript moves the user to the most likely panel for the current action, for example:
+- selecting a file opens Code
+- finishing a line-range selection opens Comments
+- editing a comment opens Comments
+- focusing a range comment opens Code and scrolls to the anchor line
 
 10. Export behavior
 
 Markdown export is generated in the browser from the current state and includes only open comments.
 
-JSON export is the canonical persisted state and is also generated in the browser.
+The markdown export includes:
+- top-level metadata
+- summary counts
+- reviewed-file list
+- findings index
+- grouped detailed sections
+
+JSON export is the canonical persisted review state and is also generated in the browser.
 
 Python does not post-process review state after the artifact is built.
 
 11. Logging and CLI behavior
 
 - `cli.py` configures Rich logging to stderr
-- stdout is reserved for command output and user-facing error lines; successful runs print the written HTML path
+- stdout is reserved for command output and user-facing error lines
+- build commands print the output artifact path
+- serve commands print the served URL, then block in the HTTP server until interrupted
 - `--verbose` enables debug logging and tracebacks
 - `--quiet` reduces logging verbosity
-- longer steps such as local builds and GitHub builds are wrapped in `rich.live.Live` with `Spinner(..., transient=True)` on stderr
+- longer build steps use `rich.live.Live` with `Spinner(..., transient=True)` on stderr
 
 12. Test strategy
 
@@ -164,8 +189,10 @@ Current tests cover:
 - git-aware file enumeration and ignore behavior
 - non-git directory snapshot hashing
 - HTML rendering and safe JSON embedding
+- presence of mobile and preset UI in rendered output
 - local app build flow writing an output artifact
-- CLI build flow writing an output artifact
+- CLI parser/build behavior
+- real local HTTP serving of a generated artifact
 - GitHub clone/fetch/checkout command construction without requiring network access
 
 The test suite stays filesystem-oriented and avoids mocks.

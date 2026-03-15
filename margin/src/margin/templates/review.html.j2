@@ -146,6 +146,34 @@
         display: none;
       }
 
+      .mobile-panel-nav {
+        display: none;
+      }
+
+      .mobile-panel-nav,
+      .section-header,
+      .preset-editor,
+      .preset-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: center;
+      }
+
+      .mobile-panel-nav {
+        padding: 0 1rem 1rem 1rem;
+      }
+
+      .mobile-panel-button {
+        flex: 1 1 0;
+      }
+
+      .mobile-panel-button[aria-pressed="true"] {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
       .layout {
         display: grid;
         grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr) minmax(18rem, 26rem);
@@ -401,9 +429,24 @@
         border-bottom: none;
       }
 
-      .comments-list {
+      .comments-list,
+      .preset-list {
         display: grid;
         gap: 0.75rem;
+      }
+
+      .preset-card,
+      .comment-card {
+        border: 1px solid var(--panel-border);
+        border-radius: 0.8rem;
+        padding: 0.85rem;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      .preset-text {
+        margin: 0;
+        white-space: pre-wrap;
       }
 
       .comment-card {
@@ -451,6 +494,14 @@
         background: color-mix(in srgb, var(--panel) 70%, var(--bg));
       }
 
+      .preset-editor input {
+        flex: 1 1 16rem;
+      }
+
+      .preset-actions {
+        justify-content: space-between;
+      }
+
       .danger-button {
         color: var(--danger);
       }
@@ -462,16 +513,35 @@
 {{ syntax_css }}
 
       @media (max-width: 960px) {
+        .app-header {
+          position: static;
+        }
+
+        .mobile-panel-nav {
+          display: flex;
+          position: sticky;
+          top: 0;
+          z-index: 4;
+          background: var(--bg);
+        }
+
         .layout {
           grid-template-columns: 1fr;
+          gap: 0.75rem;
+          padding-top: 0;
         }
 
         .panel {
           min-height: auto;
         }
 
-        .app-header {
-          position: static;
+        body[data-mobile-panel="files"] .panel[data-panel="code"],
+        body[data-mobile-panel="files"] .panel[data-panel="comments"],
+        body[data-mobile-panel="code"] .panel[data-panel="files"],
+        body[data-mobile-panel="code"] .panel[data-panel="comments"],
+        body[data-mobile-panel="comments"] .panel[data-panel="files"],
+        body[data-mobile-panel="comments"] .panel[data-panel="code"] {
+          display: none;
         }
 
         .line-number {
@@ -493,8 +563,13 @@
         <label class="button-like" for="import-json">Import JSON<input id="import-json" type="file" accept="application/json,.json"></label>
       </div>
     </header>
+    <nav class="mobile-panel-nav" id="mobile-panel-nav" aria-label="Review panels">
+      <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="files" aria-pressed="false">Files</button>
+      <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="code" aria-pressed="true">Code</button>
+      <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="comments" aria-pressed="false">Comments</button>
+    </nav>
     <div class="layout">
-      <aside class="panel">
+      <aside class="panel" data-panel="files">
         <div class="panel-header">
           <h2>Files</h2>
           <div class="file-filters">
@@ -507,7 +582,7 @@
         </div>
         <div id="file-tree"></div>
       </aside>
-      <main class="panel">
+      <main class="panel" data-panel="code">
         <div class="panel-header code-header">
           <div>
             <h2 id="current-file-title">No file selected</h2>
@@ -523,7 +598,7 @@
         </div>
         <div id="code-view"></div>
       </main>
-      <aside class="panel">
+      <aside class="panel" data-panel="comments">
         <section class="composer-section">
           <h2 class="composer-title">Comment composer</h2>
           <div class="helper-text" id="composer-target"></div>
@@ -537,6 +612,17 @@
           </form>
         </section>
         <section class="composer-section">
+          <div class="section-header">
+            <h2>Presets</h2>
+            <div class="helper-text">Stored locally in this browser.</div>
+          </div>
+          <div class="preset-editor">
+            <input type="text" id="new-preset" placeholder="Add preset text">
+            <button type="button" id="add-preset">Add preset</button>
+          </div>
+          <div class="preset-list" id="preset-list"></div>
+        </section>
+        <section class="composer-section">
           <h2>Open comments</h2>
           <div class="comments-list" id="comment-list"></div>
         </section>
@@ -548,8 +634,16 @@
         const snapshot = JSON.parse(document.getElementById("snapshot-data").textContent);
         const fileIndex = new Map(snapshot.files.map((file) => [file.path, file]));
         const storageKey = `margin:${snapshot.snapshotId}`;
+        const presetStorageKey = "margin:presets:v1";
+        const defaultPresets = [
+          "Add type hints to the public interface here and in matching call sites.",
+          "The tests here are too shallow. Replace them with behavior-demonstrating tests.",
+          "This architecture feels heavier than necessary. Simplify the control flow and data shape.",
+          "If this pattern recurs elsewhere, fix it consistently across the repository.",
+        ];
         const ui = {
           addFileComment: document.getElementById("add-file-comment"),
+          addPreset: document.getElementById("add-preset"),
           addRepoComment: document.getElementById("add-repo-comment"),
           cancelComment: document.getElementById("cancel-comment"),
           clearSelection: document.getElementById("clear-selection"),
@@ -567,23 +661,34 @@
           filterCommented: document.getElementById("filter-commented"),
           filterUnreviewed: document.getElementById("filter-unreviewed"),
           importJson: document.getElementById("import-json"),
+          mobilePanelButtons: Array.from(document.querySelectorAll("[data-mobile-panel-button]")),
+          newPreset: document.getElementById("new-preset"),
           pathFilter: document.getElementById("path-filter"),
+          presetList: document.getElementById("preset-list"),
           reviewSummary: document.getElementById("review-summary"),
           reviewedToggle: document.getElementById("reviewed-toggle"),
           selectionSummary: document.getElementById("selection-summary"),
         };
 
         let state = loadState();
+        let presets = loadPresets();
         let currentFilePath = snapshot.files[0]?.path ?? null;
         let pendingRangeStart = null;
         let rangeSelection = null;
         let focusedCommentId = null;
         let composerState = defaultComposerState();
+        let activeMobilePanel = "code";
 
         wireEvents();
         renderAll();
 
         function wireEvents() {
+          ui.mobilePanelButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+              setActiveMobilePanel(button.dataset.panel);
+            });
+          });
+
           ui.addRepoComment.addEventListener("click", () => {
             focusedCommentId = null;
             pendingRangeStart = null;
@@ -599,6 +704,8 @@
             clearForm();
             updateComposerTarget();
             renderFile();
+            setActiveMobilePanel("comments");
+            focusComposer();
           });
 
           ui.addFileComment.addEventListener("click", () => {
@@ -619,6 +726,16 @@
             clearForm();
             updateComposerTarget();
             renderFile();
+            setActiveMobilePanel("comments");
+            focusComposer();
+          });
+
+          ui.addPreset.addEventListener("click", addPresetFromInput);
+          ui.newPreset.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              addPresetFromInput();
+            }
           });
 
           ui.cancelComment.addEventListener("click", () => {
@@ -740,6 +857,32 @@
           }
         }
 
+        function loadPresets() {
+          const stored = window.localStorage.getItem(presetStorageKey);
+          if (!stored) {
+            return [...defaultPresets];
+          }
+          try {
+            return normalizePresets(JSON.parse(stored));
+          } catch (error) {
+            console.warn("Failed to parse saved presets", error);
+            return [...defaultPresets];
+          }
+        }
+
+        function normalizePresets(candidate) {
+          const values = Array.isArray(candidate) ? candidate : defaultPresets;
+          const cleaned = values
+            .filter((value) => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean);
+          return Array.from(new Set(cleaned));
+        }
+
+        function savePresets() {
+          window.localStorage.setItem(presetStorageKey, JSON.stringify(presets));
+        }
+
         function normalizeState(candidate) {
           const base = defaultState();
           if (!candidate || candidate.snapshotId !== snapshot.snapshotId) {
@@ -829,10 +972,26 @@
           resetComposer(false);
           renderTree();
           renderFile();
+          renderPresets();
           renderComments();
           renderSummary();
           updateComposerTarget();
           updateSelectionSummary();
+          setActiveMobilePanel(activeMobilePanel);
+        }
+
+        function setActiveMobilePanel(panel) {
+          activeMobilePanel = panel;
+          document.body.dataset.mobilePanel = panel;
+          ui.mobilePanelButtons.forEach((button) => {
+            button.setAttribute("aria-pressed", button.dataset.panel === panel ? "true" : "false");
+          });
+        }
+
+        function focusComposer() {
+          window.requestAnimationFrame(() => {
+            ui.commentBody.focus();
+          });
         }
 
         function renderSummary() {
@@ -932,6 +1091,7 @@
             renderFile();
             renderComments();
             renderTree();
+            setActiveMobilePanel("code");
           });
           const name = document.createElement("span");
           name.className = "tree-file-name";
@@ -1082,6 +1242,8 @@
           clearForm();
           updateComposerTarget();
           renderFile();
+          setActiveMobilePanel("comments");
+          focusComposer();
         }
 
         function isLineSelected(path, lineNumber) {
@@ -1112,6 +1274,65 @@
           const scratch = document.createElement("div");
           scratch.innerHTML = lines.join("\n");
           return scratch.textContent?.trim() || null;
+        }
+
+        function renderPresets() {
+          ui.presetList.replaceChildren();
+          if (presets.length === 0) {
+            ui.presetList.appendChild(buildEmptyState("No presets yet."));
+            return;
+          }
+          const fragment = document.createDocumentFragment();
+          for (const preset of presets) {
+            const card = document.createElement("article");
+            card.className = "preset-card";
+            const text = document.createElement("p");
+            text.className = "preset-text";
+            text.textContent = preset;
+            const actions = document.createElement("div");
+            actions.className = "preset-actions";
+            actions.append(
+              buildCardButton("Use", () => usePreset(preset)),
+              buildCardButton("Delete", () => deletePreset(preset), "danger-button"),
+            );
+            card.append(text, actions);
+            fragment.appendChild(card);
+          }
+          ui.presetList.appendChild(fragment);
+        }
+
+        function addPresetFromInput() {
+          const value = ui.newPreset.value.trim();
+          if (!value) {
+            return;
+          }
+          presets = normalizePresets([...presets, value]);
+          savePresets();
+          ui.newPreset.value = "";
+          renderPresets();
+        }
+
+        function usePreset(preset) {
+          const trimmed = preset.trim();
+          if (!trimmed) {
+            return;
+          }
+          if (!ui.commentBody.value.trim()) {
+            ui.commentBody.value = trimmed;
+          } else if (!ui.commentBody.value.includes(trimmed)) {
+            ui.commentBody.value = `${ui.commentBody.value.trim()}\n\n${trimmed}`;
+          }
+          setActiveMobilePanel("comments");
+          focusComposer();
+        }
+
+        function deletePreset(preset) {
+          if (!window.confirm("Delete this preset?")) {
+            return;
+          }
+          presets = presets.filter((value) => value !== preset);
+          savePresets();
+          renderPresets();
         }
 
         function renderComments() {
@@ -1229,6 +1450,7 @@
           renderFile();
           renderComments();
           updateSelectionSummary();
+          setActiveMobilePanel(comment.scope === "range" ? "code" : "comments");
           if (comment.scope === "range") {
             window.requestAnimationFrame(() => scrollToLine(comment.startLine));
           }
@@ -1262,6 +1484,8 @@
           renderComments();
           updateComposerTarget();
           updateSelectionSummary();
+          setActiveMobilePanel("comments");
+          focusComposer();
         }
 
         function deleteComment(commentId) {
@@ -1284,6 +1508,7 @@
           renderFile();
           renderComments();
           renderSummary();
+          setActiveMobilePanel("comments");
         }
 
         function saveComment() {
@@ -1321,6 +1546,7 @@
           renderFile();
           renderComments();
           renderSummary();
+          setActiveMobilePanel("comments");
         }
 
         function resetComposer(clearInputs = true) {
@@ -1385,39 +1611,108 @@
         }
 
         function buildMarkdownReport() {
+          const comments = sortComments(state.comments);
+          const repositoryComments = comments.filter((comment) => comment.scope === "repo");
+          const scopedComments = comments.filter((comment) => comment.path);
+          const commentsByPath = new Map();
+          for (const comment of scopedComments) {
+            const pathComments = commentsByPath.get(comment.path) || [];
+            pathComments.push(comment);
+            commentsByPath.set(comment.path, pathComments);
+          }
           const lines = [
             `# ${snapshot.title}`,
             "",
             `source: ${snapshot.sourceLabel}`,
             `snapshot: ${snapshot.snapshotId}`,
             `generated_at: ${snapshot.generatedAt}`,
-            `comment_count: ${state.comments.length}`,
+            `exported_at: ${new Date().toISOString()}`,
+            `file_count: ${snapshot.files.length}`,
+            `reviewed_files: ${state.reviewedFiles.length}`,
+            `comment_count: ${comments.length}`,
+            "",
+            "## Summary",
+            "",
+            `- ${repositoryComments.length} repository comments`,
+            `- ${comments.filter((comment) => comment.scope === "file").length} file comments`,
+            `- ${comments.filter((comment) => comment.scope === "range").length} range comments`,
             "",
           ];
-          for (const comment of sortComments(state.comments)) {
-            lines.push(`## ${comment.id}`);
-            lines.push(`scope: ${comment.scope}`);
-            if (comment.path) {
-              lines.push(`path: ${comment.path}`);
-            }
-            if (comment.scope === "range") {
-              lines.push(`lines: ${comment.startLine}-${comment.endLine}`);
-            }
-            if (comment.title) {
-              lines.push(`title: ${comment.title}`);
-            }
+
+          if (state.reviewedFiles.length > 0) {
+            lines.push("## Reviewed files");
             lines.push("");
-            lines.push(comment.body);
-            if (comment.excerpt) {
-              lines.push("");
-              lines.push("excerpt:");
-              lines.push("~~~");
-              lines.push(comment.excerpt);
-              lines.push("~~~");
+            for (const path of [...state.reviewedFiles].sort()) {
+              lines.push(`- ${path}`);
             }
             lines.push("");
           }
-          return lines.join("\n");
+
+          if (comments.length > 0) {
+            lines.push("## Findings index");
+            lines.push("");
+            for (const comment of comments) {
+              lines.push(`- ${buildMarkdownIndexLine(comment)}`);
+            }
+            lines.push("");
+          }
+
+          if (repositoryComments.length > 0) {
+            lines.push("## Repository comments");
+            lines.push("");
+            for (const comment of repositoryComments) {
+              appendMarkdownComment(lines, comment, 3);
+            }
+          }
+
+          for (const path of Array.from(commentsByPath.keys()).sort()) {
+            lines.push(`## ${path}`);
+            lines.push("");
+            for (const comment of sortComments(commentsByPath.get(path) || [])) {
+              appendMarkdownComment(lines, comment, 3);
+            }
+          }
+
+          return `${lines.join("\n").trimEnd()}\n`;
+        }
+
+        function buildMarkdownIndexLine(comment) {
+          const title = comment.title || deriveCommentTitle(comment);
+          if (comment.scope === "repo") {
+            return `${comment.id} — repository — ${title}`;
+          }
+          if (comment.scope === "file") {
+            return `${comment.id} — ${comment.path} — ${title}`;
+          }
+          return `${comment.id} — ${comment.path}:${comment.startLine}-${comment.endLine} — ${title}`;
+        }
+
+        function appendMarkdownComment(lines, comment, headingLevel) {
+          lines.push(`${"#".repeat(headingLevel)} ${buildMarkdownCommentHeading(comment)}`);
+          lines.push(`scope: ${comment.scope}`);
+          if (comment.path) {
+            lines.push(`path: ${comment.path}`);
+          }
+          if (comment.scope === "range") {
+            lines.push(`lines: ${comment.startLine}-${comment.endLine}`);
+          }
+          lines.push(`created_at: ${comment.createdAt}`);
+          lines.push(`updated_at: ${comment.updatedAt}`);
+          lines.push("");
+          lines.push(comment.body);
+          if (comment.excerpt) {
+            lines.push("");
+            lines.push("excerpt:");
+            lines.push("~~~");
+            lines.push(comment.excerpt);
+            lines.push("~~~");
+          }
+          lines.push("");
+        }
+
+        function buildMarkdownCommentHeading(comment) {
+          const title = comment.title || deriveCommentTitle(comment);
+          return `${comment.id} — ${title}`;
         }
 
         function makeFileStem() {

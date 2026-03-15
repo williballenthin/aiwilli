@@ -14,16 +14,28 @@ The primary use case is solo review of a full repository snapshot, not pull-requ
 Commands:
 - `margin build <path> --output <review.html> [options]`
 - `margin build-github <owner>/<repo> --output <review.html> [options]`
+- `margin serve <path> [options]`
+- `margin serve-github <owner>/<repo> [options]`
 
-Shared option behavior:
-- `--title <title>` overrides the document title
-- `--open` opens the generated HTML in the default browser after writing it
-- `--verbose` enables debug logging
+Shared options:
+- `--title <title>` overrides the review title
+- `--open` opens the generated review in the default browser
+- `--verbose` enables debug logging and tracebacks
 - `--quiet` reduces logging to errors only
+
+Build command behavior:
+- `--output <review.html>` is required
 - successful commands print the written HTML path to stdout
 
-GitHub mode options:
+GitHub command behavior:
 - `--ref <ref>` checks out a specific branch, tag, or commit before snapshot generation
+
+Serve command behavior:
+- `--host <host>` sets the HTTP bind host and defaults to `127.0.0.1`
+- `--port <port>` sets the HTTP bind port and defaults to `5174`
+- `--output-dir <dir>` optionally keeps the generated `review.html` in a persistent directory before serving it
+- without `--output-dir`, Margin uses a temporary directory for the served artifact
+- successful serve commands print the served review URL to stdout and keep running until interrupted
 
 3. Required runtime environment
 
@@ -48,8 +60,9 @@ GitHub mode also requires:
 - if `--ref` is given, Margin reviews that ref; otherwise it reviews the repository default branch
 - the temporary checkout is internal implementation detail and is not part of the exported review artifact
 
-5. Output artifact
+5. Output artifacts
 
+5.1 Static artifact
 Margin generates one self-contained HTML file.
 
 The file contains:
@@ -59,7 +72,10 @@ The file contains:
 - inline CSS and JavaScript
 - embedded code content for all included files
 
-The artifact must be usable without a server after generation.
+The artifact is usable without a server after generation.
+
+5.2 Served artifact
+Serve commands generate the same static HTML artifact and then expose it over a lightweight local HTTP server.
 
 6. Repository inclusion rules
 
@@ -71,22 +87,22 @@ The artifact must be usable without a server after generation.
 
 7. Review model
 
-6.1 Snapshot scope
+7.1 Snapshot scope
 - each review is tied to exactly one snapshot
 - comments are only guaranteed to remain valid for that exact snapshot
 - Margin does not attempt to migrate comments across changed code in the first version
 
-6.2 Comment scopes
+7.2 Comment scopes
 Margin supports three comment scopes:
 - repository comment
 - file comment
 - line-range comment
 
-6.3 Comment identity
+7.3 Comment identity
 - each comment has a stable review-local identifier such as `RV-001`
 - identifiers persist through local autosave and JSON export/import within the same snapshot
 
-6.4 Comment content
+7.4 Comment content
 Each comment stores:
 - identifier
 - scope
@@ -99,23 +115,24 @@ Each comment stores:
 
 8. Review UI behavior
 
-7.1 Desktop layout
+8.1 Desktop layout
 The generated HTML presents three primary areas:
 - a left file browser tree
 - a central code pane
 - a right review sidebar
 
-7.2 Mobile layout
-The generated HTML is responsive and supports full review authoring on iPhone-sized screens.
+8.2 Mobile layout
+The generated HTML supports full review authoring on iPhone-sized screens.
 
-The mobile layout may stack or collapse panels, but it must still allow:
-- file navigation
-- line-range selection
-- comment creation and deletion
-- file review toggling
-- markdown and JSON export
+The mobile layout uses an explicit panel switcher with Files, Code, and Comments views. Users can still:
+- navigate files
+- select line ranges
+- create, edit, and delete comments
+- mark files reviewed
+- export markdown and JSON
+- use comment presets
 
-7.3 File browser behavior
+8.3 File browser behavior
 - shows repository folders and files
 - shows comment counts per file
 - shows whether a file has been marked reviewed
@@ -123,26 +140,31 @@ The mobile layout may stack or collapse panels, but it must still allow:
 - supports filtering to commented files only
 - supports filtering to unreviewed files only
 
-7.4 Code pane behavior
+8.4 Code pane behavior
 - shows one file at a time
 - shows syntax-highlighted code and line numbers
 - shows existing comment markers and highlighted commented ranges
 - supports line-based range selection by choosing a start line and an end line
 - supports file-level review actions such as adding a file comment and marking the file reviewed
 
-7.5 Sidebar behavior
+8.5 Sidebar behavior
 - shows the active comment composer
+- shows browser-local comment presets and lets the user add or delete presets
 - shows repository comments plus comments relevant to the current file
 - supports editing and deleting existing comments
 
 9. Persistence behavior
 
-8.1 Local autosave
+9.1 Local autosave
 - review state is automatically stored in browser local storage
 - the storage key is derived from the snapshot identifier
 - reopening the same HTML artifact restores the saved review state for that snapshot on that browser
 
-8.2 Review import/export
+9.2 Preset storage
+- comment presets are stored in browser local storage
+- presets are browser-local and not tied to one snapshot
+
+9.3 Review import/export
 - users can export the current review state as JSON
 - users can import a previously exported JSON review state into the same snapshot
 - JSON import into a different snapshot is rejected
@@ -151,6 +173,13 @@ The mobile layout may stack or collapse panels, but it must still allow:
 
 The generated review UI supports download of a markdown report containing open comments only.
 
+The markdown report includes:
+- review metadata
+- a summary section with comment counts by scope
+- reviewed file listing when present
+- a findings index
+- detailed comment sections grouped by repository scope and file path
+
 Each exported comment includes:
 - the stable comment identifier
 - scope
@@ -158,6 +187,7 @@ Each exported comment includes:
 - title when present
 - body text
 - excerpt when present
+- creation and update timestamps
 
 The markdown is intended to be directly pasted into or referenced from a coding-agent session.
 
@@ -177,4 +207,3 @@ Expected search behavior:
 - symbol-aware or AST-aware anchors
 - comment migration across snapshots
 - repository-wide full-text search beyond visible browser content
-- built-in long-running server mode
