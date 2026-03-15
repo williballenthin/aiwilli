@@ -27,7 +27,7 @@ def test_render_review_document_escapes_embedded_snapshot_json() -> None:
     assert "Demo review" in document
 
 
-def test_render_review_document_includes_mobile_and_preset_ui() -> None:
+def test_render_review_document_includes_mobile_and_notes_ui() -> None:
     snapshot = SourceSnapshot(
         title="Demo review",
         source_kind="local",
@@ -46,8 +46,10 @@ def test_render_review_document_includes_mobile_and_preset_ui() -> None:
     document = render_review_document(snapshot)
 
     assert 'id="mobile-panel-nav"' in document
-    assert 'id="preset-list"' in document
-    assert 'id="new-preset"' in document
+    assert 'id="toggle-comments-pane"' in document
+    assert 'id="file-note-list"' in document
+    assert 'id="new-preset"' not in document
+    assert 'id="comment-title"' not in document
 
 
 def test_render_review_document_uses_theme_aware_syntax_palette() -> None:

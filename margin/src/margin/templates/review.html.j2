@@ -138,8 +138,8 @@
         flex-wrap: wrap;
         align-items: flex-start;
         justify-content: space-between;
-        gap: 1rem;
-        padding: 1rem 1.25rem;
+        gap: 0.85rem;
+        padding: 0.8rem 0.95rem;
         border-bottom: 1px solid var(--panel-border);
         background: var(--panel);
         position: sticky;
@@ -149,7 +149,7 @@
 
       .app-title {
         margin: 0;
-        font-size: 1.1rem;
+        font-size: 1.05rem;
       }
 
       .app-meta,
@@ -184,20 +184,15 @@
 
       .mobile-panel-nav {
         display: none;
+        padding: 0 1rem 1rem 1rem;
       }
 
-      .mobile-panel-nav,
       .section-header,
-      .preset-editor,
-      .preset-actions {
+      .file-panel-tools {
         display: flex;
         flex-wrap: wrap;
         gap: 0.6rem;
         align-items: center;
-      }
-
-      .mobile-panel-nav {
-        padding: 0 1rem 1rem 1rem;
       }
 
       .mobile-panel-button {
@@ -212,10 +207,14 @@
 
       .layout {
         display: grid;
-        grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr) minmax(18rem, 26rem);
+        grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
         gap: 1rem;
         padding: 1rem;
         align-items: start;
+      }
+
+      body[data-comments-pane="open"] .layout {
+        grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr) minmax(18rem, 22rem);
       }
 
       .panel {
@@ -226,9 +225,17 @@
         min-height: 70vh;
       }
 
+      .panel[data-panel="comments"] {
+        display: none;
+      }
+
+      body[data-comments-pane="open"] .panel[data-panel="comments"] {
+        display: block;
+      }
+
       .panel-header,
       .panel-body {
-        padding: 1rem;
+        padding: 0.85rem 0.95rem;
       }
 
       .panel-header {
@@ -237,7 +244,46 @@
 
       .panel h2,
       .panel h3 {
-        margin-top: 0;
+        margin: 0;
+      }
+
+      .section-header {
+        justify-content: space-between;
+      }
+
+      .compact-button,
+      .compact-details summary,
+      .compact-details[open] summary {
+        padding: 0.42rem 0.7rem;
+        border-radius: 0.55rem;
+      }
+
+      .compact-details {
+        position: relative;
+      }
+
+      .compact-details summary {
+        list-style: none;
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        cursor: pointer;
+        color: var(--text);
+      }
+
+      .compact-details summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .compact-details[open] summary {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .compact-details-panel {
+        margin-top: 0.7rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--panel-border);
       }
 
       .file-filters {
@@ -260,7 +306,7 @@
       }
 
       #file-tree {
-        padding: 0.25rem 1rem 1rem 1rem;
+        padding: 0.15rem 0.95rem 0.95rem 0.95rem;
       }
 
       .tree-folder,
@@ -306,7 +352,7 @@
         justify-content: space-between;
         align-items: center;
         gap: 0.6rem;
-        padding: 0.4rem 0.5rem;
+        padding: 0.35rem 0.45rem;
         border-radius: 0.55rem;
         text-align: left;
       }
@@ -354,37 +400,66 @@
 
       .code-header {
         display: grid;
-        gap: 0.8rem;
+        gap: 0.7rem;
+      }
+
+      .code-header-main {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 0.75rem;
+        align-items: start;
       }
 
       .selection-summary {
-        border: 1px dashed var(--panel-border);
-        border-radius: 0.7rem;
-        padding: 0.7rem 0.8rem;
-        color: var(--muted);
+        display: none;
+        padding: 0.5rem 0.7rem;
+        border-radius: 0.65rem;
+        background: var(--selection-soft);
+        color: var(--text);
+        font-size: 0.92rem;
       }
 
       .selection-summary.active {
-        background: var(--selection-soft);
-        color: var(--text);
-        border-style: solid;
+        display: block;
+      }
+
+      .note-stack {
+        display: grid;
+        gap: 0.65rem;
+        padding: 0.9rem 0.95rem;
+        border-bottom: 1px solid var(--panel-border);
+        background: color-mix(in srgb, var(--panel) 86%, var(--bg));
+      }
+
+      .notes-heading {
+        color: var(--muted);
+        font-size: 0.88rem;
       }
 
       #code-view {
-        padding: 0.75rem 0.85rem 1rem 0.85rem;
+        padding: 0;
         border-top: 1px solid var(--panel-border);
         background: var(--code-bg);
         border-bottom-left-radius: 0.9rem;
         border-bottom-right-radius: 0.9rem;
+        overflow: auto;
+      }
+
+      .code-lines {
+        width: max-content;
+        min-width: 100%;
+        padding: 0.55rem 0;
       }
 
       .code-row {
+        width: max-content;
+        min-width: 100%;
         display: grid;
         grid-template-columns: auto auto minmax(0, 1fr);
         gap: 0.55rem;
         align-items: start;
-        padding: 0.08rem 0.3rem;
-        border-radius: 0.45rem;
+        padding: 0;
       }
 
       .code-row:not(.selected):not(.commented):hover {
@@ -393,26 +468,28 @@
 
       .code-row.selected {
         background: var(--selection-soft);
+        box-shadow: inset 3px 0 0 var(--accent);
       }
 
       .code-row.commented {
         background: var(--comment-soft);
+        box-shadow: inset 3px 0 0 var(--comment);
       }
 
       .line-number,
       .comment-marker,
       .comment-marker-spacer {
-        margin-top: 0.05rem;
+        margin-top: 0;
       }
 
       .line-number {
         border: none;
         background: transparent;
         color: var(--muted);
-        min-width: 3rem;
-        padding: 0.1rem 0.4rem;
+        min-width: 3.2rem;
+        padding: 0.15rem 0.5rem;
         text-align: right;
-        border-radius: 0.35rem;
+        border-radius: 0;
       }
 
       .line-number:hover {
@@ -422,11 +499,12 @@
 
       .comment-marker,
       .comment-marker-spacer {
-        width: 1.85rem;
-        min-height: 1.8rem;
+        width: 1.7rem;
+        min-height: 1.7rem;
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        margin-top: 0.1rem;
       }
 
       .comment-marker {
@@ -434,7 +512,7 @@
         background: var(--comment-soft);
         color: var(--comment);
         border-radius: 999px;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
       }
 
       .comment-marker:hover {
@@ -444,11 +522,19 @@
       .line-code {
         white-space: pre;
         font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-        font-size: 0.93rem;
-        overflow-x: auto;
-        padding: 0.1rem 0;
+        font-size: 0.92rem;
+        line-height: 1.5;
+        overflow: visible;
+        padding: 0.12rem 1rem 0.12rem 0;
         color: var(--code-text);
         font-variant-ligatures: none;
+      }
+
+      .inline-thread {
+        margin: 0.15rem 0 0.45rem 5.45rem;
+        padding-right: 1rem;
+        display: grid;
+        gap: 0.55rem;
       }
 
       .empty-state {
@@ -463,12 +549,8 @@
         gap: 0.75rem;
       }
 
-      .composer-title {
-        margin-bottom: 0.25rem;
-      }
-
       .composer-section {
-        padding: 1rem;
+        padding: 0.95rem;
         border-bottom: 1px solid var(--panel-border);
       }
 
@@ -476,32 +558,18 @@
         border-bottom: none;
       }
 
-      .comments-list,
-      .preset-list {
+      .comments-list {
         display: grid;
         gap: 0.75rem;
       }
 
-      .preset-card,
       .comment-card {
         border: 1px solid var(--panel-border);
         border-radius: 0.8rem;
-        padding: 0.85rem;
+        padding: 0.8rem;
         display: grid;
-        gap: 0.6rem;
-      }
-
-      .preset-text {
-        margin: 0;
-        white-space: pre-wrap;
-      }
-
-      .comment-card {
-        border: 1px solid var(--panel-border);
-        border-radius: 0.8rem;
-        padding: 0.85rem;
-        display: grid;
-        gap: 0.6rem;
+        gap: 0.55rem;
+        background: var(--panel);
       }
 
       .comment-card.focused {
@@ -516,14 +584,14 @@
         align-items: start;
       }
 
+      .comment-heading {
+        display: grid;
+        gap: 0.2rem;
+      }
+
       .comment-id {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         color: var(--accent);
-      }
-
-      .comment-title {
-        margin: 0;
-        font-size: 1rem;
       }
 
       .comment-body {
@@ -541,16 +609,15 @@
         background: color-mix(in srgb, var(--panel) 70%, var(--bg));
       }
 
-      .preset-editor input {
-        flex: 1 1 16rem;
-      }
-
-      .preset-actions {
-        justify-content: space-between;
-      }
-
       .danger-button {
         color: var(--danger);
+      }
+
+      .comments-pane-title {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        align-items: center;
       }
 
       .hidden {
@@ -572,13 +639,17 @@
           background: var(--bg);
         }
 
-        .layout {
+        .layout,
+        body[data-comments-pane="open"] .layout {
           grid-template-columns: 1fr;
           gap: 0.75rem;
           padding-top: 0;
         }
 
-        .panel {
+        .panel,
+        .panel[data-panel="comments"],
+        body[data-comments-pane="open"] .panel[data-panel="comments"] {
+          display: block;
           min-height: auto;
         }
 
@@ -589,6 +660,14 @@
         body[data-mobile-panel="comments"] .panel[data-panel="files"],
         body[data-mobile-panel="comments"] .panel[data-panel="code"] {
           display: none;
+        }
+
+        .comment-header {
+          flex-direction: column;
+        }
+
+        .inline-thread {
+          margin-left: 3.9rem;
         }
 
         .line-number {
@@ -602,12 +681,14 @@
       <div>
         <h1 class="app-title">{{ page_title }}</h1>
         <div class="app-meta">{{ source_label }} · snapshot {{ snapshot_id }} · generated {{ generated_at }} · {{ file_count }} files</div>
+        <div class="helper-text" id="review-summary"></div>
       </div>
       <div class="header-actions">
-        <button type="button" id="add-repo-comment">Add repo comment</button>
-        <button type="button" id="export-markdown">Export markdown</button>
-        <button type="button" id="export-json">Export JSON</button>
-        <label class="button-like" for="import-json">Import JSON<input id="import-json" type="file" accept="application/json,.json"></label>
+        <button type="button" class="compact-button" id="add-repo-comment">Repo note</button>
+        <button type="button" class="compact-button" id="toggle-comments-pane">Notes</button>
+        <button type="button" class="compact-button" id="export-markdown">Export markdown</button>
+        <button type="button" class="compact-button" id="export-json">Export JSON</button>
+        <label class="button-like compact-button" for="import-json">Import JSON<input id="import-json" type="file" accept="application/json,.json"></label>
       </div>
     </header>
     <nav class="mobile-panel-nav" id="mobile-panel-nav" aria-label="Review panels">
@@ -618,59 +699,57 @@
     <div class="layout">
       <aside class="panel" data-panel="files">
         <div class="panel-header">
-          <h2>Files</h2>
-          <div class="file-filters">
-            <input type="text" id="path-filter" placeholder="Filter paths">
-            <div class="toggle-row">
-              <label><input type="checkbox" id="filter-commented"> Commented only</label>
-              <label><input type="checkbox" id="filter-unreviewed"> Unreviewed only</label>
-            </div>
+          <div class="section-header">
+            <h2>Files</h2>
+            <details class="compact-details" id="file-filter-details">
+              <summary>Filter</summary>
+              <div class="compact-details-panel file-filters">
+                <input type="text" id="path-filter" placeholder="Filter paths">
+                <div class="toggle-row">
+                  <label><input type="checkbox" id="filter-commented"> Commented only</label>
+                  <label><input type="checkbox" id="filter-unreviewed"> Unreviewed only</label>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
         <div id="file-tree"></div>
       </aside>
       <main class="panel" data-panel="code">
         <div class="panel-header code-header">
-          <div>
-            <h2 id="current-file-title">No file selected</h2>
-            <div class="file-meta" id="current-file-meta"></div>
-          </div>
-          <div class="code-actions">
-            <button type="button" id="add-file-comment">Add file comment</button>
-            <label class="review-toggle"><input type="checkbox" id="reviewed-toggle"> Mark reviewed</label>
-            <button type="button" id="clear-selection">Clear selection</button>
+          <div class="code-header-main">
+            <div>
+              <h2 id="current-file-title">No file selected</h2>
+              <div class="file-meta" id="current-file-meta"></div>
+            </div>
+            <div class="code-actions">
+              <button type="button" class="compact-button" id="add-file-comment">File note</button>
+              <label class="review-toggle"><input type="checkbox" id="reviewed-toggle"> Reviewed</label>
+              <button type="button" class="compact-button hidden" id="clear-selection">Clear</button>
+            </div>
           </div>
           <div class="selection-summary" id="selection-summary">Choose a line number to start a range. Choose another line number to finish it.</div>
-          <div class="summary-row helper-text" id="review-summary"></div>
         </div>
+        <div class="note-stack hidden" id="file-note-list"></div>
         <div id="code-view"></div>
       </main>
       <aside class="panel" data-panel="comments">
         <section class="composer-section">
-          <h2 class="composer-title">Comment composer</h2>
+          <div class="comments-pane-title">
+            <h2 id="comments-pane-heading">New note</h2>
+            <button type="button" class="compact-button" id="close-comments-pane">Close</button>
+          </div>
           <div class="helper-text" id="composer-target"></div>
           <form id="comment-form" class="composer">
-            <input type="text" id="comment-title" placeholder="Optional title">
-            <textarea id="comment-body" placeholder="Write your review comment here"></textarea>
+            <textarea id="comment-body" placeholder="Write your review note here"></textarea>
             <div class="composer-actions">
-              <button type="submit" id="save-comment">Save comment</button>
-              <button type="button" id="cancel-comment">Reset composer</button>
+              <button type="submit" id="save-comment">Save note</button>
+              <button type="button" id="cancel-comment">Clear</button>
             </div>
           </form>
         </section>
         <section class="composer-section">
-          <div class="section-header">
-            <h2>Presets</h2>
-            <div class="helper-text">Stored locally in this browser.</div>
-          </div>
-          <div class="preset-editor">
-            <input type="text" id="new-preset" placeholder="Add preset text">
-            <button type="button" id="add-preset">Add preset</button>
-          </div>
-          <div class="preset-list" id="preset-list"></div>
-        </section>
-        <section class="composer-section">
-          <h2>Open comments</h2>
+          <h2>Current view</h2>
           <div class="comments-list" id="comment-list"></div>
         </section>
       </aside>
@@ -681,50 +760,43 @@
         const snapshot = JSON.parse(document.getElementById("snapshot-data").textContent);
         const fileIndex = new Map(snapshot.files.map((file) => [file.path, file]));
         const storageKey = `margin:${snapshot.snapshotId}`;
-        const presetStorageKey = "margin:presets:v1";
-        const defaultPresets = [
-          "Add type hints to the public interface here and in matching call sites.",
-          "The tests here are too shallow. Replace them with behavior-demonstrating tests.",
-          "This architecture feels heavier than necessary. Simplify the control flow and data shape.",
-          "If this pattern recurs elsewhere, fix it consistently across the repository.",
-        ];
         const ui = {
           addFileComment: document.getElementById("add-file-comment"),
-          addPreset: document.getElementById("add-preset"),
           addRepoComment: document.getElementById("add-repo-comment"),
           cancelComment: document.getElementById("cancel-comment"),
           clearSelection: document.getElementById("clear-selection"),
+          closeCommentsPane: document.getElementById("close-comments-pane"),
           codeView: document.getElementById("code-view"),
           commentBody: document.getElementById("comment-body"),
           commentForm: document.getElementById("comment-form"),
           commentList: document.getElementById("comment-list"),
-          commentTitle: document.getElementById("comment-title"),
+          commentsPaneHeading: document.getElementById("comments-pane-heading"),
           composerTarget: document.getElementById("composer-target"),
           currentFileMeta: document.getElementById("current-file-meta"),
           currentFileTitle: document.getElementById("current-file-title"),
           exportJson: document.getElementById("export-json"),
           exportMarkdown: document.getElementById("export-markdown"),
+          fileNoteList: document.getElementById("file-note-list"),
           fileTree: document.getElementById("file-tree"),
           filterCommented: document.getElementById("filter-commented"),
           filterUnreviewed: document.getElementById("filter-unreviewed"),
           importJson: document.getElementById("import-json"),
           mobilePanelButtons: Array.from(document.querySelectorAll("[data-mobile-panel-button]")),
-          newPreset: document.getElementById("new-preset"),
           pathFilter: document.getElementById("path-filter"),
-          presetList: document.getElementById("preset-list"),
           reviewSummary: document.getElementById("review-summary"),
           reviewedToggle: document.getElementById("reviewed-toggle"),
           selectionSummary: document.getElementById("selection-summary"),
+          toggleCommentsPane: document.getElementById("toggle-comments-pane"),
         };
 
         let state = loadState();
-        let presets = loadPresets();
         let currentFilePath = snapshot.files[0]?.path ?? null;
         let pendingRangeStart = null;
         let rangeSelection = null;
         let focusedCommentId = null;
         let composerState = defaultComposerState();
         let activeMobilePanel = "code";
+        let isCommentsPaneOpen = false;
 
         wireEvents();
         renderAll();
@@ -751,6 +823,8 @@
             clearForm();
             updateComposerTarget();
             renderFile();
+            renderComments();
+            setCommentsPaneOpen(true);
             setActiveMobilePanel("comments");
             focusComposer();
           });
@@ -773,30 +847,39 @@
             clearForm();
             updateComposerTarget();
             renderFile();
+            renderComments();
+            setCommentsPaneOpen(true);
             setActiveMobilePanel("comments");
             focusComposer();
           });
 
-          ui.addPreset.addEventListener("click", addPresetFromInput);
-          ui.newPreset.addEventListener("keydown", (event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              addPresetFromInput();
+          ui.toggleCommentsPane.addEventListener("click", () => {
+            if (!isCommentsPaneOpen) {
+              renderComments();
             }
+            setCommentsPaneOpen(!isCommentsPaneOpen);
+          });
+
+          ui.closeCommentsPane.addEventListener("click", () => {
+            setCommentsPaneOpen(false);
           });
 
           ui.cancelComment.addEventListener("click", () => {
             resetComposer();
+            setCommentsPaneOpen(false);
             renderFile();
+            renderComments();
           });
 
           ui.clearSelection.addEventListener("click", () => {
             pendingRangeStart = null;
             rangeSelection = null;
             if (composerState.scope === "range" && composerState.editId === null) {
-              resetComposer();
+              resetComposer(false);
+              setCommentsPaneOpen(false);
             }
             renderFile();
+            renderComments();
             updateSelectionSummary();
           });
 
@@ -904,30 +987,10 @@
           }
         }
 
-        function loadPresets() {
-          const stored = window.localStorage.getItem(presetStorageKey);
-          if (!stored) {
-            return [...defaultPresets];
-          }
-          try {
-            return normalizePresets(JSON.parse(stored));
-          } catch (error) {
-            console.warn("Failed to parse saved presets", error);
-            return [...defaultPresets];
-          }
-        }
-
-        function normalizePresets(candidate) {
-          const values = Array.isArray(candidate) ? candidate : defaultPresets;
-          const cleaned = values
-            .filter((value) => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean);
-          return Array.from(new Set(cleaned));
-        }
-
-        function savePresets() {
-          window.localStorage.setItem(presetStorageKey, JSON.stringify(presets));
+        function setCommentsPaneOpen(isOpen) {
+          isCommentsPaneOpen = isOpen;
+          document.body.dataset.commentsPane = isOpen ? "open" : "closed";
+          ui.toggleCommentsPane.textContent = isOpen ? "Hide notes" : `Notes (${state.comments.length})`;
         }
 
         function normalizeState(candidate) {
@@ -1019,11 +1082,11 @@
           resetComposer(false);
           renderTree();
           renderFile();
-          renderPresets();
           renderComments();
           renderSummary();
           updateComposerTarget();
           updateSelectionSummary();
+          setCommentsPaneOpen(false);
           setActiveMobilePanel(activeMobilePanel);
         }
 
@@ -1046,6 +1109,7 @@
           const totalFiles = snapshot.files.length;
           const commentCount = state.comments.length;
           ui.reviewSummary.textContent = `${commentCount} open comments · ${reviewedCount}/${totalFiles} files reviewed`;
+          ui.toggleCommentsPane.textContent = isCommentsPaneOpen ? "Hide notes" : `Notes (${commentCount})`;
         }
 
         function renderTree() {
@@ -1138,6 +1202,7 @@
             renderFile();
             renderComments();
             renderTree();
+            setCommentsPaneOpen(false);
             setActiveMobilePanel("code");
           });
           const name = document.createElement("span");
@@ -1193,6 +1258,7 @@
 
         function renderFile() {
           ui.codeView.replaceChildren();
+          renderFileNotes();
           if (!currentFilePath) {
             ui.currentFileTitle.textContent = "No file selected";
             ui.currentFileMeta.textContent = "";
@@ -1214,7 +1280,8 @@
             updateSelectionSummary();
             return;
           }
-          const fragment = document.createDocumentFragment();
+          const codeLines = document.createElement("div");
+          codeLines.className = "code-lines";
           for (let index = 0; index < file.lines.length; index += 1) {
             const lineNumber = index + 1;
             const row = document.createElement("div");
@@ -1240,10 +1307,38 @@
             lineCode.innerHTML = file.lines[index] || "&nbsp;";
 
             row.append(lineNumberButton, commentMarker, lineCode);
-            fragment.appendChild(row);
+            codeLines.appendChild(row);
+
+            const anchoredComments = getRangeCommentsEndingAtLine(currentFilePath, lineNumber);
+            if (anchoredComments.length > 0) {
+              codeLines.appendChild(buildInlineThread(anchoredComments));
+            }
           }
-          ui.codeView.appendChild(fragment);
+          ui.codeView.appendChild(codeLines);
           updateSelectionSummary();
+        }
+
+        function renderFileNotes() {
+          ui.fileNoteList.replaceChildren();
+          if (!currentFilePath) {
+            ui.fileNoteList.classList.add("hidden");
+            return;
+          }
+          const fileComments = sortComments(
+            state.comments.filter((comment) => comment.scope === "file" && comment.path === currentFilePath),
+          );
+          if (fileComments.length === 0) {
+            ui.fileNoteList.classList.add("hidden");
+            return;
+          }
+          ui.fileNoteList.classList.remove("hidden");
+          const heading = document.createElement("div");
+          heading.className = "notes-heading";
+          heading.textContent = fileComments.length === 1 ? "1 file note" : `${fileComments.length} file notes`;
+          ui.fileNoteList.appendChild(heading);
+          for (const comment of fileComments) {
+            ui.fileNoteList.appendChild(buildCommentCard(comment, { showFocus: false }));
+          }
         }
 
         function buildCommentMarker(comments) {
@@ -1260,6 +1355,15 @@
           const spacer = document.createElement("span");
           spacer.className = "comment-marker-spacer";
           return spacer;
+        }
+
+        function buildInlineThread(comments) {
+          const thread = document.createElement("div");
+          thread.className = "inline-thread";
+          for (const comment of comments) {
+            thread.appendChild(buildCommentCard(comment, { showFocus: false }));
+          }
+          return thread;
         }
 
         function handleLineSelection(lineNumber) {
@@ -1289,6 +1393,8 @@
           clearForm();
           updateComposerTarget();
           renderFile();
+          renderComments();
+          setCommentsPaneOpen(true);
           setActiveMobilePanel("comments");
           focusComposer();
         }
@@ -1315,6 +1421,15 @@
           );
         }
 
+        function getRangeCommentsEndingAtLine(path, lineNumber) {
+          return sortComments(
+            state.comments.filter(
+              (comment) =>
+                comment.scope === "range" && comment.path === path && comment.endLine === lineNumber,
+            ),
+          );
+        }
+
         function getSelectedExcerpt(path, startLine, endLine) {
           const file = fileIndex.get(path);
           const lines = file.lines.slice(startLine - 1, endLine);
@@ -1323,70 +1438,11 @@
           return scratch.textContent?.trim() || null;
         }
 
-        function renderPresets() {
-          ui.presetList.replaceChildren();
-          if (presets.length === 0) {
-            ui.presetList.appendChild(buildEmptyState("No presets yet."));
-            return;
-          }
-          const fragment = document.createDocumentFragment();
-          for (const preset of presets) {
-            const card = document.createElement("article");
-            card.className = "preset-card";
-            const text = document.createElement("p");
-            text.className = "preset-text";
-            text.textContent = preset;
-            const actions = document.createElement("div");
-            actions.className = "preset-actions";
-            actions.append(
-              buildCardButton("Use", () => usePreset(preset)),
-              buildCardButton("Delete", () => deletePreset(preset), "danger-button"),
-            );
-            card.append(text, actions);
-            fragment.appendChild(card);
-          }
-          ui.presetList.appendChild(fragment);
-        }
-
-        function addPresetFromInput() {
-          const value = ui.newPreset.value.trim();
-          if (!value) {
-            return;
-          }
-          presets = normalizePresets([...presets, value]);
-          savePresets();
-          ui.newPreset.value = "";
-          renderPresets();
-        }
-
-        function usePreset(preset) {
-          const trimmed = preset.trim();
-          if (!trimmed) {
-            return;
-          }
-          if (!ui.commentBody.value.trim()) {
-            ui.commentBody.value = trimmed;
-          } else if (!ui.commentBody.value.includes(trimmed)) {
-            ui.commentBody.value = `${ui.commentBody.value.trim()}\n\n${trimmed}`;
-          }
-          setActiveMobilePanel("comments");
-          focusComposer();
-        }
-
-        function deletePreset(preset) {
-          if (!window.confirm("Delete this preset?")) {
-            return;
-          }
-          presets = presets.filter((value) => value !== preset);
-          savePresets();
-          renderPresets();
-        }
-
         function renderComments() {
           ui.commentList.replaceChildren();
           const comments = sortComments(getRelevantComments());
           if (comments.length === 0) {
-            ui.commentList.appendChild(buildEmptyState("No open comments for this view yet."));
+            ui.commentList.appendChild(buildEmptyState("No notes in this view yet."));
             return;
           }
           const fragment = document.createDocumentFragment();
@@ -1408,7 +1464,8 @@
           });
         }
 
-        function buildCommentCard(comment) {
+        function buildCommentCard(comment, options = {}) {
+          const { showFocus = true } = options;
           const card = document.createElement("article");
           card.className = "comment-card";
           if (comment.id === focusedCommentId) {
@@ -1417,20 +1474,20 @@
           const header = document.createElement("div");
           header.className = "comment-header";
           const titleBlock = document.createElement("div");
+          titleBlock.className = "comment-heading";
           const commentId = document.createElement("div");
           commentId.className = "comment-id";
           commentId.textContent = comment.id;
-          const title = document.createElement("h3");
-          title.className = "comment-title";
-          title.textContent = comment.title || deriveCommentTitle(comment);
           const meta = document.createElement("div");
           meta.className = "comment-meta";
           meta.textContent = describeComment(comment);
-          titleBlock.append(commentId, title, meta);
+          titleBlock.append(commentId, meta);
           const actions = document.createElement("div");
           actions.className = "toolbar-row";
+          if (showFocus) {
+            actions.appendChild(buildCardButton("Focus", () => focusComment(comment.id)));
+          }
           actions.append(
-            buildCardButton("Focus", () => focusComment(comment.id)),
             buildCardButton("Edit", () => editComment(comment.id)),
             buildCardButton("Delete", () => deleteComment(comment.id), "danger-button"),
           );
@@ -1452,6 +1509,7 @@
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = label;
+          button.classList.add("compact-button");
           if (className) {
             button.classList.add(className);
           }
@@ -1466,10 +1524,10 @@
 
         function describeComment(comment) {
           if (comment.scope === "repo") {
-            return "Repository comment";
+            return "Repository note";
           }
           if (comment.scope === "file") {
-            return `${comment.path} · file comment`;
+            return `${comment.path} · file note`;
           }
           return `${comment.path} · lines ${comment.startLine}-${comment.endLine}`;
         }
@@ -1497,6 +1555,7 @@
           renderFile();
           renderComments();
           updateSelectionSummary();
+          setCommentsPaneOpen(comment.scope !== "range");
           setActiveMobilePanel(comment.scope === "range" ? "code" : "comments");
           if (comment.scope === "range") {
             window.requestAnimationFrame(() => scrollToLine(comment.startLine));
@@ -1524,13 +1583,13 @@
             excerpt: comment.excerpt,
             editId: comment.id,
           };
-          ui.commentTitle.value = comment.title;
           ui.commentBody.value = comment.body;
           renderTree();
           renderFile();
           renderComments();
           updateComposerTarget();
           updateSelectionSummary();
+          setCommentsPaneOpen(true);
           setActiveMobilePanel("comments");
           focusComposer();
         }
@@ -1550,6 +1609,7 @@
           }
           if (composerState.editId === commentId) {
             resetComposer();
+            setCommentsPaneOpen(false);
           }
           renderTree();
           renderFile();
@@ -1560,9 +1620,8 @@
 
         function saveComment() {
           const body = ui.commentBody.value.trim();
-          const title = ui.commentTitle.value.trim();
           if (!body) {
-            window.alert("Comment body is required.");
+            window.alert("Note text is required.");
             return;
           }
           const now = new Date().toISOString();
@@ -1575,7 +1634,7 @@
             startLine: composerState.scope === "range" ? composerState.startLine : null,
             endLine: composerState.scope === "range" ? composerState.endLine : null,
             excerpt: composerState.scope === "range" ? composerState.excerpt : null,
-            title,
+            title: existingIndex >= 0 ? state.comments[existingIndex].title : "",
             body,
             createdAt: existingIndex >= 0 ? state.comments[existingIndex].createdAt : now,
             updatedAt: now,
@@ -1593,6 +1652,7 @@
           renderFile();
           renderComments();
           renderSummary();
+          setCommentsPaneOpen(false);
           setActiveMobilePanel("comments");
         }
 
@@ -1609,21 +1669,21 @@
         }
 
         function clearForm() {
-          ui.commentTitle.value = "";
           ui.commentBody.value = "";
         }
 
         function updateComposerTarget() {
+          ui.commentsPaneHeading.textContent = composerState.editId ? `Edit ${composerState.editId}` : "New note";
           if (composerState.editId) {
-            ui.composerTarget.textContent = `Editing ${composerState.editId} · ${describeComment(composerState)}`;
+            ui.composerTarget.textContent = describeComment(composerState);
             return;
           }
           if (composerState.scope === "repo") {
-            ui.composerTarget.textContent = "Repository comment";
+            ui.composerTarget.textContent = "Repository note";
             return;
           }
           if (composerState.scope === "file") {
-            ui.composerTarget.textContent = `${composerState.path} · file comment`;
+            ui.composerTarget.textContent = `${composerState.path} · file note`;
             return;
           }
           ui.composerTarget.textContent = `${composerState.path} · lines ${composerState.startLine}-${composerState.endLine}`;
@@ -1633,15 +1693,18 @@
           if (pendingRangeStart !== null && currentFilePath) {
             ui.selectionSummary.classList.add("active");
             ui.selectionSummary.textContent = `${currentFilePath} · start at line ${pendingRangeStart}. Choose another line to finish the range.`;
+            ui.clearSelection.classList.remove("hidden");
             return;
           }
           if (rangeSelection && rangeSelection.path === currentFilePath) {
             ui.selectionSummary.classList.add("active");
-            ui.selectionSummary.textContent = `${rangeSelection.path} · selected lines ${rangeSelection.startLine}-${rangeSelection.endLine}`;
+            ui.selectionSummary.textContent = `${rangeSelection.path} · lines ${rangeSelection.startLine}-${rangeSelection.endLine} selected`;
+            ui.clearSelection.classList.remove("hidden");
             return;
           }
           ui.selectionSummary.classList.remove("active");
           ui.selectionSummary.textContent = "Choose a line number to start a range. Choose another line number to finish it.";
+          ui.clearSelection.classList.add("hidden");
         }
 
         function scrollToLine(lineNumber) {

@@ -99,10 +99,10 @@ The HTTP server serves the artifact directory directly. There is no separate app
 The generated document is fully self-contained.
 
 Rendering pieces:
-- metadata header and controls
+- metadata header and compact controls
 - embedded snapshot JSON inside a non-executing script tag
-- inline CSS for layout, typography, mobile tabs, presets, and syntax highlighting
-- inline JavaScript for navigation, comment editing, persistence, preset handling, and export
+- inline CSS for layout, typography, contextual panes, inline comment cards, and syntax highlighting
+- inline JavaScript for navigation, comment editing, persistence, pane toggling, and export
 
 `render.py` uses a custom Pygments style backed by CSS variables so syntax token colors and code-surface backgrounds follow the document light and dark theme without introducing fixed white code blocks.
 
@@ -129,7 +129,7 @@ Each comment stores:
 - `createdAt`
 - `updatedAt`
 
-Separate browser-local preset state is stored under its own local-storage key and contains a deduplicated string list.
+The browser UI no longer exposes title editing, but the field remains in normalized state for backward-compatible import and export of older review JSON.
 
 The browser loads review state in this order:
 1. explicit imported JSON when the user chooses import
@@ -145,14 +145,24 @@ Reasoning:
 - still preserves the self-contained single-file artifact model
 - accepts that browser find only works on currently visible content
 
-The file tree uses nested `details` and `summary` elements.
+The file tree uses nested `details` and `summary` elements, with filter controls placed behind a compact `details` toggle so the tree can stay near the top of the pane.
 
-Line-range comments are created by selecting start and end lines rather than arbitrary text spans.
+Desktop layout is a two-column grid by default:
+- file browser
+- code pane
+
+A third comments pane is only inserted into the desktop grid when the user opens it or starts writing/editing a comment.
+
+Range comments are still created by selecting start and end lines rather than arbitrary text spans.
 
 Reasoning:
 - simpler implementation
 - more robust on mobile Safari and touch input
 - stable enough for review export anchored by line range plus excerpt
+
+Rendered range comments are anchored inline below their end line. File comments render in a note stack above the current file only when they exist. This keeps comments visually attached to the code without permanently reserving a right sidebar.
+
+The code pane uses one horizontal scroll surface for the whole file. Individual lines no longer own their own horizontal scroll container.
 
 On narrow screens, the document switches to an explicit Files / Code / Comments panel model. The JavaScript moves the user to the most likely panel for the current action, for example:
 - selecting a file opens Code
@@ -191,7 +201,7 @@ Current tests cover:
 - git-aware file enumeration and ignore behavior
 - non-git directory snapshot hashing
 - HTML rendering and safe JSON embedding
-- presence of mobile and preset UI in rendered output
+- presence of mobile navigation and contextual note UI in rendered output
 - local app build flow writing an output artifact
 - CLI parser/build behavior
 - real local HTTP serving of a generated artifact

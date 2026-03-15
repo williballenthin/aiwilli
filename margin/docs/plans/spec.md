@@ -109,17 +109,22 @@ Each comment stores:
 - file path when applicable
 - start and end line when applicable
 - optional excerpt captured from the reviewed code
-- optional title
 - required body text
 - creation and update timestamps
+
+The primary UI does not ask for a separate comment title.
 
 8. Review UI behavior
 
 8.1 Desktop layout
-The generated HTML presents three primary areas:
+The generated HTML prioritizes the code pane.
+
+Desktop presents:
 - a left file browser tree
-- a central code pane
-- a right review sidebar
+- a central code pane that takes most of the width
+- a contextual comments pane that stays hidden until the user opens it or starts editing
+
+Range comments render inline beneath their anchored code lines so comments stay visually attached to the reviewed region.
 
 8.2 Mobile layout
 The generated HTML supports full review authoring on iPhone-sized screens.
@@ -130,7 +135,6 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 - create, edit, and delete comments
 - mark files reviewed
 - export markdown and JSON
-- use comment presets
 
 8.3 File browser behavior
 - shows repository folders and files
@@ -139,18 +143,22 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 - supports filtering by file path text
 - supports filtering to commented files only
 - supports filtering to unreviewed files only
+- keeps filtering controls behind a compact toggle so the file tree can stay near the top of the pane
 
 8.4 Code pane behavior
 - shows one file at a time
 - shows syntax-highlighted code and line numbers
 - keeps syntax colors and code surfaces aligned with the document light or dark theme rather than using a fixed standalone code background
+- uses one horizontal scroll surface for the whole code region rather than independent per-line scrolling
 - shows existing comment markers and highlighted commented ranges
+- renders file comments above the code only when they exist
+- renders range comments inline beneath the anchored range end line
 - supports line-based range selection by choosing a start line and an end line
 - supports file-level review actions such as adding a file comment and marking the file reviewed
 
-8.5 Sidebar behavior
+8.5 Comments pane behavior
+- stays hidden by default on desktop and opens on demand for writing or reviewing comments
 - shows the active comment composer
-- shows browser-local comment presets and lets the user add or delete presets
 - shows repository comments plus comments relevant to the current file
 - supports editing and deleting existing comments
 
@@ -161,11 +169,7 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 - the storage key is derived from the snapshot identifier
 - reopening the same HTML artifact restores the saved review state for that snapshot on that browser
 
-9.2 Preset storage
-- comment presets are stored in browser local storage
-- presets are browser-local and not tied to one snapshot
-
-9.3 Review import/export
+9.2 Review import/export
 - users can export the current review state as JSON
 - users can import a previously exported JSON review state into the same snapshot
 - JSON import into a different snapshot is rejected
@@ -185,7 +189,6 @@ Each exported comment includes:
 - the stable comment identifier
 - scope
 - file path and line range when applicable
-- title when present
 - body text
 - excerpt when present
 - creation and update timestamps
