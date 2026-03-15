@@ -9,13 +9,62 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_for_filename
+from pygments.style import Style
+from pygments.token import (
+    Comment,
+    Error,
+    Generic,
+    Keyword,
+    Literal,
+    Name,
+    Operator,
+    Text,
+    Whitespace,
+)
 from pygments.util import ClassNotFound
 
 from margin.models import SourceFile, SourceSnapshot
 
 logger = logging.getLogger(__name__)
 
-FORMATTER = HtmlFormatter(nowrap=True, style="default", classprefix="tok-")
+
+class MarginSyntaxStyle(Style):  # type: ignore[misc]
+    background_color = "transparent"
+    highlight_color = "var(--code-highlight)"
+    styles = {
+        Text: "var(--code-text)",
+        Whitespace: "var(--code-muted)",
+        Error: "border:var(--danger)",
+        Comment: "italic var(--code-comment)",
+        Keyword: "bold var(--code-keyword)",
+        Keyword.Type: "bold var(--code-type)",
+        Operator: "var(--code-operator)",
+        Operator.Word: "bold var(--code-keyword)",
+        Name.Builtin: "var(--code-builtin)",
+        Name.Function: "var(--code-function)",
+        Name.Class: "bold var(--code-type)",
+        Name.Namespace: "bold var(--code-type)",
+        Name.Exception: "bold var(--code-type)",
+        Name.Decorator: "var(--code-decorator)",
+        Name.Attribute: "var(--code-attribute)",
+        Name.Tag: "bold var(--code-tag)",
+        Name.Constant: "var(--code-constant)",
+        Literal.Number: "var(--code-number)",
+        Literal.String: "var(--code-string)",
+        Literal.String.Doc: "italic var(--code-doc)",
+        Literal.String.Interpol: "bold var(--code-constant)",
+        Literal.String.Regex: "var(--code-regex)",
+        Generic.Deleted: "var(--danger)",
+        Generic.Inserted: "var(--reviewed)",
+        Generic.Heading: "bold var(--code-type)",
+        Generic.Subheading: "bold var(--code-type)",
+        Generic.Prompt: "bold var(--code-muted)",
+        Generic.Output: "var(--code-muted)",
+        Generic.Traceback: "var(--danger)",
+    }
+
+
+FORMATTER = HtmlFormatter(nowrap=True, style=MarginSyntaxStyle, classprefix="tok-")
 TEMPLATE_ENVIRONMENT = Environment(
     loader=FileSystemLoader(str(resources.files("margin").joinpath("templates"))),
     autoescape=select_autoescape(["html", "xml"]),
@@ -75,9 +124,7 @@ def render_source_file(file: SourceFile) -> dict[str, Any]:
             len(highlighted_lines),
             len(raw_lines),
         )
-        highlighted_lines = [
-            highlight(line, lexer, FORMATTER).rstrip("\n") for line in raw_lines
-        ]
+        highlighted_lines = [highlight(line, lexer, FORMATTER).rstrip("\n") for line in raw_lines]
     return {
         "path": file.path,
         "language": language,

@@ -104,6 +104,8 @@ Rendering pieces:
 - inline CSS for layout, typography, mobile tabs, presets, and syntax highlighting
 - inline JavaScript for navigation, comment editing, persistence, preset handling, and export
 
+`render.py` uses a custom Pygments style backed by CSS variables so syntax token colors and code-surface backgrounds follow the document light and dark theme without introducing fixed white code blocks.
+
 The snapshot JSON must escape `</script>`-like sequences so source code cannot terminate the embedding script element.
 
 8. Browser state model

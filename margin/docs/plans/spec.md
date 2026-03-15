@@ -143,6 +143,7 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 8.4 Code pane behavior
 - shows one file at a time
 - shows syntax-highlighted code and line numbers
+- keeps syntax colors and code surfaces aligned with the document light or dark theme rather than using a fixed standalone code background
 - shows existing comment markers and highlighted commented ranges
 - supports line-based range selection by choosing a start line and an end line
 - supports file-level review actions such as adding a file comment and marking the file reviewed

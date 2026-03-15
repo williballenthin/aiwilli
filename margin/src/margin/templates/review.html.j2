@@ -20,6 +20,24 @@
         --reviewed: #197055;
         --danger: #b42318;
         --shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+        --code-bg: #f4f7fc;
+        --code-text: #1f2937;
+        --code-muted: #667085;
+        --code-comment: #7b8798;
+        --code-keyword: #6d3df5;
+        --code-operator: #526075;
+        --code-string: #0f766e;
+        --code-number: #b54708;
+        --code-function: #175cd3;
+        --code-type: #0f67b1;
+        --code-builtin: #0f766e;
+        --code-constant: #c2265b;
+        --code-decorator: #7c3aed;
+        --code-attribute: #0f766e;
+        --code-tag: #175cd3;
+        --code-doc: #5f6f86;
+        --code-regex: #be185d;
+        --code-highlight: rgba(36, 87, 214, 0.14);
       }
 
       @media (prefers-color-scheme: dark) {
@@ -37,6 +55,24 @@
           --reviewed: #5bc49c;
           --danger: #ff6b6b;
           --shadow: none;
+          --code-bg: #111923;
+          --code-text: #e7edf7;
+          --code-muted: #97a4b8;
+          --code-comment: #7f8aa0;
+          --code-keyword: #c4b5fd;
+          --code-operator: #cbd5e1;
+          --code-string: #86efac;
+          --code-number: #fbbf24;
+          --code-function: #93c5fd;
+          --code-type: #7dd3fc;
+          --code-builtin: #5eead4;
+          --code-constant: #f9a8d4;
+          --code-decorator: #d8b4fe;
+          --code-attribute: #5eead4;
+          --code-tag: #7aa2ff;
+          --code-doc: #a5b4c6;
+          --code-regex: #fb7185;
+          --code-highlight: rgba(122, 162, 255, 0.18);
         }
       }
 
@@ -335,7 +371,11 @@
       }
 
       #code-view {
-        padding: 0.75rem 1rem 1rem 1rem;
+        padding: 0.75rem 0.85rem 1rem 0.85rem;
+        border-top: 1px solid var(--panel-border);
+        background: var(--code-bg);
+        border-bottom-left-radius: 0.9rem;
+        border-bottom-right-radius: 0.9rem;
       }
 
       .code-row {
@@ -343,7 +383,12 @@
         grid-template-columns: auto auto minmax(0, 1fr);
         gap: 0.55rem;
         align-items: start;
-        border-radius: 0.4rem;
+        padding: 0.08rem 0.3rem;
+        border-radius: 0.45rem;
+      }
+
+      .code-row:not(.selected):not(.commented):hover {
+        background: color-mix(in srgb, var(--code-bg) 84%, var(--accent-soft));
       }
 
       .code-row.selected {
@@ -402,6 +447,8 @@
         font-size: 0.93rem;
         overflow-x: auto;
         padding: 0.1rem 0;
+        color: var(--code-text);
+        font-variant-ligatures: none;
       }
 
       .empty-state {
