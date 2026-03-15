@@ -47,9 +47,11 @@ def test_render_review_document_includes_mobile_and_notes_ui() -> None:
 
     assert 'id="mobile-panel-nav"' in document
     assert 'id="toggle-comments-pane"' in document
-    assert 'id="file-note-list"' in document
-    assert 'id="new-preset"' not in document
+    assert 'id="note-stack"' in document
+    assert 'id="sidebar-actions-menu"' in document
+    assert 'id="file-filter-details"' not in document
     assert 'id="comment-title"' not in document
+    assert 'id="comment-list"' not in document
 
 
 def test_render_review_document_uses_theme_aware_syntax_palette() -> None:

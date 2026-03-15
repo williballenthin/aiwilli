@@ -120,9 +120,14 @@ The primary UI does not ask for a separate comment title.
 The generated HTML prioritizes the code pane.
 
 Desktop presents:
-- a left file browser tree
+- a left file browser column that remains sticky for the full viewport height
 - a central code pane that takes most of the width
 - a contextual comments pane that stays hidden until the user opens it or starts editing
+
+The file column owns the high-level controls and metadata:
+- project title and a shortened snapshot identifier at the top
+- the file tree in the middle
+- review actions and snapshot metadata in the footer
 
 Range comments render inline beneath their anchored code lines so comments stay visually attached to the reviewed region.
 
@@ -140,26 +145,25 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 - shows repository folders and files
 - shows comment counts per file
 - shows whether a file has been marked reviewed
-- supports filtering by file path text
-- supports filtering to commented files only
-- supports filtering to unreviewed files only
-- keeps filtering controls behind a compact toggle so the file tree can stay near the top of the pane
+- stays visible while the main document scrolls on desktop
+- does not provide dedicated in-app file filtering in the current design
 
 8.4 Code pane behavior
 - shows one file at a time
 - shows syntax-highlighted code and line numbers
 - keeps syntax colors and code surfaces aligned with the document light or dark theme rather than using a fixed standalone code background
 - uses one horizontal scroll surface for the whole code region rather than independent per-line scrolling
-- shows existing comment markers and highlighted commented ranges
-- renders file comments above the code only when they exist
+- shows existing comment rails and highlighted commented ranges
+- renders repository notes and file notes above the code only when they exist
 - renders range comments inline beneath the anchored range end line
+- does not show a separate textual selection summary above the code
 - supports line-based range selection by choosing a start line and an end line
 - supports file-level review actions such as adding a file comment and marking the file reviewed
 
 8.5 Comments pane behavior
-- stays hidden by default on desktop and opens on demand for writing or reviewing comments
+- stays hidden by default on desktop and opens on demand for writing or editing a note
 - shows the active comment composer
-- shows repository comments plus comments relevant to the current file
+- does not duplicate the current file's existing notes in a separate list when those notes are already rendered with the code
 - supports editing and deleting existing comments
 
 9. Persistence behavior
@@ -173,6 +177,7 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 - users can export the current review state as JSON
 - users can import a previously exported JSON review state into the same snapshot
 - JSON import into a different snapshot is rejected
+- import may be hidden behind a compact actions menu rather than exposed as a primary always-visible control
 
 10. Markdown export
 

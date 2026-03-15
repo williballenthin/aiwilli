@@ -133,26 +133,6 @@
         color: var(--accent);
       }
 
-      .app-header {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.85rem;
-        padding: 0.8rem 0.95rem;
-        border-bottom: 1px solid var(--panel-border);
-        background: var(--panel);
-        position: sticky;
-        top: 0;
-        z-index: 5;
-      }
-
-      .app-title {
-        margin: 0;
-        font-size: 1.05rem;
-      }
-
-      .app-meta,
       .helper-text,
       .comment-meta,
       .file-meta {
@@ -160,11 +140,9 @@
         font-size: 0.92rem;
       }
 
-      .header-actions,
       .toolbar-row,
       .composer-actions,
-      .code-actions,
-      .summary-row {
+      .code-actions {
         display: flex;
         flex-wrap: wrap;
         gap: 0.6rem;
@@ -184,15 +162,7 @@
 
       .mobile-panel-nav {
         display: none;
-        padding: 0 1rem 1rem 1rem;
-      }
-
-      .section-header,
-      .file-panel-tools {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.6rem;
-        align-items: center;
+        padding: 0.75rem 0.75rem 0 0.75rem;
       }
 
       .mobile-panel-button {
@@ -207,14 +177,14 @@
 
       .layout {
         display: grid;
-        grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
-        gap: 1rem;
-        padding: 1rem;
+        grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
+        gap: 0.75rem;
+        padding: 0.75rem;
         align-items: start;
       }
 
       body[data-comments-pane="open"] .layout {
-        grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr) minmax(18rem, 22rem);
+        grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr) minmax(18rem, 22rem);
       }
 
       .panel {
@@ -222,7 +192,7 @@
         border: 1px solid var(--panel-border);
         border-radius: 0.9rem;
         box-shadow: var(--shadow);
-        min-height: 70vh;
+        min-height: calc(100vh - 1.5rem);
       }
 
       .panel[data-panel="comments"] {
@@ -233,22 +203,71 @@
         display: block;
       }
 
+      .sidebar-panel {
+        position: sticky;
+        top: 0.75rem;
+        height: calc(100vh - 1.5rem);
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        overflow: hidden;
+      }
+
       .panel-header,
-      .panel-body {
+      .panel-body,
+      .sidebar-top,
+      .sidebar-footer {
         padding: 0.85rem 0.95rem;
       }
 
-      .panel-header {
+      .panel-header,
+      .sidebar-top {
         border-bottom: 1px solid var(--panel-border);
+      }
+
+      .sidebar-title {
+        margin: 0;
+        font-size: 1.02rem;
+      }
+
+      .sidebar-snapshot {
+        margin-top: 0.3rem;
+        color: var(--muted);
+        font-size: 0.85rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        overflow-wrap: anywhere;
+      }
+
+      .sidebar-footer {
+        min-width: 0;
+        display: grid;
+        gap: 0.9rem;
+        border-top: 1px solid var(--panel-border);
+      }
+
+      .sidebar-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+        align-items: stretch;
+      }
+
+      .sidebar-actions-menu {
+        grid-column: 1 / -1;
+      }
+
+      .sidebar-meta {
+        min-width: 0;
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .sidebar-meta .helper-text {
+        overflow-wrap: anywhere;
       }
 
       .panel h2,
       .panel h3 {
         margin: 0;
-      }
-
-      .section-header {
-        justify-content: space-between;
       }
 
       .compact-button,
@@ -268,6 +287,7 @@
         background: var(--panel);
         cursor: pointer;
         color: var(--text);
+        text-align: center;
       }
 
       .compact-details summary::-webkit-details-marker {
@@ -286,27 +306,37 @@
         border-top: 1px solid var(--panel-border);
       }
 
-      .file-filters {
+      .sidebar-actions-menu .compact-details-panel {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 0.55rem);
+        min-width: 12rem;
+        margin-top: 0;
+        padding: 0.6rem;
+        border: 1px solid var(--panel-border);
+        border-radius: 0.75rem;
+        background: var(--panel);
+        box-shadow: var(--shadow);
         display: grid;
-        gap: 0.75rem;
+        gap: 0.5rem;
+        z-index: 6;
       }
 
-      .toggle-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
+      .sidebar-actions-menu .compact-details-panel > * {
+        width: 100%;
       }
 
-      .toggle-row label,
+      #file-tree {
+        min-height: 0;
+        overflow: auto;
+        padding: 0.4rem 0.95rem 0.65rem 0.95rem;
+      }
+
       .review-toggle {
         display: inline-flex;
         gap: 0.45rem;
         align-items: center;
         color: var(--muted);
-      }
-
-      #file-tree {
-        padding: 0.15rem 0.95rem 0.95rem 0.95rem;
       }
 
       .tree-folder,
@@ -400,7 +430,7 @@
 
       .code-header {
         display: grid;
-        gap: 0.7rem;
+        gap: 0.6rem;
       }
 
       .code-header-main {
@@ -409,19 +439,6 @@
         justify-content: space-between;
         gap: 0.75rem;
         align-items: start;
-      }
-
-      .selection-summary {
-        display: none;
-        padding: 0.5rem 0.7rem;
-        border-radius: 0.65rem;
-        background: var(--selection-soft);
-        color: var(--text);
-        font-size: 0.92rem;
-      }
-
-      .selection-summary.active {
-        display: block;
       }
 
       .note-stack {
@@ -449,7 +466,7 @@
       .code-lines {
         width: max-content;
         min-width: 100%;
-        padding: 0.55rem 0;
+        padding: 0.35rem 0;
       }
 
       .code-row {
@@ -457,8 +474,8 @@
         min-width: 100%;
         display: grid;
         grid-template-columns: auto auto minmax(0, 1fr);
-        gap: 0.55rem;
-        align-items: start;
+        gap: 0.4rem;
+        align-items: stretch;
         padding: 0;
       }
 
@@ -477,8 +494,8 @@
       }
 
       .line-number,
-      .comment-marker,
-      .comment-marker-spacer {
+      .comment-rail,
+      .comment-rail-spacer {
         margin-top: 0;
       }
 
@@ -486,10 +503,11 @@
         border: none;
         background: transparent;
         color: var(--muted);
-        min-width: 3.2rem;
-        padding: 0.15rem 0.5rem;
+        min-width: 3rem;
+        padding: 0.02rem 0.45rem 0.02rem 0.3rem;
         text-align: right;
         border-radius: 0;
+        line-height: 1.35;
       }
 
       .line-number:hover {
@@ -497,41 +515,61 @@
         color: var(--accent);
       }
 
-      .comment-marker,
-      .comment-marker-spacer {
-        width: 1.7rem;
-        min-height: 1.7rem;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        margin-top: 0.1rem;
+      .comment-rail,
+      .comment-rail-spacer {
+        width: 0.9rem;
+        position: relative;
+        align-self: stretch;
       }
 
-      .comment-marker {
+      .comment-rail {
         border: none;
-        background: var(--comment-soft);
-        color: var(--comment);
+        background: transparent;
+        padding: 0;
+      }
+
+      .comment-rail::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-50%);
         border-radius: 999px;
-        font-size: 0.78rem;
+        background: color-mix(in srgb, var(--comment) 55%, transparent);
       }
 
-      .comment-marker:hover {
-        border: none;
+      .comment-rail.endpoint::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: 0.28rem;
+        width: 0.45rem;
+        height: 0.45rem;
+        transform: translateX(-50%);
+        border-radius: 999px;
+        background: var(--comment);
+      }
+
+      .comment-rail:hover::before,
+      .comment-rail:hover::after {
+        background: var(--comment);
       }
 
       .line-code {
         white-space: pre;
         font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-        font-size: 0.92rem;
-        line-height: 1.5;
+        font-size: 0.9rem;
+        line-height: 1.35;
         overflow: visible;
-        padding: 0.12rem 1rem 0.12rem 0;
+        padding: 0.02rem 1rem 0.02rem 0;
         color: var(--code-text);
         font-variant-ligatures: none;
       }
 
       .inline-thread {
-        margin: 0.15rem 0 0.45rem 5.45rem;
+        margin: 0.1rem 0 0.4rem 4.55rem;
         padding-right: 1rem;
         display: grid;
         gap: 0.55rem;
@@ -547,6 +585,7 @@
       .composer {
         display: grid;
         gap: 0.75rem;
+        margin-top: 0.75rem;
       }
 
       .composer-section {
@@ -627,10 +666,6 @@
 {{ syntax_css }}
 
       @media (max-width: 960px) {
-        .app-header {
-          position: static;
-        }
-
         .mobile-panel-nav {
           display: flex;
           position: sticky;
@@ -647,10 +682,31 @@
         }
 
         .panel,
+        .sidebar-panel,
         .panel[data-panel="comments"],
         body[data-comments-pane="open"] .panel[data-panel="comments"] {
           display: block;
+          position: static;
           min-height: auto;
+          height: auto;
+        }
+
+        .sidebar-panel {
+          overflow: visible;
+        }
+
+        #file-tree {
+          overflow: visible;
+        }
+
+        .sidebar-actions {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar-actions-menu .compact-details-panel {
+          position: static;
+          min-width: 0;
+          margin-top: 0.7rem;
         }
 
         body[data-mobile-panel="files"] .panel[data-panel="code"],
@@ -667,7 +723,7 @@
         }
 
         .inline-thread {
-          margin-left: 3.9rem;
+          margin-left: 3.55rem;
         }
 
         .line-number {
@@ -677,43 +733,38 @@
     </style>
   </head>
   <body>
-    <header class="app-header">
-      <div>
-        <h1 class="app-title">{{ page_title }}</h1>
-        <div class="app-meta">{{ source_label }} · snapshot {{ snapshot_id }} · generated {{ generated_at }} · {{ file_count }} files</div>
-        <div class="helper-text" id="review-summary"></div>
-      </div>
-      <div class="header-actions">
-        <button type="button" class="compact-button" id="add-repo-comment">Repo note</button>
-        <button type="button" class="compact-button" id="toggle-comments-pane">Notes</button>
-        <button type="button" class="compact-button" id="export-markdown">Export markdown</button>
-        <button type="button" class="compact-button" id="export-json">Export JSON</button>
-        <label class="button-like compact-button" for="import-json">Import JSON<input id="import-json" type="file" accept="application/json,.json"></label>
-      </div>
-    </header>
     <nav class="mobile-panel-nav" id="mobile-panel-nav" aria-label="Review panels">
       <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="files" aria-pressed="false">Files</button>
       <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="code" aria-pressed="true">Code</button>
       <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="comments" aria-pressed="false">Comments</button>
     </nav>
     <div class="layout">
-      <aside class="panel" data-panel="files">
-        <div class="panel-header">
-          <div class="section-header">
-            <h2>Files</h2>
-            <details class="compact-details" id="file-filter-details">
-              <summary>Filter</summary>
-              <div class="compact-details-panel file-filters">
-                <input type="text" id="path-filter" placeholder="Filter paths">
-                <div class="toggle-row">
-                  <label><input type="checkbox" id="filter-commented"> Commented only</label>
-                  <label><input type="checkbox" id="filter-unreviewed"> Unreviewed only</label>
-                </div>
+      <aside class="panel sidebar-panel" data-panel="files">
+        <div class="sidebar-top">
+          <h1 class="sidebar-title">{{ page_title }}</h1>
+          <div class="sidebar-snapshot">snapshot {{ snapshot_id[:18] }}{% if snapshot_id|length > 18 %}…{% endif %}</div>
+        </div>
+        <div id="file-tree"></div>
+        <div class="sidebar-footer">
+          <div class="sidebar-actions">
+            <button type="button" class="compact-button" id="add-repo-comment">Repo note</button>
+            <button type="button" class="compact-button" id="toggle-comments-pane">Notes</button>
+            <details class="compact-details sidebar-actions-menu" id="sidebar-actions-menu">
+              <summary>Actions</summary>
+              <div class="compact-details-panel">
+                <button type="button" class="compact-button" id="export-markdown">Export markdown</button>
+                <button type="button" class="compact-button" id="export-json">Export JSON</button>
+                <label class="button-like compact-button" for="import-json">Import JSON<input id="import-json" type="file" accept="application/json,.json"></label>
               </div>
             </details>
           </div>
+          <div class="sidebar-meta">
+            <div class="helper-text" id="review-summary"></div>
+            <div class="helper-text">{{ source_label }}</div>
+            <div class="helper-text">generated {{ generated_at }}</div>
+            <div class="helper-text">snapshot {{ snapshot_id }}</div>
+          </div>
         </div>
-        <div id="file-tree"></div>
       </aside>
       <main class="panel" data-panel="code">
         <div class="panel-header code-header">
@@ -728,9 +779,8 @@
               <button type="button" class="compact-button hidden" id="clear-selection">Clear</button>
             </div>
           </div>
-          <div class="selection-summary" id="selection-summary">Choose a line number to start a range. Choose another line number to finish it.</div>
         </div>
-        <div class="note-stack hidden" id="file-note-list"></div>
+        <div class="note-stack hidden" id="note-stack"></div>
         <div id="code-view"></div>
       </main>
       <aside class="panel" data-panel="comments">
@@ -747,10 +797,6 @@
               <button type="button" id="cancel-comment">Clear</button>
             </div>
           </form>
-        </section>
-        <section class="composer-section">
-          <h2>Current view</h2>
-          <div class="comments-list" id="comment-list"></div>
         </section>
       </aside>
     </div>
@@ -769,23 +815,18 @@
           codeView: document.getElementById("code-view"),
           commentBody: document.getElementById("comment-body"),
           commentForm: document.getElementById("comment-form"),
-          commentList: document.getElementById("comment-list"),
           commentsPaneHeading: document.getElementById("comments-pane-heading"),
           composerTarget: document.getElementById("composer-target"),
           currentFileMeta: document.getElementById("current-file-meta"),
           currentFileTitle: document.getElementById("current-file-title"),
           exportJson: document.getElementById("export-json"),
           exportMarkdown: document.getElementById("export-markdown"),
-          fileNoteList: document.getElementById("file-note-list"),
           fileTree: document.getElementById("file-tree"),
-          filterCommented: document.getElementById("filter-commented"),
-          filterUnreviewed: document.getElementById("filter-unreviewed"),
           importJson: document.getElementById("import-json"),
           mobilePanelButtons: Array.from(document.querySelectorAll("[data-mobile-panel-button]")),
-          pathFilter: document.getElementById("path-filter"),
+          noteStack: document.getElementById("note-stack"),
           reviewSummary: document.getElementById("review-summary"),
           reviewedToggle: document.getElementById("reviewed-toggle"),
-          selectionSummary: document.getElementById("selection-summary"),
           toggleCommentsPane: document.getElementById("toggle-comments-pane"),
         };
 
@@ -823,7 +864,6 @@
             clearForm();
             updateComposerTarget();
             renderFile();
-            renderComments();
             setCommentsPaneOpen(true);
             setActiveMobilePanel("comments");
             focusComposer();
@@ -847,16 +887,12 @@
             clearForm();
             updateComposerTarget();
             renderFile();
-            renderComments();
             setCommentsPaneOpen(true);
             setActiveMobilePanel("comments");
             focusComposer();
           });
 
           ui.toggleCommentsPane.addEventListener("click", () => {
-            if (!isCommentsPaneOpen) {
-              renderComments();
-            }
             setCommentsPaneOpen(!isCommentsPaneOpen);
           });
 
@@ -868,7 +904,6 @@
             resetComposer();
             setCommentsPaneOpen(false);
             renderFile();
-            renderComments();
           });
 
           ui.clearSelection.addEventListener("click", () => {
@@ -879,7 +914,6 @@
               setCommentsPaneOpen(false);
             }
             renderFile();
-            renderComments();
             updateSelectionSummary();
           });
 
@@ -903,10 +937,6 @@
             renderTree();
             renderSummary();
           });
-
-          ui.pathFilter.addEventListener("input", renderTree);
-          ui.filterCommented.addEventListener("change", renderTree);
-          ui.filterUnreviewed.addEventListener("change", renderTree);
 
           ui.exportMarkdown.addEventListener("click", () => {
             downloadText(`${makeFileStem()}.md`, buildMarkdownReport(), "text/markdown;charset=utf-8");
@@ -1082,7 +1112,6 @@
           resetComposer(false);
           renderTree();
           renderFile();
-          renderComments();
           renderSummary();
           updateComposerTarget();
           updateSelectionSummary();
@@ -1200,7 +1229,6 @@
             currentFilePath = node.path;
             resetComposer();
             renderFile();
-            renderComments();
             renderTree();
             setCommentsPaneOpen(false);
             setActiveMobilePanel("code");
@@ -1230,21 +1258,7 @@
         }
 
         function getVisiblePaths() {
-          const filterText = ui.pathFilter.value.trim().toLowerCase();
-          return snapshot.files
-            .map((file) => file.path)
-            .filter((path) => {
-              if (filterText && !path.toLowerCase().includes(filterText)) {
-                return false;
-              }
-              if (ui.filterCommented.checked && countCommentsForFile(path) === 0) {
-                return false;
-              }
-              if (ui.filterUnreviewed.checked && state.reviewedFiles.includes(path)) {
-                return false;
-              }
-              return true;
-            });
+          return snapshot.files.map((file) => file.path);
         }
 
         function countCommentsForFile(path) {
@@ -1301,12 +1315,13 @@
             lineNumberButton.textContent = String(lineNumber);
             lineNumberButton.addEventListener("click", () => handleLineSelection(lineNumber));
 
-            const commentMarker = comments.length > 0 ? buildCommentMarker(comments) : buildCommentMarkerSpacer();
+            const hasEndpoint = hasRangeCommentEndpoint(currentFilePath, lineNumber);
+            const commentRail = comments.length > 0 ? buildCommentRail(comments, hasEndpoint) : buildCommentRailSpacer();
             const lineCode = document.createElement("div");
             lineCode.className = "line-code syntax";
             lineCode.innerHTML = file.lines[index] || "&nbsp;";
 
-            row.append(lineNumberButton, commentMarker, lineCode);
+            row.append(lineNumberButton, commentRail, lineCode);
             codeLines.appendChild(row);
 
             const anchoredComments = getRangeCommentsEndingAtLine(currentFilePath, lineNumber);
@@ -1319,41 +1334,53 @@
         }
 
         function renderFileNotes() {
-          ui.fileNoteList.replaceChildren();
-          if (!currentFilePath) {
-            ui.fileNoteList.classList.add("hidden");
+          ui.noteStack.replaceChildren();
+          const repositoryComments = sortComments(state.comments.filter((comment) => comment.scope === "repo"));
+          const fileComments = currentFilePath
+            ? sortComments(state.comments.filter((comment) => comment.scope === "file" && comment.path === currentFilePath))
+            : [];
+          if (repositoryComments.length === 0 && fileComments.length === 0) {
+            ui.noteStack.classList.add("hidden");
             return;
           }
-          const fileComments = sortComments(
-            state.comments.filter((comment) => comment.scope === "file" && comment.path === currentFilePath),
+          ui.noteStack.classList.remove("hidden");
+          appendNoteSection(ui.noteStack, "Repository notes", repositoryComments);
+          appendNoteSection(
+            ui.noteStack,
+            fileComments.length === 1 ? "1 file note" : `${fileComments.length} file notes`,
+            fileComments,
           );
-          if (fileComments.length === 0) {
-            ui.fileNoteList.classList.add("hidden");
+        }
+
+        function appendNoteSection(container, headingText, comments) {
+          if (comments.length === 0) {
             return;
           }
-          ui.fileNoteList.classList.remove("hidden");
           const heading = document.createElement("div");
           heading.className = "notes-heading";
-          heading.textContent = fileComments.length === 1 ? "1 file note" : `${fileComments.length} file notes`;
-          ui.fileNoteList.appendChild(heading);
-          for (const comment of fileComments) {
-            ui.fileNoteList.appendChild(buildCommentCard(comment, { showFocus: false }));
+          heading.textContent = headingText;
+          container.appendChild(heading);
+          for (const comment of comments) {
+            container.appendChild(buildCommentCard(comment));
           }
         }
 
-        function buildCommentMarker(comments) {
+        function buildCommentRail(comments, hasEndpoint) {
           const button = document.createElement("button");
           button.type = "button";
-          button.className = "comment-marker";
-          button.textContent = String(comments.length);
+          button.className = "comment-rail";
+          if (hasEndpoint) {
+            button.classList.add("endpoint");
+          }
           button.title = comments.map((comment) => comment.id).join(", ");
+          button.setAttribute("aria-label", `Focus ${comments[0].id}`);
           button.addEventListener("click", () => focusComment(comments[0].id));
           return button;
         }
 
-        function buildCommentMarkerSpacer() {
+        function buildCommentRailSpacer() {
           const spacer = document.createElement("span");
-          spacer.className = "comment-marker-spacer";
+          spacer.className = "comment-rail-spacer";
           return spacer;
         }
 
@@ -1361,7 +1388,7 @@
           const thread = document.createElement("div");
           thread.className = "inline-thread";
           for (const comment of comments) {
-            thread.appendChild(buildCommentCard(comment, { showFocus: false }));
+            thread.appendChild(buildCommentCard(comment));
           }
           return thread;
         }
@@ -1393,7 +1420,6 @@
           clearForm();
           updateComposerTarget();
           renderFile();
-          renderComments();
           setCommentsPaneOpen(true);
           setActiveMobilePanel("comments");
           focusComposer();
@@ -1430,6 +1456,15 @@
           );
         }
 
+        function hasRangeCommentEndpoint(path, lineNumber) {
+          return state.comments.some(
+            (comment) =>
+              comment.scope === "range" &&
+              comment.path === path &&
+              (comment.startLine === lineNumber || comment.endLine === lineNumber),
+          );
+        }
+
         function getSelectedExcerpt(path, startLine, endLine) {
           const file = fileIndex.get(path);
           const lines = file.lines.slice(startLine - 1, endLine);
@@ -1438,34 +1473,7 @@
           return scratch.textContent?.trim() || null;
         }
 
-        function renderComments() {
-          ui.commentList.replaceChildren();
-          const comments = sortComments(getRelevantComments());
-          if (comments.length === 0) {
-            ui.commentList.appendChild(buildEmptyState("No notes in this view yet."));
-            return;
-          }
-          const fragment = document.createDocumentFragment();
-          for (const comment of comments) {
-            fragment.appendChild(buildCommentCard(comment));
-          }
-          ui.commentList.appendChild(fragment);
-        }
-
-        function getRelevantComments() {
-          return state.comments.filter((comment) => {
-            if (comment.scope === "repo") {
-              return true;
-            }
-            if (!currentFilePath) {
-              return false;
-            }
-            return comment.path === currentFilePath;
-          });
-        }
-
-        function buildCommentCard(comment, options = {}) {
-          const { showFocus = true } = options;
+        function buildCommentCard(comment) {
           const card = document.createElement("article");
           card.className = "comment-card";
           if (comment.id === focusedCommentId) {
@@ -1484,9 +1492,6 @@
           titleBlock.append(commentId, meta);
           const actions = document.createElement("div");
           actions.className = "toolbar-row";
-          if (showFocus) {
-            actions.appendChild(buildCardButton("Focus", () => focusComment(comment.id)));
-          }
           actions.append(
             buildCardButton("Edit", () => editComment(comment.id)),
             buildCardButton("Delete", () => deleteComment(comment.id), "danger-button"),
@@ -1553,7 +1558,6 @@
           pendingRangeStart = null;
           renderTree();
           renderFile();
-          renderComments();
           updateSelectionSummary();
           setCommentsPaneOpen(comment.scope !== "range");
           setActiveMobilePanel(comment.scope === "range" ? "code" : "comments");
@@ -1586,7 +1590,6 @@
           ui.commentBody.value = comment.body;
           renderTree();
           renderFile();
-          renderComments();
           updateComposerTarget();
           updateSelectionSummary();
           setCommentsPaneOpen(true);
@@ -1613,7 +1616,6 @@
           }
           renderTree();
           renderFile();
-          renderComments();
           renderSummary();
           setActiveMobilePanel("comments");
         }
@@ -1650,7 +1652,6 @@
           resetComposer();
           renderTree();
           renderFile();
-          renderComments();
           renderSummary();
           setCommentsPaneOpen(false);
           setActiveMobilePanel("comments");
@@ -1690,20 +1691,10 @@
         }
 
         function updateSelectionSummary() {
-          if (pendingRangeStart !== null && currentFilePath) {
-            ui.selectionSummary.classList.add("active");
-            ui.selectionSummary.textContent = `${currentFilePath} · start at line ${pendingRangeStart}. Choose another line to finish the range.`;
+          if (pendingRangeStart !== null || (rangeSelection && rangeSelection.path === currentFilePath)) {
             ui.clearSelection.classList.remove("hidden");
             return;
           }
-          if (rangeSelection && rangeSelection.path === currentFilePath) {
-            ui.selectionSummary.classList.add("active");
-            ui.selectionSummary.textContent = `${rangeSelection.path} · lines ${rangeSelection.startLine}-${rangeSelection.endLine} selected`;
-            ui.clearSelection.classList.remove("hidden");
-            return;
-          }
-          ui.selectionSummary.classList.remove("active");
-          ui.selectionSummary.textContent = "Choose a line number to start a range. Choose another line number to finish it.";
           ui.clearSelection.classList.add("hidden");
         }
 

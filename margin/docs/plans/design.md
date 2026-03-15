@@ -99,7 +99,7 @@ The HTTP server serves the artifact directory directly. There is no separate app
 The generated document is fully self-contained.
 
 Rendering pieces:
-- metadata header and compact controls
+- a sticky sidebar with project identity, file tree, actions, and metadata
 - embedded snapshot JSON inside a non-executing script tag
 - inline CSS for layout, typography, contextual panes, inline comment cards, and syntax highlighting
 - inline JavaScript for navigation, comment editing, persistence, pane toggling, and export
@@ -145,13 +145,15 @@ Reasoning:
 - still preserves the self-contained single-file artifact model
 - accepts that browser find only works on currently visible content
 
-The file tree uses nested `details` and `summary` elements, with filter controls placed behind a compact `details` toggle so the tree can stay near the top of the pane.
+The file tree uses nested `details` and `summary` elements.
 
 Desktop layout is a two-column grid by default:
-- file browser
+- a sticky viewport-height sidebar for project identity, files, actions, and metadata
 - code pane
 
 A third comments pane is only inserted into the desktop grid when the user opens it or starts writing/editing a comment.
+
+The sidebar footer holds repo-note and pane-toggle buttons plus a compact `details` menu for export and import actions. The file tree itself is no longer filtered client-side.
 
 Range comments are still created by selecting start and end lines rather than arbitrary text spans.
 
@@ -160,9 +162,11 @@ Reasoning:
 - more robust on mobile Safari and touch input
 - stable enough for review export anchored by line range plus excerpt
 
-Rendered range comments are anchored inline below their end line. File comments render in a note stack above the current file only when they exist. This keeps comments visually attached to the code without permanently reserving a right sidebar.
+Rendered range comments are anchored inline below their end line. Repository notes and file notes render in a note stack above the current file only when they exist. This keeps comments visually attached to the code without permanently reserving a right sidebar.
 
 The code pane uses one horizontal scroll surface for the whole file. Individual lines no longer own their own horizontal scroll container.
+
+The old overlapping-comment count pills were replaced by a narrow clickable rail column. Each commented line shows a shared visual track instead of a numeric overlap count.
 
 On narrow screens, the document switches to an explicit Files / Code / Comments panel model. The JavaScript moves the user to the most likely panel for the current action, for example:
 - selecting a file opens Code
@@ -201,7 +205,7 @@ Current tests cover:
 - git-aware file enumeration and ignore behavior
 - non-git directory snapshot hashing
 - HTML rendering and safe JSON embedding
-- presence of mobile navigation and contextual note UI in rendered output
+- presence of mobile navigation, sidebar actions, and contextual note UI in rendered output
 - local app build flow writing an output artifact
 - CLI parser/build behavior
 - real local HTTP serving of a generated artifact
