@@ -1,7 +1,7 @@
 Margin design
 
 Status: draft
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
 1. Code layout
 
@@ -104,7 +104,7 @@ Rendering pieces:
 - inline CSS for layout, typography, inline note cards, inline drafting controls, and syntax highlighting
 - inline JavaScript for navigation, comment editing, persistence, file-state toggles, and export
 
-`render.py` uses a custom Pygments style backed by CSS variables so syntax token colors and code-surface backgrounds follow the document light and dark theme without introducing fixed white code blocks.
+`render.py` uses a custom Pygments style backed by CSS variables so syntax token colors and code-surface backgrounds follow the document light and dark theme without introducing fixed white code blocks. The style deliberately avoids bold token weights so code emphasis comes from color alone.
 
 The snapshot JSON must escape `</script>`-like sequences so source code cannot terminate the embedding script element.
 
@@ -161,7 +161,7 @@ Reasoning:
 - more robust on mobile Safari and touch input
 - stable enough for review export anchored by line range plus excerpt
 
-Rendered range comments are anchored inline below their end line. Repository notes and file notes render in a note stack above the current file only when they exist. New range-note drafting also renders inline below the selected range, and the same inline composer can switch scope to file or repository before save. This keeps comments visually attached to the code without reserving a right sidebar.
+Rendered range comments are anchored inline below their end line. Repository notes and file notes render in a note stack above the current file only when they exist. New range-note drafting also renders inline below the selected range, and the same inline composer can switch scope to file or repository before save. Pressing Enter in the composer saves the note, while Shift+Enter inserts a newline. The template styling uses flat zero-radius surfaces for panels, controls, note cards, and code chrome. This keeps comments visually attached to the code without reserving a right sidebar.
 
 The code pane uses one horizontal scroll surface for the whole file. Individual lines no longer own their own horizontal scroll container.
 

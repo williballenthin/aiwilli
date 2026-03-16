@@ -99,7 +99,7 @@
         border: 1px solid var(--panel-border);
         background: var(--panel);
         color: var(--text);
-        border-radius: 0.6rem;
+        border-radius: 0;
         padding: 0.55rem 0.85rem;
         cursor: pointer;
       }
@@ -120,7 +120,7 @@
         border: 1px solid var(--panel-border);
         background: var(--panel);
         color: var(--text);
-        border-radius: 0.6rem;
+        border-radius: 0;
         padding: 0.65rem 0.75rem;
       }
 
@@ -186,7 +186,7 @@
       .panel {
         background: var(--panel);
         border: 1px solid var(--panel-border);
-        border-radius: 0.9rem;
+        border-radius: 0;
         box-shadow: var(--shadow);
         min-height: calc(100vh - 1.5rem);
       }
@@ -262,7 +262,7 @@
       .compact-details summary,
       .compact-details[open] summary {
         padding: 0.42rem 0.7rem;
-        border-radius: 0.55rem;
+        border-radius: 0;
       }
 
       .compact-details {
@@ -302,7 +302,7 @@
         margin-top: 0;
         padding: 0.6rem;
         border: 1px solid var(--panel-border);
-        border-radius: 0.75rem;
+        border-radius: 0;
         background: var(--panel);
         box-shadow: var(--shadow);
         display: grid;
@@ -371,7 +371,7 @@
         align-items: center;
         gap: 0.6rem;
         padding: 0.35rem 0.45rem;
-        border-radius: 0.55rem;
+        border-radius: 0;
         text-align: left;
       }
 
@@ -412,7 +412,7 @@
         justify-content: center;
         min-width: 1.5rem;
         padding: 0.15rem 0.4rem;
-        border-radius: 999px;
+        border-radius: 0;
         font-size: 0.8rem;
         border: 1px solid var(--panel-border);
         color: var(--muted);
@@ -464,8 +464,8 @@
         padding: 0;
         border-top: 1px solid var(--panel-border);
         background: var(--code-bg);
-        border-bottom-left-radius: 0.9rem;
-        border-bottom-right-radius: 0.9rem;
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
         overflow: auto;
       }
 
@@ -542,7 +542,7 @@
         left: 50%;
         width: 2px;
         transform: translateX(-50%);
-        border-radius: 999px;
+        border-radius: 0;
         background: color-mix(in srgb, var(--comment) 55%, transparent);
       }
 
@@ -554,7 +554,7 @@
         width: 0.45rem;
         height: 0.45rem;
         transform: translateX(-50%);
-        border-radius: 999px;
+        border-radius: 0;
         background: var(--comment);
       }
 
@@ -584,7 +584,7 @@
       .empty-state {
         color: var(--muted);
         border: 1px dashed var(--panel-border);
-        border-radius: 0.75rem;
+        border-radius: 0;
         padding: 1rem;
       }
 
@@ -610,7 +610,7 @@
 
       .comment-card {
         border: 1px solid var(--panel-border);
-        border-radius: 0.8rem;
+        border-radius: 0;
         padding: 0.8rem;
         display: grid;
         gap: 0.55rem;
@@ -627,6 +627,10 @@
         background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel));
       }
 
+      .note-composer-card textarea {
+        margin-top: 0.3rem;
+      }
+
       .note-scope-menu .compact-details-panel {
         position: absolute;
         right: 0;
@@ -635,7 +639,7 @@
         margin-top: 0;
         padding: 0.6rem;
         border: 1px solid var(--panel-border);
-        border-radius: 0.75rem;
+        border-radius: 0;
         background: var(--panel);
         box-shadow: var(--shadow);
         display: grid;
@@ -675,7 +679,7 @@
         font-size: 0.85rem;
         color: var(--muted);
         padding: 0.65rem;
-        border-radius: 0.65rem;
+        border-radius: 0;
         background: color-mix(in srgb, var(--panel) 70%, var(--bg));
       }
 
@@ -1469,6 +1473,13 @@
           textarea.value = composerDraftBody;
           textarea.addEventListener("input", () => {
             composerDraftBody = textarea.value;
+          });
+          textarea.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+              return;
+            }
+            event.preventDefault();
+            saveComment();
           });
           if (shouldFocusComposer) {
             window.requestAnimationFrame(() => {

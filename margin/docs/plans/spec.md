@@ -1,7 +1,7 @@
 Margin specification
 
 Status: draft
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
 1. Purpose
 
@@ -159,9 +159,11 @@ The mobile layout uses an explicit panel switcher with Files and Code views. Use
 - renders repository notes and file notes above the code only when they exist
 - renders range comments inline beneath the anchored range end line
 - renders the note composer inline at the anchored location instead of opening a separate drafting pane
+- the note composer submits on Enter and inserts a newline on Shift+Enter
 - does not show a separate textual selection summary above the code
 - supports line-based range selection by choosing a start line and an end line
 - defaults new notes to the selected line range, with a scope dropdown to save the same draft as a file note or repository note instead
+- uses square corners for controls, panels, note cards, and other UI surfaces
 - marks a file reviewed implicitly when the user visits it
 - shows explicit file actions for marking reviewed, marking unreviewed, flagging for followup, and clearing the followup flag
 

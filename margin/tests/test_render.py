@@ -78,4 +78,32 @@ def test_render_review_document_uses_theme_aware_syntax_palette() -> None:
     assert ".syntax { background: transparent; color: var(--code-text) }" in document
     assert "var(--code-keyword)" in document
     assert "var(--code-string)" in document
+    assert "font-weight: bold" not in document
     assert "#f8f8f8" not in document
+
+
+def test_render_review_document_uses_flat_cards_and_enter_submit_composer() -> None:
+    snapshot = SourceSnapshot(
+        title="Demo review",
+        source_kind="local",
+        source_label="/tmp/demo",
+        snapshot_id="sha256:test",
+        generated_at=datetime(2026, 3, 15, 12, 0, tzinfo=UTC),
+        files=[
+            SourceFile(
+                path="src/app.py",
+                text="print('ok')\n",
+                content_digest="abc123",
+            )
+        ],
+    )
+
+    document = render_review_document(snapshot)
+
+    assert 'event.key !== "Enter" || event.shiftKey || event.isComposing' in document
+    assert ".note-composer-card textarea {" in document
+    assert "margin-top: 0.3rem;" in document
+    assert "border-radius: 0.8rem;" not in document
+    assert "border-radius: 0.75rem;" not in document
+    assert "border-radius: 0.6rem;" not in document
+    assert "border-radius: 999px;" not in document
