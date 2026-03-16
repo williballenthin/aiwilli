@@ -183,24 +183,12 @@
         align-items: start;
       }
 
-      body[data-comments-pane="open"] .layout {
-        grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr) minmax(18rem, 22rem);
-      }
-
       .panel {
         background: var(--panel);
         border: 1px solid var(--panel-border);
         border-radius: 0.9rem;
         box-shadow: var(--shadow);
         min-height: calc(100vh - 1.5rem);
-      }
-
-      .panel[data-panel="comments"] {
-        display: none;
-      }
-
-      body[data-comments-pane="open"] .panel[data-panel="comments"] {
-        display: block;
       }
 
       .sidebar-panel {
@@ -392,6 +380,18 @@
         background: var(--accent-soft);
       }
 
+      .tree-file-button.reviewed {
+        color: var(--muted);
+      }
+
+      .tree-file-button.flagged {
+        box-shadow: inset 2px 0 0 var(--comment);
+      }
+
+      .tree-file-button.flagged.active {
+        background: color-mix(in srgb, var(--accent-soft) 70%, var(--comment-soft));
+      }
+
       .tree-file-name {
         min-width: 0;
         overflow: hidden;
@@ -426,6 +426,12 @@
       .badge.reviewed {
         color: var(--reviewed);
         border-color: color-mix(in srgb, var(--reviewed) 45%, var(--panel-border));
+      }
+
+      .badge.flagged {
+        color: var(--comment);
+        border-color: color-mix(in srgb, var(--comment) 45%, var(--panel-border));
+        background: color-mix(in srgb, var(--comment-soft) 70%, transparent);
       }
 
       .code-header {
@@ -616,6 +622,31 @@
         background: var(--accent-soft);
       }
 
+      .note-composer-card {
+        border-style: dashed;
+        background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel));
+      }
+
+      .note-scope-menu .compact-details-panel {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 0.55rem);
+        min-width: 12rem;
+        margin-top: 0;
+        padding: 0.6rem;
+        border: 1px solid var(--panel-border);
+        border-radius: 0.75rem;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        display: grid;
+        gap: 0.5rem;
+        z-index: 6;
+      }
+
+      .note-scope-menu .compact-details-panel > * {
+        width: 100%;
+      }
+
       .comment-header {
         display: flex;
         justify-content: space-between;
@@ -674,17 +705,14 @@
           background: var(--bg);
         }
 
-        .layout,
-        body[data-comments-pane="open"] .layout {
+        .layout {
           grid-template-columns: 1fr;
           gap: 0.75rem;
           padding-top: 0;
         }
 
         .panel,
-        .sidebar-panel,
-        .panel[data-panel="comments"],
-        body[data-comments-pane="open"] .panel[data-panel="comments"] {
+        .sidebar-panel {
           display: block;
           position: static;
           min-height: auto;
@@ -703,18 +731,15 @@
           grid-template-columns: 1fr;
         }
 
-        .sidebar-actions-menu .compact-details-panel {
+        .sidebar-actions-menu .compact-details-panel,
+        .note-scope-menu .compact-details-panel {
           position: static;
           min-width: 0;
           margin-top: 0.7rem;
         }
 
         body[data-mobile-panel="files"] .panel[data-panel="code"],
-        body[data-mobile-panel="files"] .panel[data-panel="comments"],
-        body[data-mobile-panel="code"] .panel[data-panel="files"],
-        body[data-mobile-panel="code"] .panel[data-panel="comments"],
-        body[data-mobile-panel="comments"] .panel[data-panel="files"],
-        body[data-mobile-panel="comments"] .panel[data-panel="code"] {
+        body[data-mobile-panel="code"] .panel[data-panel="files"] {
           display: none;
         }
 
@@ -736,7 +761,6 @@
     <nav class="mobile-panel-nav" id="mobile-panel-nav" aria-label="Review panels">
       <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="files" aria-pressed="false">Files</button>
       <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="code" aria-pressed="true">Code</button>
-      <button type="button" class="mobile-panel-button" data-mobile-panel-button data-panel="comments" aria-pressed="false">Comments</button>
     </nav>
     <div class="layout">
       <aside class="panel sidebar-panel" data-panel="files">
@@ -747,8 +771,6 @@
         <div id="file-tree"></div>
         <div class="sidebar-footer">
           <div class="sidebar-actions">
-            <button type="button" class="compact-button" id="add-repo-comment">Repo note</button>
-            <button type="button" class="compact-button" id="toggle-comments-pane">Notes</button>
             <details class="compact-details sidebar-actions-menu" id="sidebar-actions-menu">
               <summary>Actions</summary>
               <div class="compact-details-panel">
@@ -774,8 +796,10 @@
               <div class="file-meta" id="current-file-meta"></div>
             </div>
             <div class="code-actions">
-              <button type="button" class="compact-button" id="add-file-comment">File note</button>
-              <label class="review-toggle"><input type="checkbox" id="reviewed-toggle"> Reviewed</label>
+              <button type="button" class="compact-button hidden" id="mark-reviewed">Mark reviewed</button>
+              <button type="button" class="compact-button hidden" id="mark-unreviewed">Mark unreviewed</button>
+              <button type="button" class="compact-button hidden" id="flag-followup">Flag for followup</button>
+              <button type="button" class="compact-button hidden" id="unflag-followup">Unflag for followup</button>
               <button type="button" class="compact-button hidden" id="clear-selection">Clear</button>
             </div>
           </div>
@@ -783,22 +807,6 @@
         <div class="note-stack hidden" id="note-stack"></div>
         <div id="code-view"></div>
       </main>
-      <aside class="panel" data-panel="comments">
-        <section class="composer-section">
-          <div class="comments-pane-title">
-            <h2 id="comments-pane-heading">New note</h2>
-            <button type="button" class="compact-button" id="close-comments-pane">Close</button>
-          </div>
-          <div class="helper-text" id="composer-target"></div>
-          <form id="comment-form" class="composer">
-            <textarea id="comment-body" placeholder="Write your review note here"></textarea>
-            <div class="composer-actions">
-              <button type="submit" id="save-comment">Save note</button>
-              <button type="button" id="cancel-comment">Clear</button>
-            </div>
-          </form>
-        </section>
-      </aside>
     </div>
     <script id="snapshot-data" type="application/json">{{ snapshot_json | safe }}</script>
     <script>
@@ -807,27 +815,21 @@
         const fileIndex = new Map(snapshot.files.map((file) => [file.path, file]));
         const storageKey = `margin:${snapshot.snapshotId}`;
         const ui = {
-          addFileComment: document.getElementById("add-file-comment"),
-          addRepoComment: document.getElementById("add-repo-comment"),
-          cancelComment: document.getElementById("cancel-comment"),
           clearSelection: document.getElementById("clear-selection"),
-          closeCommentsPane: document.getElementById("close-comments-pane"),
           codeView: document.getElementById("code-view"),
-          commentBody: document.getElementById("comment-body"),
-          commentForm: document.getElementById("comment-form"),
-          commentsPaneHeading: document.getElementById("comments-pane-heading"),
-          composerTarget: document.getElementById("composer-target"),
           currentFileMeta: document.getElementById("current-file-meta"),
           currentFileTitle: document.getElementById("current-file-title"),
           exportJson: document.getElementById("export-json"),
           exportMarkdown: document.getElementById("export-markdown"),
           fileTree: document.getElementById("file-tree"),
+          flagFollowup: document.getElementById("flag-followup"),
           importJson: document.getElementById("import-json"),
+          markReviewed: document.getElementById("mark-reviewed"),
+          markUnreviewed: document.getElementById("mark-unreviewed"),
           mobilePanelButtons: Array.from(document.querySelectorAll("[data-mobile-panel-button]")),
           noteStack: document.getElementById("note-stack"),
           reviewSummary: document.getElementById("review-summary"),
-          reviewedToggle: document.getElementById("reviewed-toggle"),
-          toggleCommentsPane: document.getElementById("toggle-comments-pane"),
+          unflagFollowup: document.getElementById("unflag-followup"),
         };
 
         let state = loadState();
@@ -835,9 +837,10 @@
         let pendingRangeStart = null;
         let rangeSelection = null;
         let focusedCommentId = null;
-        let composerState = defaultComposerState();
+        let composerState = null;
+        let composerDraftBody = "";
         let activeMobilePanel = "code";
-        let isCommentsPaneOpen = false;
+        let shouldFocusComposer = false;
 
         wireEvents();
         renderAll();
@@ -849,93 +852,37 @@
             });
           });
 
-          ui.addRepoComment.addEventListener("click", () => {
-            focusedCommentId = null;
-            pendingRangeStart = null;
-            rangeSelection = null;
-            composerState = {
-              scope: "repo",
-              path: null,
-              startLine: null,
-              endLine: null,
-              excerpt: null,
-              editId: null,
-            };
-            clearForm();
-            updateComposerTarget();
-            renderFile();
-            setCommentsPaneOpen(true);
-            setActiveMobilePanel("comments");
-            focusComposer();
-          });
-
-          ui.addFileComment.addEventListener("click", () => {
-            if (!currentFilePath) {
-              return;
-            }
-            focusedCommentId = null;
-            pendingRangeStart = null;
-            rangeSelection = null;
-            composerState = {
-              scope: "file",
-              path: currentFilePath,
-              startLine: null,
-              endLine: null,
-              excerpt: null,
-              editId: null,
-            };
-            clearForm();
-            updateComposerTarget();
-            renderFile();
-            setCommentsPaneOpen(true);
-            setActiveMobilePanel("comments");
-            focusComposer();
-          });
-
-          ui.toggleCommentsPane.addEventListener("click", () => {
-            setCommentsPaneOpen(!isCommentsPaneOpen);
-          });
-
-          ui.closeCommentsPane.addEventListener("click", () => {
-            setCommentsPaneOpen(false);
-          });
-
-          ui.cancelComment.addEventListener("click", () => {
-            resetComposer();
-            setCommentsPaneOpen(false);
-            renderFile();
-          });
-
           ui.clearSelection.addEventListener("click", () => {
-            pendingRangeStart = null;
-            rangeSelection = null;
-            if (composerState.scope === "range" && composerState.editId === null) {
-              resetComposer(false);
-              setCommentsPaneOpen(false);
-            }
+            resetComposer();
             renderFile();
-            updateSelectionSummary();
           });
 
-          ui.commentForm.addEventListener("submit", (event) => {
-            event.preventDefault();
-            saveComment();
-          });
-
-          ui.reviewedToggle.addEventListener("change", () => {
+          ui.markReviewed.addEventListener("click", () => {
             if (!currentFilePath) {
               return;
             }
-            const reviewedFiles = new Set(state.reviewedFiles);
-            if (ui.reviewedToggle.checked) {
-              reviewedFiles.add(currentFilePath);
-            } else {
-              reviewedFiles.delete(currentFilePath);
+            setReviewedState(currentFilePath, true);
+          });
+
+          ui.markUnreviewed.addEventListener("click", () => {
+            if (!currentFilePath) {
+              return;
             }
-            state.reviewedFiles = Array.from(reviewedFiles).sort();
-            saveState();
-            renderTree();
-            renderSummary();
+            setReviewedState(currentFilePath, false);
+          });
+
+          ui.flagFollowup.addEventListener("click", () => {
+            if (!currentFilePath) {
+              return;
+            }
+            setFlaggedState(currentFilePath, true);
+          });
+
+          ui.unflagFollowup.addEventListener("click", () => {
+            if (!currentFilePath) {
+              return;
+            }
+            setFlaggedState(currentFilePath, false);
           });
 
           ui.exportMarkdown.addEventListener("click", () => {
@@ -958,10 +905,8 @@
                 window.alert("Imported review belongs to a different snapshot.");
                 return;
               }
-              const importedState = normalizeState(rawState);
-              state = importedState;
+              state = normalizeState(rawState);
               saveState();
-              focusedCommentId = null;
               resetComposer();
               renderAll();
             } catch (error) {
@@ -972,33 +917,13 @@
           });
         }
 
-        function defaultComposerState() {
-          if (currentFilePath) {
-            return {
-              scope: "file",
-              path: currentFilePath,
-              startLine: null,
-              endLine: null,
-              excerpt: null,
-              editId: null,
-            };
-          }
-          return {
-            scope: "repo",
-            path: null,
-            startLine: null,
-            endLine: null,
-            excerpt: null,
-            editId: null,
-          };
-        }
-
         function defaultState() {
           return {
             version: 1,
             snapshotId: snapshot.snapshotId,
             nextSequence: 1,
             reviewedFiles: [],
+            flaggedFiles: [],
             comments: [],
             updatedAt: new Date().toISOString(),
           };
@@ -1017,20 +942,13 @@
           }
         }
 
-        function setCommentsPaneOpen(isOpen) {
-          isCommentsPaneOpen = isOpen;
-          document.body.dataset.commentsPane = isOpen ? "open" : "closed";
-          ui.toggleCommentsPane.textContent = isOpen ? "Hide notes" : `Notes (${state.comments.length})`;
-        }
-
         function normalizeState(candidate) {
           const base = defaultState();
           if (!candidate || candidate.snapshotId !== snapshot.snapshotId) {
             return base;
           }
-          const reviewedFiles = Array.isArray(candidate.reviewedFiles)
-            ? Array.from(new Set(candidate.reviewedFiles.filter((path) => fileIndex.has(path)))).sort()
-            : [];
+          const reviewedFiles = normalizePathList(candidate.reviewedFiles);
+          const flaggedFiles = normalizePathList(candidate.flaggedFiles);
           const comments = Array.isArray(candidate.comments)
             ? candidate.comments.filter(isValidComment).map(normalizeComment)
             : [];
@@ -1048,16 +966,23 @@
             snapshotId: snapshot.snapshotId,
             nextSequence,
             reviewedFiles,
+            flaggedFiles,
             comments,
             updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : base.updatedAt,
           };
+        }
+
+        function normalizePathList(candidate) {
+          return Array.isArray(candidate)
+            ? Array.from(new Set(candidate.filter((path) => typeof path === "string" && fileIndex.has(path)))).sort()
+            : [];
         }
 
         function isValidComment(comment) {
           if (!comment || typeof comment !== "object") {
             return false;
           }
-          if (!(["repo", "file", "range"].includes(comment.scope))) {
+          if (!["repo", "file", "range"].includes(comment.scope)) {
             return false;
           }
           if (typeof comment.body !== "string" || !comment.body.trim()) {
@@ -1100,6 +1025,7 @@
             snapshotId: state.snapshotId,
             nextSequence: state.nextSequence,
             reviewedFiles: [...state.reviewedFiles],
+            flaggedFiles: [...state.flaggedFiles],
             comments: sortComments(state.comments),
             updatedAt: state.updatedAt,
           };
@@ -1109,13 +1035,12 @@
           if (!currentFilePath && snapshot.files[0]) {
             currentFilePath = snapshot.files[0].path;
           }
-          resetComposer(false);
+          if (currentFilePath) {
+            markFileVisited(currentFilePath);
+          }
           renderTree();
           renderFile();
           renderSummary();
-          updateComposerTarget();
-          updateSelectionSummary();
-          setCommentsPaneOpen(false);
           setActiveMobilePanel(activeMobilePanel);
         }
 
@@ -1127,28 +1052,19 @@
           });
         }
 
-        function focusComposer() {
-          window.requestAnimationFrame(() => {
-            ui.commentBody.focus();
-          });
-        }
-
         function renderSummary() {
           const reviewedCount = state.reviewedFiles.length;
+          const flaggedCount = state.flaggedFiles.length;
           const totalFiles = snapshot.files.length;
           const commentCount = state.comments.length;
-          ui.reviewSummary.textContent = `${commentCount} open comments · ${reviewedCount}/${totalFiles} files reviewed`;
-          ui.toggleCommentsPane.textContent = isCommentsPaneOpen ? "Hide notes" : `Notes (${commentCount})`;
+          ui.reviewSummary.textContent = `${commentCount} open comments · ${flaggedCount} flagged · ${reviewedCount}/${totalFiles} files reviewed`;
         }
 
         function renderTree() {
-          const tree = buildTree(getVisiblePaths());
+          const tree = buildTree(snapshot.files.map((file) => file.path));
           ui.fileTree.replaceChildren();
           if (tree.children.size === 0) {
-            const empty = document.createElement("div");
-            empty.className = "empty-state";
-            empty.textContent = "No files match the current filters.";
-            ui.fileTree.appendChild(empty);
+            ui.fileTree.appendChild(buildEmptyState("This review contains no files."));
             return;
           }
           const wrapper = document.createElement("div");
@@ -1202,8 +1118,12 @@
           const status = document.createElement("span");
           status.className = "tree-folder-status";
           const commentCount = countCommentsForPrefix(node.path);
+          const flaggedCount = countFlaggedForPrefix(node.path);
           if (commentCount > 0) {
             status.appendChild(createBadge(String(commentCount), "comment"));
+          }
+          if (flaggedCount > 0) {
+            status.appendChild(createBadge(String(flaggedCount), "flagged"));
           }
           summary.append(name, status);
           details.appendChild(summary);
@@ -1225,12 +1145,18 @@
           if (node.path === currentFilePath) {
             button.classList.add("active");
           }
+          if (state.reviewedFiles.includes(node.path)) {
+            button.classList.add("reviewed");
+          }
+          if (state.flaggedFiles.includes(node.path)) {
+            button.classList.add("flagged");
+          }
           button.addEventListener("click", () => {
-            currentFilePath = node.path;
+            openFile(node.path);
             resetComposer();
-            renderFile();
             renderTree();
-            setCommentsPaneOpen(false);
+            renderFile();
+            renderSummary();
             setActiveMobilePanel("code");
           });
           const name = document.createElement("span");
@@ -1241,6 +1167,9 @@
           const commentCount = countCommentsForFile(node.path);
           if (commentCount > 0) {
             status.appendChild(createBadge(String(commentCount), "comment"));
+          }
+          if (state.flaggedFiles.includes(node.path)) {
+            status.appendChild(createBadge("!", "flagged"));
           }
           if (state.reviewedFiles.includes(node.path)) {
             status.appendChild(createBadge("✓", "reviewed"));
@@ -1257,8 +1186,46 @@
           return badge;
         }
 
-        function getVisiblePaths() {
-          return snapshot.files.map((file) => file.path);
+        function openFile(path) {
+          currentFilePath = path;
+          markFileVisited(path);
+        }
+
+        function markFileVisited(path) {
+          const reviewedFiles = new Set(state.reviewedFiles);
+          if (!reviewedFiles.has(path)) {
+            reviewedFiles.add(path);
+            state.reviewedFiles = Array.from(reviewedFiles).sort();
+            saveState();
+          }
+        }
+
+        function setReviewedState(path, reviewed) {
+          const reviewedFiles = new Set(state.reviewedFiles);
+          if (reviewed) {
+            reviewedFiles.add(path);
+          } else {
+            reviewedFiles.delete(path);
+          }
+          state.reviewedFiles = Array.from(reviewedFiles).sort();
+          saveState();
+          renderTree();
+          renderFile();
+          renderSummary();
+        }
+
+        function setFlaggedState(path, flagged) {
+          const flaggedFiles = new Set(state.flaggedFiles);
+          if (flagged) {
+            flaggedFiles.add(path);
+          } else {
+            flaggedFiles.delete(path);
+          }
+          state.flaggedFiles = Array.from(flaggedFiles).sort();
+          saveState();
+          renderTree();
+          renderFile();
+          renderSummary();
         }
 
         function countCommentsForFile(path) {
@@ -1270,28 +1237,26 @@
           return state.comments.filter((comment) => comment.path && comment.path.startsWith(normalizedPrefix)).length;
         }
 
+        function countFlaggedForPrefix(prefix) {
+          const normalizedPrefix = `${prefix}/`;
+          return state.flaggedFiles.filter((path) => path.startsWith(normalizedPrefix)).length;
+        }
+
         function renderFile() {
           ui.codeView.replaceChildren();
-          renderFileNotes();
+          renderNoteStack();
+          renderCodeActions();
           if (!currentFilePath) {
             ui.currentFileTitle.textContent = "No file selected";
             ui.currentFileMeta.textContent = "";
-            ui.reviewedToggle.checked = false;
-            ui.reviewedToggle.disabled = true;
-            ui.addFileComment.disabled = true;
             ui.codeView.appendChild(buildEmptyState("This review contains no files."));
-            updateSelectionSummary();
             return;
           }
           const file = fileIndex.get(currentFilePath);
           ui.currentFileTitle.textContent = file.path;
           ui.currentFileMeta.textContent = `${file.language} · ${file.lineCount} lines`;
-          ui.reviewedToggle.disabled = false;
-          ui.reviewedToggle.checked = state.reviewedFiles.includes(currentFilePath);
-          ui.addFileComment.disabled = false;
           if (file.lines.length === 0) {
             ui.codeView.appendChild(buildEmptyState("Empty file."));
-            updateSelectionSummary();
             return;
           }
           const codeLines = document.createElement("div");
@@ -1324,45 +1289,83 @@
             row.append(lineNumberButton, commentRail, lineCode);
             codeLines.appendChild(row);
 
-            const anchoredComments = getRangeCommentsEndingAtLine(currentFilePath, lineNumber);
-            if (anchoredComments.length > 0) {
-              codeLines.appendChild(buildInlineThread(anchoredComments));
+            if (shouldRenderInlineThread(currentFilePath, lineNumber, comments)) {
+              codeLines.appendChild(buildInlineThread(currentFilePath, lineNumber, getRangeCommentsEndingAtLine(currentFilePath, lineNumber)));
             }
           }
           ui.codeView.appendChild(codeLines);
-          updateSelectionSummary();
         }
 
-        function renderFileNotes() {
+        function renderCodeActions() {
+          const hasFile = Boolean(currentFilePath);
+          if (!hasFile) {
+            ui.markReviewed.classList.add("hidden");
+            ui.markUnreviewed.classList.add("hidden");
+            ui.flagFollowup.classList.add("hidden");
+            ui.unflagFollowup.classList.add("hidden");
+            ui.clearSelection.classList.add("hidden");
+            return;
+          }
+          const isReviewed = state.reviewedFiles.includes(currentFilePath);
+          const isFlagged = state.flaggedFiles.includes(currentFilePath);
+          ui.markReviewed.classList.toggle("hidden", isReviewed);
+          ui.markUnreviewed.classList.toggle("hidden", !isReviewed);
+          ui.flagFollowup.classList.toggle("hidden", isFlagged);
+          ui.unflagFollowup.classList.toggle("hidden", !isFlagged);
+          const hasSelection = pendingRangeStart !== null || (rangeSelection && rangeSelection.path === currentFilePath);
+          ui.clearSelection.classList.toggle("hidden", !hasSelection);
+        }
+
+        function renderNoteStack() {
           ui.noteStack.replaceChildren();
           const repositoryComments = sortComments(state.comments.filter((comment) => comment.scope === "repo"));
           const fileComments = currentFilePath
             ? sortComments(state.comments.filter((comment) => comment.scope === "file" && comment.path === currentFilePath))
             : [];
-          if (repositoryComments.length === 0 && fileComments.length === 0) {
+          const editingComment = getEditingComment();
+          const showRepositoryNotes = repositoryComments.length > 0 || editingComment?.scope === "repo";
+          const showFileNotes = fileComments.length > 0 || editingComment?.scope === "file";
+          if (!showRepositoryNotes && !showFileNotes) {
             ui.noteStack.classList.add("hidden");
             return;
           }
           ui.noteStack.classList.remove("hidden");
-          appendNoteSection(ui.noteStack, "Repository notes", repositoryComments);
-          appendNoteSection(
-            ui.noteStack,
-            fileComments.length === 1 ? "1 file note" : `${fileComments.length} file notes`,
-            fileComments,
-          );
+          if (showRepositoryNotes) {
+            appendNoteSection(ui.noteStack, "Repository notes", repositoryComments);
+          }
+          if (showFileNotes) {
+            appendNoteSection(
+              ui.noteStack,
+              fileComments.length === 1 ? "1 file note" : `${fileComments.length} file notes`,
+              fileComments,
+            );
+          }
         }
 
         function appendNoteSection(container, headingText, comments) {
-          if (comments.length === 0) {
-            return;
-          }
           const heading = document.createElement("div");
           heading.className = "notes-heading";
           heading.textContent = headingText;
           container.appendChild(heading);
           for (const comment of comments) {
-            container.appendChild(buildCommentCard(comment));
+            if (composerState?.editId === comment.id) {
+              container.appendChild(buildComposerCard({ allowScopeMenu: false }));
+            } else {
+              container.appendChild(buildCommentCard(comment));
+            }
           }
+        }
+
+        function shouldRenderInlineThread(path, lineNumber, comments) {
+          if (comments.length > 0) {
+            return true;
+          }
+          return Boolean(
+            composerState &&
+            composerState.anchor === "range" &&
+            composerState.path === path &&
+            composerState.endLine === lineNumber,
+          );
         }
 
         function buildCommentRail(comments, hasEndpoint) {
@@ -1384,13 +1387,141 @@
           return spacer;
         }
 
-        function buildInlineThread(comments) {
+        function buildInlineThread(path, lineNumber, comments) {
           const thread = document.createElement("div");
           thread.className = "inline-thread";
+          if (
+            composerState &&
+            composerState.anchor === "range" &&
+            composerState.path === path &&
+            composerState.endLine === lineNumber &&
+            composerState.editId === null
+          ) {
+            thread.appendChild(buildComposerCard({ allowScopeMenu: true }));
+          }
           for (const comment of comments) {
-            thread.appendChild(buildCommentCard(comment));
+            if (composerState?.editId === comment.id) {
+              thread.appendChild(buildComposerCard({ allowScopeMenu: false }));
+            } else {
+              thread.appendChild(buildCommentCard(comment));
+            }
           }
           return thread;
+        }
+
+        function buildCommentCard(comment) {
+          const card = document.createElement("article");
+          card.className = "comment-card";
+          if (comment.id === focusedCommentId) {
+            card.classList.add("focused");
+          }
+          const header = document.createElement("div");
+          header.className = "comment-header";
+          const titleBlock = document.createElement("div");
+          titleBlock.className = "comment-heading";
+          const commentId = document.createElement("div");
+          commentId.className = "comment-id";
+          commentId.textContent = comment.id;
+          const meta = document.createElement("div");
+          meta.className = "comment-meta";
+          meta.textContent = describeComment(comment);
+          titleBlock.append(commentId, meta);
+          const actions = document.createElement("div");
+          actions.className = "toolbar-row";
+          actions.append(
+            buildCardButton("Edit", () => editComment(comment.id)),
+            buildCardButton("Delete", () => deleteComment(comment.id), "danger-button"),
+          );
+          header.append(titleBlock, actions);
+          const body = document.createElement("p");
+          body.className = "comment-body";
+          body.textContent = comment.body;
+          card.append(header, body);
+          if (comment.excerpt) {
+            const excerpt = document.createElement("div");
+            excerpt.className = "comment-excerpt";
+            excerpt.textContent = comment.excerpt;
+            card.appendChild(excerpt);
+          }
+          return card;
+        }
+
+        function buildComposerCard({ allowScopeMenu }) {
+          const card = document.createElement("article");
+          card.className = "comment-card note-composer-card";
+          const header = document.createElement("div");
+          header.className = "comment-header";
+          const titleBlock = document.createElement("div");
+          titleBlock.className = "comment-heading";
+          const title = document.createElement("div");
+          title.className = "comment-id";
+          title.textContent = composerState?.editId ? `Edit ${composerState.editId}` : "New note";
+          const meta = document.createElement("div");
+          meta.className = "comment-meta";
+          meta.textContent = describeComposerTarget();
+          titleBlock.append(title, meta);
+          header.appendChild(titleBlock);
+          if (allowScopeMenu) {
+            header.appendChild(buildScopeMenu());
+          }
+          const textarea = document.createElement("textarea");
+          textarea.placeholder = "Write your review note here";
+          textarea.value = composerDraftBody;
+          textarea.addEventListener("input", () => {
+            composerDraftBody = textarea.value;
+          });
+          if (shouldFocusComposer) {
+            window.requestAnimationFrame(() => {
+              textarea.focus();
+            });
+            shouldFocusComposer = false;
+          }
+          const actions = document.createElement("div");
+          actions.className = "composer-actions";
+          actions.append(
+            buildCardButton("Save note", saveComment),
+            buildCardButton("Cancel", () => {
+              resetComposer();
+              renderTree();
+              renderFile();
+              renderSummary();
+            }),
+          );
+          card.append(header, textarea, actions);
+          return card;
+        }
+
+        function buildScopeMenu() {
+          const details = document.createElement("details");
+          details.className = "compact-details note-scope-menu";
+          const summary = document.createElement("summary");
+          summary.textContent = getComposerScopeLabel();
+          const panel = document.createElement("div");
+          panel.className = "compact-details-panel";
+          panel.append(
+            buildCardButton("Selected lines", () => {
+              setComposerScope("range");
+              details.open = false;
+            }),
+            buildCardButton("File note", () => {
+              setComposerScope("file");
+              details.open = false;
+            }),
+            buildCardButton("Repo note", () => {
+              setComposerScope("repo");
+              details.open = false;
+            }),
+          );
+          details.append(summary, panel);
+          return details;
+        }
+
+        function setComposerScope(scope) {
+          if (!composerState || composerState.editId !== null) {
+            return;
+          }
+          composerState.scope = scope;
+          renderFile();
         }
 
         function handleLineSelection(lineNumber) {
@@ -1401,7 +1532,8 @@
           if (pendingRangeStart === null) {
             pendingRangeStart = lineNumber;
             rangeSelection = { path: currentFilePath, startLine: lineNumber, endLine: lineNumber };
-            updateSelectionSummary();
+            composerState = null;
+            composerDraftBody = "";
             renderFile();
             return;
           }
@@ -1410,6 +1542,7 @@
           pendingRangeStart = null;
           rangeSelection = { path: currentFilePath, startLine, endLine };
           composerState = {
+            anchor: "range",
             scope: "range",
             path: currentFilePath,
             startLine,
@@ -1417,12 +1550,9 @@
             excerpt: getSelectedExcerpt(currentFilePath, startLine, endLine),
             editId: null,
           };
-          clearForm();
-          updateComposerTarget();
+          composerDraftBody = "";
+          shouldFocusComposer = true;
           renderFile();
-          setCommentsPaneOpen(true);
-          setActiveMobilePanel("comments");
-          focusComposer();
         }
 
         function isLineSelected(path, lineNumber) {
@@ -1473,41 +1603,156 @@
           return scratch.textContent?.trim() || null;
         }
 
-        function buildCommentCard(comment) {
-          const card = document.createElement("article");
-          card.className = "comment-card";
-          if (comment.id === focusedCommentId) {
-            card.classList.add("focused");
+        function focusComment(commentId) {
+          const comment = state.comments.find((item) => item.id === commentId);
+          if (!comment) {
+            return;
           }
-          const header = document.createElement("div");
-          header.className = "comment-header";
-          const titleBlock = document.createElement("div");
-          titleBlock.className = "comment-heading";
-          const commentId = document.createElement("div");
-          commentId.className = "comment-id";
-          commentId.textContent = comment.id;
-          const meta = document.createElement("div");
-          meta.className = "comment-meta";
-          meta.textContent = describeComment(comment);
-          titleBlock.append(commentId, meta);
-          const actions = document.createElement("div");
-          actions.className = "toolbar-row";
-          actions.append(
-            buildCardButton("Edit", () => editComment(comment.id)),
-            buildCardButton("Delete", () => deleteComment(comment.id), "danger-button"),
-          );
-          header.append(titleBlock, actions);
-          const body = document.createElement("p");
-          body.className = "comment-body";
-          body.textContent = comment.body;
-          card.append(header, body);
-          if (comment.excerpt) {
-            const excerpt = document.createElement("div");
-            excerpt.className = "comment-excerpt";
-            excerpt.textContent = comment.excerpt;
-            card.appendChild(excerpt);
+          focusedCommentId = comment.id;
+          composerState = null;
+          composerDraftBody = "";
+          pendingRangeStart = null;
+          if (comment.path) {
+            openFile(comment.path);
           }
-          return card;
+          rangeSelection = comment.scope === "range"
+            ? { path: comment.path, startLine: comment.startLine, endLine: comment.endLine }
+            : null;
+          renderTree();
+          renderFile();
+          renderSummary();
+          if (comment.scope === "range") {
+            window.requestAnimationFrame(() => scrollToLine(comment.startLine));
+          }
+        }
+
+        function editComment(commentId) {
+          const comment = state.comments.find((item) => item.id === commentId);
+          if (!comment) {
+            return;
+          }
+          focusedCommentId = comment.id;
+          pendingRangeStart = null;
+          if (comment.path) {
+            openFile(comment.path);
+          }
+          rangeSelection = comment.scope === "range"
+            ? { path: comment.path, startLine: comment.startLine, endLine: comment.endLine }
+            : null;
+          composerState = {
+            anchor: comment.scope,
+            scope: comment.scope,
+            path: comment.path,
+            startLine: comment.startLine,
+            endLine: comment.endLine,
+            excerpt: comment.excerpt,
+            editId: comment.id,
+          };
+          composerDraftBody = comment.body;
+          shouldFocusComposer = true;
+          renderTree();
+          renderFile();
+          renderSummary();
+          if (comment.scope === "range") {
+            window.requestAnimationFrame(() => scrollToLine(comment.startLine));
+          }
+        }
+
+        function getEditingComment() {
+          if (!composerState?.editId) {
+            return null;
+          }
+          return state.comments.find((comment) => comment.id === composerState.editId) || null;
+        }
+
+        function deleteComment(commentId) {
+          const comment = state.comments.find((item) => item.id === commentId);
+          if (!comment) {
+            return;
+          }
+          state.comments = state.comments.filter((item) => item.id !== commentId);
+          saveState();
+          if (focusedCommentId === commentId) {
+            focusedCommentId = null;
+          }
+          if (composerState?.editId === commentId) {
+            resetComposer();
+          }
+          renderTree();
+          renderFile();
+          renderSummary();
+        }
+
+        function saveComment() {
+          if (!composerState) {
+            return;
+          }
+          const body = composerDraftBody.trim();
+          if (!body) {
+            window.alert("Note text is required.");
+            return;
+          }
+          const now = new Date().toISOString();
+          const existingIndex = state.comments.findIndex((comment) => comment.id === composerState.editId);
+          const commentId = composerState.editId || createCommentId(state.nextSequence);
+          const comment = {
+            id: commentId,
+            scope: composerState.scope,
+            path: composerState.scope === "repo" ? null : composerState.path,
+            startLine: composerState.scope === "range" ? composerState.startLine : null,
+            endLine: composerState.scope === "range" ? composerState.endLine : null,
+            excerpt: composerState.scope === "range" ? composerState.excerpt : null,
+            title: existingIndex >= 0 ? state.comments[existingIndex].title : "",
+            body,
+            createdAt: existingIndex >= 0 ? state.comments[existingIndex].createdAt : now,
+            updatedAt: now,
+          };
+          if (existingIndex >= 0) {
+            state.comments.splice(existingIndex, 1, comment);
+          } else {
+            state.comments.push(comment);
+            state.nextSequence += 1;
+          }
+          saveState();
+          focusedCommentId = comment.id;
+          resetComposer();
+          renderTree();
+          renderFile();
+          renderSummary();
+        }
+
+        function resetComposer() {
+          composerState = null;
+          composerDraftBody = "";
+          pendingRangeStart = null;
+          rangeSelection = null;
+          shouldFocusComposer = false;
+        }
+
+        function getComposerScopeLabel() {
+          if (!composerState) {
+            return "Scope";
+          }
+          if (composerState.scope === "repo") {
+            return "Repo note";
+          }
+          if (composerState.scope === "file") {
+            return "File note";
+          }
+          return `Lines ${composerState.startLine}-${composerState.endLine}`;
+        }
+
+        function describeComposerTarget() {
+          if (!composerState) {
+            return "";
+          }
+          if (composerState.scope === "repo") {
+            return "Repository note";
+          }
+          if (composerState.scope === "file") {
+            return `${composerState.path} · file note`;
+          }
+          return `${composerState.path} · lines ${composerState.startLine}-${composerState.endLine}`;
         }
 
         function buildCardButton(label, onClick, className = "") {
@@ -1535,167 +1780,6 @@
             return `${comment.path} · file note`;
           }
           return `${comment.path} · lines ${comment.startLine}-${comment.endLine}`;
-        }
-
-        function focusComment(commentId) {
-          const comment = state.comments.find((item) => item.id === commentId);
-          if (!comment) {
-            return;
-          }
-          focusedCommentId = comment.id;
-          if (comment.path) {
-            currentFilePath = comment.path;
-          }
-          if (comment.scope === "range") {
-            rangeSelection = {
-              path: comment.path,
-              startLine: comment.startLine,
-              endLine: comment.endLine,
-            };
-          } else {
-            rangeSelection = null;
-          }
-          pendingRangeStart = null;
-          renderTree();
-          renderFile();
-          updateSelectionSummary();
-          setCommentsPaneOpen(comment.scope !== "range");
-          setActiveMobilePanel(comment.scope === "range" ? "code" : "comments");
-          if (comment.scope === "range") {
-            window.requestAnimationFrame(() => scrollToLine(comment.startLine));
-          }
-        }
-
-        function editComment(commentId) {
-          const comment = state.comments.find((item) => item.id === commentId);
-          if (!comment) {
-            return;
-          }
-          focusedCommentId = comment.id;
-          if (comment.path) {
-            currentFilePath = comment.path;
-          }
-          pendingRangeStart = null;
-          rangeSelection = comment.scope === "range"
-            ? { path: comment.path, startLine: comment.startLine, endLine: comment.endLine }
-            : null;
-          composerState = {
-            scope: comment.scope,
-            path: comment.path,
-            startLine: comment.startLine,
-            endLine: comment.endLine,
-            excerpt: comment.excerpt,
-            editId: comment.id,
-          };
-          ui.commentBody.value = comment.body;
-          renderTree();
-          renderFile();
-          updateComposerTarget();
-          updateSelectionSummary();
-          setCommentsPaneOpen(true);
-          setActiveMobilePanel("comments");
-          focusComposer();
-        }
-
-        function deleteComment(commentId) {
-          const comment = state.comments.find((item) => item.id === commentId);
-          if (!comment) {
-            return;
-          }
-          if (!window.confirm(`Delete ${comment.id}?`)) {
-            return;
-          }
-          state.comments = state.comments.filter((item) => item.id !== commentId);
-          saveState();
-          if (focusedCommentId === commentId) {
-            focusedCommentId = null;
-          }
-          if (composerState.editId === commentId) {
-            resetComposer();
-            setCommentsPaneOpen(false);
-          }
-          renderTree();
-          renderFile();
-          renderSummary();
-          setActiveMobilePanel("comments");
-        }
-
-        function saveComment() {
-          const body = ui.commentBody.value.trim();
-          if (!body) {
-            window.alert("Note text is required.");
-            return;
-          }
-          const now = new Date().toISOString();
-          const existingIndex = state.comments.findIndex((comment) => comment.id === composerState.editId);
-          const commentId = composerState.editId || createCommentId(state.nextSequence);
-          const comment = {
-            id: commentId,
-            scope: composerState.scope,
-            path: composerState.path,
-            startLine: composerState.scope === "range" ? composerState.startLine : null,
-            endLine: composerState.scope === "range" ? composerState.endLine : null,
-            excerpt: composerState.scope === "range" ? composerState.excerpt : null,
-            title: existingIndex >= 0 ? state.comments[existingIndex].title : "",
-            body,
-            createdAt: existingIndex >= 0 ? state.comments[existingIndex].createdAt : now,
-            updatedAt: now,
-          };
-          if (existingIndex >= 0) {
-            state.comments.splice(existingIndex, 1, comment);
-          } else {
-            state.comments.push(comment);
-            state.nextSequence += 1;
-          }
-          saveState();
-          focusedCommentId = comment.id;
-          resetComposer();
-          renderTree();
-          renderFile();
-          renderSummary();
-          setCommentsPaneOpen(false);
-          setActiveMobilePanel("comments");
-        }
-
-        function resetComposer(clearInputs = true) {
-          composerState = defaultComposerState();
-          focusedCommentId = null;
-          pendingRangeStart = null;
-          rangeSelection = null;
-          if (clearInputs) {
-            clearForm();
-          }
-          updateComposerTarget();
-          updateSelectionSummary();
-        }
-
-        function clearForm() {
-          ui.commentBody.value = "";
-        }
-
-        function updateComposerTarget() {
-          ui.commentsPaneHeading.textContent = composerState.editId ? `Edit ${composerState.editId}` : "New note";
-          if (composerState.editId) {
-            ui.composerTarget.textContent = describeComment(composerState);
-            return;
-          }
-          if (composerState.scope === "repo") {
-            ui.composerTarget.textContent = "Repository note";
-            return;
-          }
-          if (composerState.scope === "file") {
-            ui.composerTarget.textContent = `${composerState.path} · file note`;
-            return;
-          }
-          ui.composerTarget.textContent = `${composerState.path} · lines ${composerState.startLine}-${composerState.endLine}`;
-        }
-
-        function updateSelectionSummary() {
-          if (pendingRangeStart !== null || (rangeSelection && rangeSelection.path === currentFilePath)) {
-            ui.clearSelection.classList.remove("hidden");
-            return;
-          }
-          ui.clearSelection.classList.add("hidden");
         }
 
         function scrollToLine(lineNumber) {
@@ -1730,6 +1814,7 @@
             `exported_at: ${new Date().toISOString()}`,
             `file_count: ${snapshot.files.length}`,
             `reviewed_files: ${state.reviewedFiles.length}`,
+            `flagged_files: ${state.flaggedFiles.length}`,
             `comment_count: ${comments.length}`,
             "",
             "## Summary",
@@ -1737,6 +1822,7 @@
             `- ${repositoryComments.length} repository comments`,
             `- ${comments.filter((comment) => comment.scope === "file").length} file comments`,
             `- ${comments.filter((comment) => comment.scope === "range").length} range comments`,
+            `- ${state.flaggedFiles.length} flagged files`,
             "",
           ];
 
@@ -1744,6 +1830,15 @@
             lines.push("## Reviewed files");
             lines.push("");
             for (const path of [...state.reviewedFiles].sort()) {
+              lines.push(`- ${path}`);
+            }
+            lines.push("");
+          }
+
+          if (state.flaggedFiles.length > 0) {
+            lines.push("## Flagged files");
+            lines.push("");
+            for (const path of [...state.flaggedFiles].sort()) {
               lines.push(`- ${path}`);
             }
             lines.push("");

@@ -101,8 +101,8 @@ The generated document is fully self-contained.
 Rendering pieces:
 - a sticky sidebar with project identity, file tree, actions, and metadata
 - embedded snapshot JSON inside a non-executing script tag
-- inline CSS for layout, typography, contextual panes, inline comment cards, and syntax highlighting
-- inline JavaScript for navigation, comment editing, persistence, pane toggling, and export
+- inline CSS for layout, typography, inline note cards, inline drafting controls, and syntax highlighting
+- inline JavaScript for navigation, comment editing, persistence, file-state toggles, and export
 
 `render.py` uses a custom Pygments style backed by CSS variables so syntax token colors and code-surface backgrounds follow the document light and dark theme without introducing fixed white code blocks.
 
@@ -114,6 +114,7 @@ Client-side mutable review state is stored as JSON with fields:
 - `snapshotId`
 - `nextSequence`
 - `reviewedFiles`
+- `flaggedFiles`
 - `comments`
 - `updatedAt`
 
@@ -151,9 +152,7 @@ Desktop layout is a two-column grid by default:
 - a sticky viewport-height sidebar for project identity, files, actions, and metadata
 - code pane
 
-A third comments pane is only inserted into the desktop grid when the user opens it or starts writing/editing a comment.
-
-The sidebar footer holds repo-note and pane-toggle buttons plus a compact `details` menu for export and import actions. The file tree itself is no longer filtered client-side.
+The sidebar footer now holds only a compact `details` menu for export and import actions. The file tree itself is no longer filtered client-side.
 
 Range comments are still created by selecting start and end lines rather than arbitrary text spans.
 
@@ -162,17 +161,15 @@ Reasoning:
 - more robust on mobile Safari and touch input
 - stable enough for review export anchored by line range plus excerpt
 
-Rendered range comments are anchored inline below their end line. Repository notes and file notes render in a note stack above the current file only when they exist. This keeps comments visually attached to the code without permanently reserving a right sidebar.
+Rendered range comments are anchored inline below their end line. Repository notes and file notes render in a note stack above the current file only when they exist. New range-note drafting also renders inline below the selected range, and the same inline composer can switch scope to file or repository before save. This keeps comments visually attached to the code without reserving a right sidebar.
 
 The code pane uses one horizontal scroll surface for the whole file. Individual lines no longer own their own horizontal scroll container.
 
 The old overlapping-comment count pills were replaced by a narrow clickable rail column. Each commented line shows a shared visual track instead of a numeric overlap count.
 
-On narrow screens, the document switches to an explicit Files / Code / Comments panel model. The JavaScript moves the user to the most likely panel for the current action, for example:
-- selecting a file opens Code
-- finishing a line-range selection opens Comments
-- editing a comment opens Comments
-- focusing a range comment opens Code and scrolls to the anchor line
+Opening a file implicitly adds that path to `reviewedFiles`. Separate explicit header actions can remove the reviewed state or toggle a `flaggedFiles` followup state.
+
+On narrow screens, the document switches to an explicit Files / Code panel model. Inline drafting stays inside the Code panel, so there is no separate comments panel to navigate to.
 
 10. Export behavior
 
@@ -182,6 +179,7 @@ The markdown export includes:
 - top-level metadata
 - summary counts
 - reviewed-file list
+- flagged-file list
 - findings index
 - grouped detailed sections
 

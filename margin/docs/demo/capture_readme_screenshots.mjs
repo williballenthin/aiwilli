@@ -37,6 +37,7 @@ function buildState(snapshot) {
     snapshotId: snapshot.snapshotId,
     nextSequence: 3,
     reviewedFiles: ["src/app.py"],
+    flaggedFiles: ["src/app.py"],
     comments: [
       {
         id: "RV-001",
@@ -142,7 +143,8 @@ async function main() {
     );
     const mobilePage = await mobileContext.newPage();
     await mobilePage.goto(reviewUrl, { waitUntil: "networkidle" });
-    await mobilePage.getByRole("button", { name: "Comments" }).click();
+    await mobilePage.locator('[data-line-number="4"] .line-number').click();
+    await mobilePage.locator('[data-line-number="5"] .line-number').click();
     await mobilePage.screenshot({ path: join(outputDir, "margin-mobile.png") });
     await mobileContext.close();
   } finally {

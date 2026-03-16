@@ -5,8 +5,8 @@ Margin is a local-first code review workspace. It turns a repository snapshot in
 ## What it does
 
 - reviews a local directory or a GitHub repository
-- renders a file tree, syntax-highlighted code, inline range notes, and an on-demand notes pane into one static HTML artifact
-- supports repository, file, and line-range comments
+- renders a file tree, syntax-highlighted code, inline note threads, and inline note drafting into one static HTML artifact
+- supports repository, file, and line-range comments plus per-file reviewed and followup-flagged states
 - autosaves review state in browser local storage for the exact snapshot being reviewed
 - exports open comments as markdown for agent sessions and exports/imports JSON review state
 - can serve the same artifact over a small local HTTP server when you want a stable URL
@@ -58,6 +58,6 @@ Desktop review view generated from `docs/demo/sample-project`:
 
 ![Desktop review screenshot](docs/demo/screenshots/margin-desktop.png)
 
-Mobile comments view on an iPhone-sized viewport:
+Mobile inline note composer on an iPhone-sized viewport:
 
 ![Mobile review screenshot](docs/demo/screenshots/margin-mobile.png)

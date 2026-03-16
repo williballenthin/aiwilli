@@ -122,31 +122,33 @@ The generated HTML prioritizes the code pane.
 Desktop presents:
 - a left file browser column that remains sticky for the full viewport height
 - a central code pane that takes most of the width
-- a contextual comments pane that stays hidden until the user opens it or starts editing
 
 The file column owns the high-level controls and metadata:
 - project title and a shortened snapshot identifier at the top
 - the file tree in the middle
-- review actions and snapshot metadata in the footer
+- export/import actions and snapshot metadata in the footer
 
-Range comments render inline beneath their anchored code lines so comments stay visually attached to the reviewed region.
+Notes and the note composer render inline with the code rather than in a dedicated right-hand drafting pane.
 
 8.2 Mobile layout
 The generated HTML supports full review authoring on iPhone-sized screens.
 
-The mobile layout uses an explicit panel switcher with Files, Code, and Comments views. Users can still:
+The mobile layout uses an explicit panel switcher with Files and Code views. Users can still:
 - navigate files
 - select line ranges
 - create, edit, and delete comments
-- mark files reviewed
+- mark files reviewed or unreviewed
+- flag files for followup or clear the flag
 - export markdown and JSON
 
 8.3 File browser behavior
 - shows repository folders and files
 - shows comment counts per file
 - shows whether a file has been marked reviewed
+- shows whether a file has been flagged for followup
 - stays visible while the main document scrolls on desktop
 - does not provide dedicated in-app file filtering in the current design
+- visually mutes reviewed files and highlights flagged files in an orange/yellow accent
 
 8.4 Code pane behavior
 - shows one file at a time
@@ -156,15 +158,18 @@ The mobile layout uses an explicit panel switcher with Files, Code, and Comments
 - shows existing comment rails and highlighted commented ranges
 - renders repository notes and file notes above the code only when they exist
 - renders range comments inline beneath the anchored range end line
+- renders the note composer inline at the anchored location instead of opening a separate drafting pane
 - does not show a separate textual selection summary above the code
 - supports line-based range selection by choosing a start line and an end line
-- supports file-level review actions such as adding a file comment and marking the file reviewed
+- defaults new notes to the selected line range, with a scope dropdown to save the same draft as a file note or repository note instead
+- marks a file reviewed implicitly when the user visits it
+- shows explicit file actions for marking reviewed, marking unreviewed, flagging for followup, and clearing the followup flag
 
-8.5 Comments pane behavior
-- stays hidden by default on desktop and opens on demand for writing or editing a note
-- shows the active comment composer
-- does not duplicate the current file's existing notes in a separate list when those notes are already rendered with the code
-- supports editing and deleting existing comments
+8.5 File state behavior
+- reviewed and followup-flagged are separate per-file states
+- a file can be both reviewed and flagged at the same time
+- reviewed state persists in autosave and JSON export/import
+- followup flag state persists in autosave and JSON export/import
 
 9. Persistence behavior
 
@@ -187,6 +192,7 @@ The markdown report includes:
 - review metadata
 - a summary section with comment counts by scope
 - reviewed file listing when present
+- flagged file listing when present
 - a findings index
 - detailed comment sections grouped by repository scope and file path
 

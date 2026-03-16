@@ -46,10 +46,11 @@ def test_render_review_document_includes_mobile_and_notes_ui() -> None:
     document = render_review_document(snapshot)
 
     assert 'id="mobile-panel-nav"' in document
-    assert 'id="toggle-comments-pane"' in document
     assert 'id="note-stack"' in document
     assert 'id="sidebar-actions-menu"' in document
-    assert 'id="file-filter-details"' not in document
+    assert 'id="mark-reviewed"' in document
+    assert 'id="flag-followup"' in document
+    assert 'data-panel="comments"' not in document
     assert 'id="comment-title"' not in document
     assert 'id="comment-list"' not in document
 
