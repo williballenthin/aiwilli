@@ -11,3 +11,5 @@ transcribe/VoxtralDictate
 .direnv
 .env
 secrets.env
+/mem0/__pycache__
+/mem0/src/agent_session_mem0/__pycache__
