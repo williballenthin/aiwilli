@@ -31,6 +31,26 @@ from rich.logging import RichHandler
 from rich.spinner import Spinner
 from rich.text import Text
 
+from weave.drive_activity import (
+    DEFAULT_MIME_TYPES as DRIVE_DEFAULT_MIME_TYPES,
+)
+from weave.drive_activity import (
+    DriveEntry,
+    DriveFilesClient,
+    GoogleDriveFilesClient,
+)
+from weave.drive_activity import (
+    collect_day_entries as collect_drive_day_entries,
+)
+from weave.drive_activity import (
+    merge_entries as merge_drive_entries,
+)
+from weave.drive_activity import (
+    parse_snapshot_entries as parse_drive_snapshot_entries,
+)
+from weave.drive_activity import (
+    render_activity_body as render_drive_activity_body,
+)
 from weave.github_activity import (
     GhCliGitHubTimelineClient,
     GitHubActivityError,
@@ -141,6 +161,7 @@ WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("agent-sessions", "Agent sessions"),
     ("github-activity", "GitHub activity"),
     ("vault-activity", "Vault activity"),
+    ("drive-activity", "Google Workspace activity"),
 )
 
 RM2_MODEL = "gemini/gemini-3-flash-preview"
@@ -234,6 +255,13 @@ VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS = 7
 VAULT_ACTIVITY_SECTION_HEADING = "## Vault activity"
 VAULT_ACTIVITY_SECTION_START = "<!-- weave:section:vault-activity:start -->"
 VAULT_ACTIVITY_SECTION_END = "<!-- weave:section:vault-activity:end -->"
+DRIVE_ACTIVITY_MANIFEST_VERSION = 1
+DRIVE_ACTIVITY_SYNC_INTERVAL_SECONDS = 1800
+DRIVE_ACTIVITY_STABILIZATION_HOURS = 24
+DRIVE_ACTIVITY_DEFAULT_WINDOW_DAYS = 7
+DRIVE_ACTIVITY_SECTION_HEADING = "## Google Workspace activity"
+DRIVE_ACTIVITY_SECTION_START = "<!-- weave:section:drive-activity:start -->"
+DRIVE_ACTIVITY_SECTION_END = "<!-- weave:section:drive-activity:end -->"
 
 MONTHS: dict[str, int] = {
     "Jan": 1,
@@ -436,6 +464,8 @@ class WeaveConfig(BaseModel):
     github_activity_timezone: str = "UTC"
     vault_activity_timezone: str = "UTC"
     vault_activity_window_days: int = VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS
+    drive_activity_timezone: str = "UTC"
+    drive_activity_window_days: int = DRIVE_ACTIVITY_DEFAULT_WINDOW_DAYS
 
     @classmethod
     def from_runtime(
@@ -448,6 +478,8 @@ class WeaveConfig(BaseModel):
         github_activity_timezone: str | None = None,
         vault_activity_timezone: str | None = None,
         vault_activity_window_days: int | None = None,
+        drive_activity_timezone: str | None = None,
+        drive_activity_window_days: int | None = None,
     ) -> WeaveConfig:
         """Build runtime configuration from args and environment.
 
@@ -486,6 +518,18 @@ class WeaveConfig(BaseModel):
             resolved_window_days = int(env_window_days)
         else:
             resolved_window_days = VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS
+        resolved_drive_timezone = (
+            drive_activity_timezone
+            or os.environ.get("WEAVE_DRIVE_TIMEZONE")
+            or resolved_vault_timezone
+        )
+        env_drive_window_days = os.environ.get("WEAVE_DRIVE_WINDOW_DAYS")
+        if drive_activity_window_days is not None:
+            resolved_drive_window_days = drive_activity_window_days
+        elif env_drive_window_days and env_drive_window_days.isdigit():
+            resolved_drive_window_days = int(env_drive_window_days)
+        else:
+            resolved_drive_window_days = DRIVE_ACTIVITY_DEFAULT_WINDOW_DAYS
         try:
             return cls(
                 imap_host=os.environ["IMAP_HOST"],
@@ -499,6 +543,8 @@ class WeaveConfig(BaseModel):
                 github_activity_timezone=resolved_github_timezone,
                 vault_activity_timezone=resolved_vault_timezone,
                 vault_activity_window_days=resolved_window_days,
+                drive_activity_timezone=resolved_drive_timezone,
+                drive_activity_window_days=resolved_drive_window_days,
                 routes=(
                     RouteConfig(
                         name="voice-notes",
@@ -560,6 +606,20 @@ class VaultActivityManifestDay(BaseModel):
 class VaultActivityManifest(BaseModel):
     version: int = VAULT_ACTIVITY_MANIFEST_VERSION
     days: dict[str, VaultActivityManifestDay] = Field(default_factory=dict)
+
+
+class DriveActivityManifestDay(BaseModel):
+    last_synced_at: str
+    finalized: bool = False
+    entry_count: int = 0
+    created_count: int = 0
+    modified_count: int = 0
+    viewed_count: int = 0
+
+
+class DriveActivityManifest(BaseModel):
+    version: int = DRIVE_ACTIVITY_MANIFEST_VERSION
+    days: dict[str, DriveActivityManifestDay] = Field(default_factory=dict)
 
 
 class AgentSessionSyncReport(BaseModel):
@@ -1399,6 +1459,12 @@ def get_github_activity_manifest_path() -> Path:
 def get_vault_activity_manifest_path() -> Path:
     cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
     return cache_home / "wballethin" / "weave" / "vault-activity-manifest.json"
+
+
+
+def get_drive_activity_manifest_path() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "wballethin" / "weave" / "drive-activity-manifest.json"
 
 
 
@@ -2306,6 +2372,161 @@ class VaultActivitySyncer:
         manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
 
 
+class DriveActivitySyncer:
+    def __init__(
+        self,
+        daily_note_writer: DailyNoteWriter,
+        timezone_name: str,
+        window_days: int = DRIVE_ACTIVITY_DEFAULT_WINDOW_DAYS,
+        client: DriveFilesClient | None = None,
+        mime_types: Iterable[str] = DRIVE_DEFAULT_MIME_TYPES,
+    ):
+        self.daily_note_writer = daily_note_writer
+        self.timezone = get_timezone(timezone_name)
+        self.window_days = window_days
+        self._client = client
+        self.mime_types = tuple(mime_types)
+
+    def run_once(
+        self,
+        now: datetime | None = None,
+        window_days: int | None = None,
+    ) -> int:
+        client = self._get_client()
+        if client is None:
+            return 0
+
+        days = window_days if window_days is not None else self.window_days
+        current = self._normalize_now(now)
+        candidate_days = self._get_candidate_days(current=current, window_days=days)
+        if not candidate_days:
+            return 0
+
+        manifest_path = get_drive_activity_manifest_path()
+        manifest = self._load_manifest(manifest_path)
+        empty_day = DriveActivityManifestDay(last_synced_at="")
+        pending = [
+            day
+            for day in candidate_days
+            if not manifest.days.get(day.isoformat(), empty_day).finalized
+        ]
+        if not pending:
+            return 0
+
+        since = self._get_query_since(pending)
+        try:
+            file_resources = list(
+                client.list_recent_files(since=since, mime_types=self.mime_types)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("drive activity fetch failed: %s", exc)
+            return 0
+
+        bucketed = collect_drive_day_entries(
+            files=file_resources,
+            eligible_days=pending,
+            tz=self.timezone,
+        )
+        manifest_dirty = False
+        updated_daily_notes = 0
+        synced_at = datetime.now(tz=UTC).isoformat()
+        for day in pending:
+            new_entries = bucketed.get(day, [])
+            existing_entries = self._load_existing_entries(day)
+            merged = merge_drive_entries(list(existing_entries) + list(new_entries))
+            entry_values = list(merged.values())
+            body = render_drive_activity_body(entry_values)
+            if body:
+                self.daily_note_writer.upsert_drive_activity_section(day, body)
+                updated_daily_notes += 1
+            created_count = sum(1 for entry in entry_values if "created" in entry.statuses)
+            modified_count = sum(1 for entry in entry_values if "modified" in entry.statuses)
+            viewed_count = sum(1 for entry in entry_values if "viewed" in entry.statuses)
+            manifest.days[day.isoformat()] = DriveActivityManifestDay(
+                last_synced_at=synced_at,
+                finalized=self._is_finalized(day, now=current),
+                entry_count=len(entry_values),
+                created_count=created_count,
+                modified_count=modified_count,
+                viewed_count=viewed_count,
+            )
+            manifest_dirty = True
+        if manifest_dirty:
+            self._save_manifest(manifest_path, manifest)
+        return updated_daily_notes
+
+    def _get_client(self) -> DriveFilesClient | None:
+        if self._client is not None:
+            return self._client
+        try:
+            creds = CalendarScraper.get_google_credentials()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("drive activity disabled: google credentials unavailable: %s", exc)
+            return None
+        try:
+            self._client = GoogleDriveFilesClient(credentials=creds)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("drive activity disabled: %s", exc)
+            return None
+        return self._client
+
+    def _get_candidate_days(
+        self,
+        current: datetime,
+        window_days: int,
+    ) -> list[dt_mod.date]:
+        today = current.date()
+        return [today - dt_mod.timedelta(days=offset) for offset in range(0, window_days + 1)]
+
+    def _is_finalized(self, day: dt_mod.date, now: datetime) -> bool:
+        end_of_day = datetime.combine(
+            day + dt_mod.timedelta(days=1),
+            dt_mod.time(hour=0),
+            tzinfo=self.timezone,
+        )
+        stable_at = end_of_day + dt_mod.timedelta(hours=DRIVE_ACTIVITY_STABILIZATION_HOURS)
+        return now >= stable_at
+
+    def _get_query_since(self, pending_days: Iterable[dt_mod.date]) -> datetime:
+        earliest_day = min(pending_days)
+        return datetime.combine(
+            earliest_day,
+            dt_mod.time(hour=0, minute=0),
+            tzinfo=self.timezone,
+        )
+
+    def _normalize_now(self, now: datetime | None) -> datetime:
+        if now is None:
+            return datetime.now(tz=self.timezone)
+        if now.tzinfo is None:
+            return now.replace(tzinfo=self.timezone)
+        return now.astimezone(self.timezone)
+
+    def _load_existing_entries(self, day: dt_mod.date) -> list[DriveEntry]:
+        snapshot_path = self.daily_note_writer.get_drive_activity_snapshot_path_for_date(day)
+        if not snapshot_path.exists():
+            return []
+        try:
+            content = snapshot_path.read_text()
+        except OSError as exc:
+            logger.debug("drive snapshot read failed for %s: %s", snapshot_path, exc)
+            return []
+        return parse_drive_snapshot_entries(content)
+
+    def _load_manifest(self, manifest_path: Path) -> DriveActivityManifest:
+        if not manifest_path.exists():
+            return DriveActivityManifest()
+        try:
+            return DriveActivityManifest.model_validate_json(manifest_path.read_text())
+        except (OSError, ValidationError, json.JSONDecodeError) as exc:
+            logger.warning("drive activity manifest invalid, rebuilding: %s", exc)
+            return DriveActivityManifest()
+
+    def _save_manifest(self, manifest_path: Path, manifest: DriveActivityManifest) -> None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
+
+
 @dataclass(frozen=True)
 class DailyIndexEntry:
     category: str
@@ -2357,6 +2578,16 @@ class DailyNoteWriter:
             self._write_text_if_changed(snapshot_path, body.rstrip() + "\n")
             return self._refresh_day(day, vault_activity_body=body)[0]
 
+    def has_drive_activity_section(self, day: dt_mod.date) -> bool:
+        with self._lock:
+            return self.get_drive_activity_snapshot_path_for_date(day).exists()
+
+    def upsert_drive_activity_section(self, day: dt_mod.date, body: str) -> Path:
+        with self._lock:
+            snapshot_path = self.get_drive_activity_snapshot_path_for_date(day)
+            self._write_text_if_changed(snapshot_path, body.rstrip() + "\n")
+            return self._refresh_day(day, drive_activity_body=body)[0]
+
     def generate_all_weave_daily_notes(self) -> int:
         with self._lock:
             updated_count = 0
@@ -2398,6 +2629,9 @@ class DailyNoteWriter:
 
     def get_vault_activity_snapshot_path_for_date(self, day: dt_mod.date) -> Path:
         return self.layout.get_vault_activity_snapshot_path(day)
+
+    def get_drive_activity_snapshot_path_for_date(self, day: dt_mod.date) -> Path:
+        return self.layout.get_drive_activity_snapshot_path(day)
 
     def get_daily_notes_folder(self) -> Path:
         settings = self._load_daily_note_settings()
@@ -2457,6 +2691,7 @@ class DailyNoteWriter:
         entries: list[DailyIndexEntry],
         github_body: str | None = None,
         vault_activity_body: str | None = None,
+        drive_activity_body: str | None = None,
     ) -> str:
         sections: list[str] = []
         for section_name, heading in WEAVE_SECTION_ORDER:
@@ -2479,6 +2714,17 @@ class DailyNoteWriter:
                             heading=f"## {heading}",
                             section_name=section_name,
                             body=normalized_vault,
+                        )
+                    )
+                continue
+            if section_name == "drive-activity":
+                normalized_drive = (drive_activity_body or "").strip()
+                if normalized_drive:
+                    sections.append(
+                        self.render_managed_section(
+                            heading=f"## {heading}",
+                            section_name=section_name,
+                            body=normalized_drive,
                         )
                     )
                 continue
@@ -2507,6 +2753,7 @@ class DailyNoteWriter:
         day: dt_mod.date,
         github_body: str | None = None,
         vault_activity_body: str | None = None,
+        drive_activity_body: str | None = None,
         sync_personal: bool = True,
     ) -> tuple[Path, bool]:
         personal_path = self.get_daily_note_path_for_date(day)
@@ -2526,11 +2773,17 @@ class DailyNoteWriter:
         if resolved_vault_body is None and vault_snapshot_path.exists():
             resolved_vault_body = vault_snapshot_path.read_text()
 
+        resolved_drive_body = drive_activity_body
+        drive_snapshot_path = self.get_drive_activity_snapshot_path_for_date(day)
+        if resolved_drive_body is None and drive_snapshot_path.exists():
+            resolved_drive_body = drive_snapshot_path.read_text()
+
         entries = self._collect_day_entries(day)
         new_weave_content = self.render_weave_daily_note(
             entries,
             github_body=resolved_github_body,
             vault_activity_body=resolved_vault_body,
+            drive_activity_body=resolved_drive_body,
         )
         weave_changed = False
         if new_weave_content:
@@ -2575,6 +2828,7 @@ class DailyNoteWriter:
         updated_lines: list[str] = []
         skip_github = False
         skip_vault = False
+        skip_drive = False
         for line in lines:
             if line == LEGACY_GITHUB_ACTIVITY_SECTION_HEADING:
                 continue
@@ -2590,7 +2844,13 @@ class DailyNoteWriter:
             if line == VAULT_ACTIVITY_SECTION_END:
                 skip_vault = False
                 continue
-            if skip_github or skip_vault:
+            if line == DRIVE_ACTIVITY_SECTION_START:
+                skip_drive = True
+                continue
+            if line == DRIVE_ACTIVITY_SECTION_END:
+                skip_drive = False
+                continue
+            if skip_github or skip_vault or skip_drive:
                 continue
             if MANAGED_NOTE_LINE_RE.match(line) or MANAGED_TODO_LINE_RE.match(line):
                 continue
@@ -2891,6 +3151,11 @@ class WeaveService:
             timezone_name=config.vault_activity_timezone,
             window_days=config.vault_activity_window_days,
         )
+        self.drive_activity_syncer = DriveActivitySyncer(
+            daily_note_writer=self.daily_note_writer,
+            timezone_name=config.drive_activity_timezone,
+            window_days=config.drive_activity_window_days,
+        )
 
     def _init_agent_session_scraper(self, config: WeaveConfig) -> None:
         if config.agent_sessions_dir and not config.agent_sessions_dir.is_dir():
@@ -2992,6 +3257,13 @@ class WeaveService:
             logger.warning("vault activity sync failed: %s", exc)
             return 0
 
+    def run_drive_activity_sync(self, now: datetime | None = None) -> int:
+        try:
+            return self.drive_activity_syncer.run_once(now=now)
+        except Exception as exc:
+            logger.warning("drive activity sync failed: %s", exc)
+            return 0
+
     def run_daily_note_sync(self, sync_date: dt_mod.date | None = None) -> int:
         current_date = sync_date or dt_mod.date.today()
         if self._last_daily_note_sync_on == current_date:
@@ -3038,6 +3310,16 @@ class WeaveService:
                 logger.info("vault activity sync: %d daily note(s)", count)
             self._shutdown.wait(timeout=interval)
 
+    def run_drive_activity_loop(
+        self,
+        interval: int = DRIVE_ACTIVITY_SYNC_INTERVAL_SECONDS,
+    ) -> None:
+        while not self._shutdown.is_set():
+            count = self.run_drive_activity_sync()
+            if count > 0:
+                logger.info("drive activity sync: %d daily note(s)", count)
+            self._shutdown.wait(timeout=interval)
+
     def run_daily_note_sync_loop(self, interval: int = 300) -> None:
         while not self._shutdown.is_set():
             count = self.run_daily_note_sync()
@@ -3058,8 +3340,16 @@ class WeaveService:
         session_count = self.run_agent_session_scrape()
         github_count = self.run_github_activity_sync()
         vault_count = self.run_vault_activity_sync()
+        drive_count = self.run_drive_activity_sync()
         self.run_daily_note_sync()
-        return email_count + cal_count + session_count + github_count + vault_count
+        return (
+            email_count
+            + cal_count
+            + session_count
+            + github_count
+            + vault_count
+            + drive_count
+        )
 
     def get_processed_count(self, client: IMAPClient) -> int:
         messages = self.monitor.get_unseen_messages(client)
@@ -3132,6 +3422,13 @@ class WeaveService:
         )
         vault_thread.start()
         logger.info("started vault activity maintenance thread")
+        drive_thread = threading.Thread(
+            target=self.run_drive_activity_loop,
+            daemon=True,
+            name="drive-activity-maintenance",
+        )
+        drive_thread.start()
+        logger.info("started drive activity maintenance thread")
         daily_note_thread = threading.Thread(
             target=self.run_daily_note_sync_loop,
             daemon=True,

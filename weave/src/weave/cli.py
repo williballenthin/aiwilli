@@ -9,6 +9,7 @@ import click
 
 from weave.app import (
     AGENT_SESSION_SUMMARY_PROMPT,
+    DRIVE_ACTIVITY_DEFAULT_WINDOW_DAYS,
     SUMMARY_PROMPT,
     VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS,
     AgentSessionIndexSummarizer,
@@ -16,6 +17,7 @@ from weave.app import (
     CalendarScraper,
     ConfigError,
     DailyNoteWriter,
+    DriveActivitySyncer,
     GitHubActivitySyncer,
     GoogleDriveExporter,
     LlmNoteSummarizer,
@@ -314,6 +316,46 @@ def import_vault_activity(
     )
     count = syncer.run_once()
     click.echo(f"imported vault activity for {count} day(s)")
+
+
+@import_group.command(name="drive-activity")
+@add_runtime_options
+@click.option(
+    "--days",
+    default=DRIVE_ACTIVITY_DEFAULT_WINDOW_DAYS,
+    show_default=True,
+    type=int,
+    help="How many past days to scan for Google Workspace activity.",
+)
+def import_drive_activity(
+    vault_root: Path | None,
+    verbose: bool,
+    quiet: bool,
+    source: str,
+    agent_sessions: Path | None,
+    github_user: str | None,
+    github_timezone: str | None,
+    poll_interval: int,
+    days: int,
+) -> None:
+    del source, agent_sessions, github_user, poll_interval
+    setup_logging(verbose=verbose, quiet=quiet)
+    resolved_vault_root = resolve_existing_vault_root(vault_root)
+    writer = build_daily_note_writer(resolved_vault_root)
+    resolved_drive_timezone = (
+        os.environ.get("WEAVE_DRIVE_TIMEZONE")
+        or os.environ.get("WEAVE_VAULT_TIMEZONE")
+        or github_timezone
+        or os.environ.get("WEAVE_GITHUB_TIMEZONE")
+        or "UTC"
+    )
+    syncer = DriveActivitySyncer(
+        daily_note_writer=writer,
+        timezone_name=resolved_drive_timezone,
+        window_days=days,
+    )
+    count = syncer.run_once()
+    click.echo(f"imported drive activity for {count} day(s)")
 
 
 @main.group()

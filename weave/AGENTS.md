@@ -7,8 +7,10 @@ Purpose
   - Google Calendar meeting note/chat export
   - AI agent session import from Claude Code and Pi JSONL logs
   - GitHub activity import into daily notes
+  - Google Workspace (Docs/Slides/Sheets) activity import into daily notes
 - `src/weave/github_activity.py` provides the GitHub fetch/render helpers used by both the standalone script and the main daemon flow.
 - `src/weave/vault_index.py` provides the vault file-activity discovery, classification, and rendering helpers used by the `VaultActivitySyncer`.
+- `src/weave/drive_activity.py` provides the Drive v3 query, classification, snapshot parsing, and rendering helpers used by the `DriveActivitySyncer`.
 
 Read these first
 1. `docs/plans/spec.md` for intended user-facing behavior and output layout.
@@ -67,6 +69,7 @@ Where to look for common tasks
 - Agent session import issue: `AgentSessionScraper`, session parsing helpers, and `docs/research/agent-sessions.md`.
 - GitHub activity work: `src/weave/github_activity.py`.
 - Vault file activity work: `src/weave/vault_index.py` and `VaultActivitySyncer` in `src/weave/app.py`.
+- Google Workspace activity work: `src/weave/drive_activity.py` and `DriveActivitySyncer` in `src/weave/app.py`.
 
 How to extend it
 - New email workflow:
