@@ -9,9 +9,11 @@ Last updated: 2026-03-12
 - `src/weave/cli.py`: click-based CLI with subcommands for monitor/sync/import/rebuild
 - `src/weave/layout.py`: central vault path layout helper for `daily/YYYY/MM/DD/...`
 - `src/weave/github_activity.py`: GitHub fetch/normalize/render helpers
+- `src/weave/vault_index.py`: vault file-activity discovery, classification, and rendering helpers
 - `tests/test_app.py`: core behavior tests
 - `tests/test_cli.py`: CLI smoke tests
 - `tests/test_github_activity.py`: GitHub normalization/rendering tests
+- `tests/test_vault_index.py`: vault-activity discovery and daily-note integration tests
 
 2. Core types
 
@@ -90,6 +92,13 @@ For one-shot commands:
 - no longer treats the generated daily note as the source of truth
 - instead it writes the compact rendered body through `DailyNoteWriter.upsert_github_activity_section()`, which stores a per-day snapshot file under `_weave/github activity.md` and then refreshes the daily note
 
+5.7 `VaultActivitySyncer`
+- determines eligible days inside the configured window using the same 06:00-next-day stabilization rule as GitHub
+- skips days already finalized in `$XDG_CACHE_HOME/wballethin/weave/vault-activity-manifest.json` whose snapshots still exist
+- walks the vault once via `weave.vault_index.iter_markdown_files`, pruning `daily/`, `sink/`, `_weave/`, `_attachments/`, and any hidden/dotfile directory
+- buckets each file's `(birthtime/ctime, mtime)` pair into the eligible-day map; a file shows up as `created` on its creation day and `modified` on later edit days within the window
+- writes the body through `DailyNoteWriter.upsert_vault_activity_section()`, storing a per-day snapshot file at `_weave/vault activity.md` and refreshing the daily note
+
 6. `DailyNoteWriter`
 
 Personal vs generated daily notes:
@@ -111,10 +120,11 @@ Rebuild strategy:
   - ensures the personal daily note contains the managed embed region when the generated daily note exists
 
 Section rendering:
-- order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity
+- order is fixed: TODOs, Meetings, Capture, Agent sessions, GitHub activity, Vault activity
 - standard sections render compact bullets with aliased wiki-links and optional summaries
 - agent sessions render as project-grouped nested lists using shortened session IDs and parsed message counts
 - GitHub activity is copied verbatim from the `_weave/github activity.md` snapshot into the managed daily-note section
+- Vault activity is copied verbatim from the `_weave/vault activity.md` snapshot into the managed daily-note section
 
 Discovery:
 - `sync_all_daily_notes()` discovers days from canonical `daily/YYYY/MM/DD/` directories, legacy `sink/YYYY/MM/DD/*.md` paths, and personal daily note paths parsed from filename stems
@@ -134,6 +144,7 @@ Discovery:
 - `weave import calendar --days N`
 - `weave import agent-sessions`
 - `weave import github`
+- `weave import vault-activity --days N`
 - `weave rebuild daily`
 
 The CLI uses click because the tool now has multiple operational modes instead of one daemon-only entry point.

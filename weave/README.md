@@ -7,11 +7,13 @@ Implemented workflows:
 - Google Calendar meeting note/chat export
 - AI agent session import from Claude Code and Pi JSONL logs
 - GitHub activity snapshots plus daily-note rendering
+- Vault file-activity snapshots: markdown files outside `daily/` created or modified on a given day
 
 Storage model:
 - Weave writes into `daily/YYYY/MM/DD/`
 - attachments live in `daily/YYYY/MM/DD/_attachments/`
 - GitHub snapshots live in `daily/YYYY/MM/DD/_weave/github activity.md`
+- Vault-activity snapshots live in `daily/YYYY/MM/DD/_weave/vault activity.md`
 - Weave-generated daily notes live at `daily/YYYY/MM/DD/YYYY-MM-DD weave.md`
 - imported notes live under category subdirectories:
   - `agent sessions/`
@@ -37,6 +39,14 @@ GitHub activity:
 - copied verbatim into the managed `## GitHub activity` section of the generated Weave daily note
 - finalized days are tracked in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json`
 
+Vault file activity:
+- scans markdown files outside `daily/`, `sink/`, `.obsidian/`, `.trash/`, and other hidden/dotfile dirs
+- buckets each file by both filesystem birth/ctime and mtime into a rolling window of days
+- renders one `## Vault activity` section per day listing entries as `created: [[…]]` then `modified: [[…]]`
+- snapshot written to `_weave/vault activity.md`; finalized days tracked in `$XDG_CACHE_HOME/wballethin/weave/vault-activity-manifest.json`
+- today is omitted; days finalize after a 6-hour stabilization window in the configured local timezone
+- `birthtime` is preferred when available (macOS, Linux 4.11+ ext4/btrfs/xfs via `statx`); falls back to `ctime`, which on Unix can bump on chmod/rename — best-effort
+
 Recommended environment variables for deployed monitor/email sync:
 - `IMAP_HOST`
 - `IMAP_USER`
@@ -53,6 +63,7 @@ uv --directory weave run weave sync
 uv --directory weave run weave import calendar --days 365
 uv --directory weave run weave import agent-sessions
 uv --directory weave run weave import github
+uv --directory weave run weave import vault-activity --days 7
 uv --directory weave run weave rebuild daily
 ```
 
