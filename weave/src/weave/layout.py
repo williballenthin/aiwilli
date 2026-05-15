@@ -13,6 +13,7 @@ TODO_DIRNAME = "todo"
 MEETING_NOTES_DIRNAME = "meeting notes"
 AGENT_SESSIONS_DIRNAME = "agent sessions"
 GITHUB_ACTIVITY_SNAPSHOT_NAME = "github activity.md"
+VAULT_ACTIVITY_SNAPSHOT_NAME = "vault activity.md"
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,9 @@ class VaultLayout:
 
     def get_github_activity_snapshot_path(self, day: dt_mod.date) -> Path:
         return self.get_weave_data_dir(day) / GITHUB_ACTIVITY_SNAPSHOT_NAME
+
+    def get_vault_activity_snapshot_path(self, day: dt_mod.date) -> Path:
+        return self.get_weave_data_dir(day) / VAULT_ACTIVITY_SNAPSHOT_NAME
 
     def iter_day_dirs(self) -> list[Path]:
         if not self.daily_root.exists():

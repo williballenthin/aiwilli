@@ -42,6 +42,12 @@ from weave.github_activity import (
     render_compact_activity_section,
 )
 from weave.layout import VaultLayout
+from weave.vault_index import (
+    collect_day_entries as collect_vault_day_entries,
+)
+from weave.vault_index import (
+    render_activity_body as render_vault_activity_body,
+)
 
 logger = logging.getLogger(__name__)
 STDERR_CONSOLE = Console(stderr=True)
@@ -134,6 +140,7 @@ WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("capture", "Capture"),
     ("agent-sessions", "Agent sessions"),
     ("github-activity", "GitHub activity"),
+    ("vault-activity", "Vault activity"),
 )
 
 RM2_MODEL = "gemini/gemini-3-flash-preview"
@@ -220,6 +227,13 @@ GITHUB_ACTIVITY_STABILIZATION_HOURS = 6
 GITHUB_ACTIVITY_SECTION_HEADING = "## GitHub activity"
 GITHUB_ACTIVITY_SECTION_START = "<!-- weave:github-activity:start -->"
 GITHUB_ACTIVITY_SECTION_END = "<!-- weave:github-activity:end -->"
+VAULT_ACTIVITY_MANIFEST_VERSION = 1
+VAULT_ACTIVITY_SYNC_INTERVAL_SECONDS = 3600
+VAULT_ACTIVITY_STABILIZATION_HOURS = 6
+VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS = 7
+VAULT_ACTIVITY_SECTION_HEADING = "## Vault activity"
+VAULT_ACTIVITY_SECTION_START = "<!-- weave:section:vault-activity:start -->"
+VAULT_ACTIVITY_SECTION_END = "<!-- weave:section:vault-activity:end -->"
 
 MONTHS: dict[str, int] = {
     "Jan": 1,
@@ -420,6 +434,8 @@ class WeaveConfig(BaseModel):
     agent_sessions_dir: Path | None = None
     github_activity_user: str | None = None
     github_activity_timezone: str = "UTC"
+    vault_activity_timezone: str = "UTC"
+    vault_activity_window_days: int = VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS
 
     @classmethod
     def from_runtime(
@@ -430,6 +446,8 @@ class WeaveConfig(BaseModel):
         agent_sessions_dir: Path | None = None,
         github_activity_user: str | None = None,
         github_activity_timezone: str | None = None,
+        vault_activity_timezone: str | None = None,
+        vault_activity_window_days: int | None = None,
     ) -> WeaveConfig:
         """Build runtime configuration from args and environment.
 
@@ -456,6 +474,18 @@ class WeaveConfig(BaseModel):
             or os.environ.get("WEAVE_GITHUB_TIMEZONE")
             or get_default_timezone_name()
         )
+        resolved_vault_timezone = (
+            vault_activity_timezone
+            or os.environ.get("WEAVE_VAULT_TIMEZONE")
+            or resolved_github_timezone
+        )
+        env_window_days = os.environ.get("WEAVE_VAULT_WINDOW_DAYS")
+        if vault_activity_window_days is not None:
+            resolved_window_days = vault_activity_window_days
+        elif env_window_days and env_window_days.isdigit():
+            resolved_window_days = int(env_window_days)
+        else:
+            resolved_window_days = VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS
         try:
             return cls(
                 imap_host=os.environ["IMAP_HOST"],
@@ -467,6 +497,8 @@ class WeaveConfig(BaseModel):
                 agent_sessions_dir=resolved_sessions,
                 github_activity_user=resolved_github_user,
                 github_activity_timezone=resolved_github_timezone,
+                vault_activity_timezone=resolved_vault_timezone,
+                vault_activity_window_days=resolved_window_days,
                 routes=(
                     RouteConfig(
                         name="voice-notes",
@@ -516,6 +548,18 @@ class GitHubActivityManifestDay(BaseModel):
 class GitHubActivityManifest(BaseModel):
     version: int = GITHUB_ACTIVITY_MANIFEST_VERSION
     days: dict[str, GitHubActivityManifestDay] = Field(default_factory=dict)
+
+
+class VaultActivityManifestDay(BaseModel):
+    imported_at: str
+    file_count: int
+    created_count: int
+    modified_count: int
+
+
+class VaultActivityManifest(BaseModel):
+    version: int = VAULT_ACTIVITY_MANIFEST_VERSION
+    days: dict[str, VaultActivityManifestDay] = Field(default_factory=dict)
 
 
 class AgentSessionSyncReport(BaseModel):
@@ -1352,6 +1396,11 @@ def get_github_activity_manifest_path() -> Path:
     return cache_home / "wballethin" / "weave" / "github-activity-manifest.json"
 
 
+def get_vault_activity_manifest_path() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "wballethin" / "weave" / "vault-activity-manifest.json"
+
+
 
 def get_session_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -2160,6 +2209,103 @@ class GitHubActivitySyncer:
         manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
 
 
+class VaultActivitySyncer:
+    def __init__(
+        self,
+        daily_note_writer: DailyNoteWriter,
+        timezone_name: str,
+        window_days: int = VAULT_ACTIVITY_DEFAULT_WINDOW_DAYS,
+    ):
+        self.daily_note_writer = daily_note_writer
+        self.vault_root = daily_note_writer.vault_root
+        self.timezone = get_timezone(timezone_name)
+        self.window_days = window_days
+
+    def run_once(
+        self,
+        now: datetime | None = None,
+        window_days: int | None = None,
+    ) -> int:
+        days = window_days if window_days is not None else self.window_days
+        eligible = self._get_eligible_days(now=now, window_days=days)
+        if not eligible:
+            return 0
+        manifest_path = get_vault_activity_manifest_path()
+        manifest = self._load_manifest(manifest_path)
+        pending = [
+            day
+            for day in eligible
+            if day.isoformat() not in manifest.days
+            or not self.daily_note_writer.has_vault_activity_section(day)
+        ]
+        if not pending:
+            return 0
+        bucketed = collect_vault_day_entries(
+            vault_root=self.vault_root,
+            eligible_days=pending,
+            tz=self.timezone,
+        )
+        manifest_dirty = False
+        updated_daily_notes = 0
+        imported_at = datetime.now(tz=UTC).isoformat()
+        for day in pending:
+            entries = bucketed.get(day, [])
+            body = render_vault_activity_body(entries)
+            if body:
+                self.daily_note_writer.upsert_vault_activity_section(day, body)
+                updated_daily_notes += 1
+            created_count = sum(1 for entry in entries if entry.status == "created")
+            modified_count = sum(1 for entry in entries if entry.status == "modified")
+            manifest.days[day.isoformat()] = VaultActivityManifestDay(
+                imported_at=imported_at,
+                file_count=len(entries),
+                created_count=created_count,
+                modified_count=modified_count,
+            )
+            manifest_dirty = True
+        if manifest_dirty:
+            self._save_manifest(manifest_path, manifest)
+        return updated_daily_notes
+
+    def _get_eligible_days(
+        self,
+        now: datetime | None,
+        window_days: int,
+    ) -> list[dt_mod.date]:
+        current = self._normalize_now(now)
+        today = current.date()
+        candidates = [today - dt_mod.timedelta(days=offset) for offset in range(1, window_days + 1)]
+        return [day for day in candidates if self._is_stable_day(day, now=current)]
+
+    def _is_stable_day(self, day: dt_mod.date, now: datetime) -> bool:
+        stable_at = datetime.combine(
+            day + dt_mod.timedelta(days=1),
+            dt_mod.time(hour=VAULT_ACTIVITY_STABILIZATION_HOURS),
+            tzinfo=self.timezone,
+        )
+        return now >= stable_at
+
+    def _normalize_now(self, now: datetime | None) -> datetime:
+        if now is None:
+            return datetime.now(tz=self.timezone)
+        if now.tzinfo is None:
+            return now.replace(tzinfo=self.timezone)
+        return now.astimezone(self.timezone)
+
+    def _load_manifest(self, manifest_path: Path) -> VaultActivityManifest:
+        if not manifest_path.exists():
+            return VaultActivityManifest()
+        try:
+            return VaultActivityManifest.model_validate_json(manifest_path.read_text())
+        except (OSError, ValidationError, json.JSONDecodeError) as exc:
+            logger.warning("vault activity manifest invalid, rebuilding: %s", exc)
+            return VaultActivityManifest()
+
+    def _save_manifest(self, manifest_path: Path, manifest: VaultActivityManifest) -> None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest.model_dump(), indent=2, sort_keys=True))
+
+
 @dataclass(frozen=True)
 class DailyIndexEntry:
     category: str
@@ -2201,6 +2347,16 @@ class DailyNoteWriter:
             self._write_text_if_changed(snapshot_path, body.rstrip() + "\n")
             return self._refresh_day(day, github_body=body)[0]
 
+    def has_vault_activity_section(self, day: dt_mod.date) -> bool:
+        with self._lock:
+            return self.get_vault_activity_snapshot_path_for_date(day).exists()
+
+    def upsert_vault_activity_section(self, day: dt_mod.date, body: str) -> Path:
+        with self._lock:
+            snapshot_path = self.get_vault_activity_snapshot_path_for_date(day)
+            self._write_text_if_changed(snapshot_path, body.rstrip() + "\n")
+            return self._refresh_day(day, vault_activity_body=body)[0]
+
     def generate_all_weave_daily_notes(self) -> int:
         with self._lock:
             updated_count = 0
@@ -2239,6 +2395,9 @@ class DailyNoteWriter:
 
     def get_github_activity_snapshot_path_for_date(self, day: dt_mod.date) -> Path:
         return self.layout.get_github_activity_snapshot_path(day)
+
+    def get_vault_activity_snapshot_path_for_date(self, day: dt_mod.date) -> Path:
+        return self.layout.get_vault_activity_snapshot_path(day)
 
     def get_daily_notes_folder(self) -> Path:
         settings = self._load_daily_note_settings()
@@ -2297,6 +2456,7 @@ class DailyNoteWriter:
         self,
         entries: list[DailyIndexEntry],
         github_body: str | None = None,
+        vault_activity_body: str | None = None,
     ) -> str:
         sections: list[str] = []
         for section_name, heading in WEAVE_SECTION_ORDER:
@@ -2308,6 +2468,17 @@ class DailyNoteWriter:
                             heading=f"## {heading}",
                             section_name=section_name,
                             body=normalized_github,
+                        )
+                    )
+                continue
+            if section_name == "vault-activity":
+                normalized_vault = (vault_activity_body or "").strip()
+                if normalized_vault:
+                    sections.append(
+                        self.render_managed_section(
+                            heading=f"## {heading}",
+                            section_name=section_name,
+                            body=normalized_vault,
                         )
                     )
                 continue
@@ -2335,6 +2506,7 @@ class DailyNoteWriter:
         self,
         day: dt_mod.date,
         github_body: str | None = None,
+        vault_activity_body: str | None = None,
         sync_personal: bool = True,
     ) -> tuple[Path, bool]:
         personal_path = self.get_daily_note_path_for_date(day)
@@ -2349,8 +2521,17 @@ class DailyNoteWriter:
         if resolved_github_body is None and snapshot_path.exists():
             resolved_github_body = snapshot_path.read_text()
 
+        resolved_vault_body = vault_activity_body
+        vault_snapshot_path = self.get_vault_activity_snapshot_path_for_date(day)
+        if resolved_vault_body is None and vault_snapshot_path.exists():
+            resolved_vault_body = vault_snapshot_path.read_text()
+
         entries = self._collect_day_entries(day)
-        new_weave_content = self.render_weave_daily_note(entries, github_body=resolved_github_body)
+        new_weave_content = self.render_weave_daily_note(
+            entries,
+            github_body=resolved_github_body,
+            vault_activity_body=resolved_vault_body,
+        )
         weave_changed = False
         if new_weave_content:
             weave_changed = self._write_text_if_changed(weave_path, new_weave_content)
@@ -2393,6 +2574,7 @@ class DailyNoteWriter:
         lines = content.splitlines()
         updated_lines: list[str] = []
         skip_github = False
+        skip_vault = False
         for line in lines:
             if line == LEGACY_GITHUB_ACTIVITY_SECTION_HEADING:
                 continue
@@ -2402,7 +2584,13 @@ class DailyNoteWriter:
             if line == GITHUB_ACTIVITY_SECTION_END:
                 skip_github = False
                 continue
-            if skip_github:
+            if line == VAULT_ACTIVITY_SECTION_START:
+                skip_vault = True
+                continue
+            if line == VAULT_ACTIVITY_SECTION_END:
+                skip_vault = False
+                continue
+            if skip_github or skip_vault:
                 continue
             if MANAGED_NOTE_LINE_RE.match(line) or MANAGED_TODO_LINE_RE.match(line):
                 continue
@@ -2698,6 +2886,11 @@ class WeaveService:
             timezone_name=config.github_activity_timezone,
             username=config.github_activity_user,
         )
+        self.vault_activity_syncer = VaultActivitySyncer(
+            daily_note_writer=self.daily_note_writer,
+            timezone_name=config.vault_activity_timezone,
+            window_days=config.vault_activity_window_days,
+        )
 
     def _init_agent_session_scraper(self, config: WeaveConfig) -> None:
         if config.agent_sessions_dir and not config.agent_sessions_dir.is_dir():
@@ -2792,6 +2985,13 @@ class WeaveService:
             logger.warning("github activity sync failed: %s", exc)
             return 0
 
+    def run_vault_activity_sync(self, now: datetime | None = None) -> int:
+        try:
+            return self.vault_activity_syncer.run_once(now=now)
+        except Exception as exc:
+            logger.warning("vault activity sync failed: %s", exc)
+            return 0
+
     def run_daily_note_sync(self, sync_date: dt_mod.date | None = None) -> int:
         current_date = sync_date or dt_mod.date.today()
         if self._last_daily_note_sync_on == current_date:
@@ -2828,6 +3028,16 @@ class WeaveService:
                 logger.info("github activity sync: %d daily note(s)", count)
             self._shutdown.wait(timeout=interval)
 
+    def run_vault_activity_loop(
+        self,
+        interval: int = VAULT_ACTIVITY_SYNC_INTERVAL_SECONDS,
+    ) -> None:
+        while not self._shutdown.is_set():
+            count = self.run_vault_activity_sync()
+            if count > 0:
+                logger.info("vault activity sync: %d daily note(s)", count)
+            self._shutdown.wait(timeout=interval)
+
     def run_daily_note_sync_loop(self, interval: int = 300) -> None:
         while not self._shutdown.is_set():
             count = self.run_daily_note_sync()
@@ -2847,8 +3057,9 @@ class WeaveService:
         cal_count = self.run_calendar_scrape()
         session_count = self.run_agent_session_scrape()
         github_count = self.run_github_activity_sync()
+        vault_count = self.run_vault_activity_sync()
         self.run_daily_note_sync()
-        return email_count + cal_count + session_count + github_count
+        return email_count + cal_count + session_count + github_count + vault_count
 
     def get_processed_count(self, client: IMAPClient) -> int:
         messages = self.monitor.get_unseen_messages(client)
@@ -2914,6 +3125,13 @@ class WeaveService:
         )
         github_thread.start()
         logger.info("started github activity maintenance thread")
+        vault_thread = threading.Thread(
+            target=self.run_vault_activity_loop,
+            daemon=True,
+            name="vault-activity-maintenance",
+        )
+        vault_thread.start()
+        logger.info("started vault activity maintenance thread")
         daily_note_thread = threading.Thread(
             target=self.run_daily_note_sync_loop,
             daemon=True,

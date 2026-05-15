@@ -16,6 +16,7 @@ Commands:
 - `weave import calendar [<vault_root>] [options] [--days N]`
 - `weave import agent-sessions [<vault_root>] [options]`
 - `weave import github [<vault_root>] [options]`
+- `weave import vault-activity [<vault_root>] [options] [--days N]`
 - `weave rebuild daily [<vault_root>] [--verbose] [--quiet]`
 
 Shared option behavior:
@@ -31,7 +32,8 @@ Command behavior:
 - `import calendar` imports calendar notes/chats and supports backfill via `--days` (default: 7)
 - `import agent-sessions` imports session JSONL files from `--agent-sessions` or `WEAVE_AGENT_SESSIONS_DIR`
 - `import github` imports finalized GitHub activity and stores a per-day snapshot file
-- `rebuild daily` regenerates Weave daily notes and personal-note embed regions from imported notes plus GitHub snapshot files
+- `import vault-activity` scans the vault for markdown files created/modified per day and stores a per-day snapshot file
+- `rebuild daily` regenerates Weave daily notes and personal-note embed regions from imported notes plus GitHub and vault-activity snapshot files
 
 3. Required runtime environment
 
@@ -54,6 +56,10 @@ GitHub import also requires:
 - `gh` CLI installed and authenticated
 - optional `WEAVE_GITHUB_USER` / `--github-user`
 - optional `WEAVE_GITHUB_TIMEZONE` / `--github-timezone`
+
+Vault-activity import accepts:
+- optional `WEAVE_VAULT_TIMEZONE` (falls back to `WEAVE_GITHUB_TIMEZONE`, then UTC)
+- optional `WEAVE_VAULT_WINDOW_DAYS` / `--days` (default: 7)
 
 4. Routing behavior
 
@@ -80,6 +86,7 @@ All generated/imported Weave content lives under `daily/YYYY/MM/DD/`.
 Per-day layout:
 - `_attachments/`
 - `_weave/github activity.md`
+- `_weave/vault activity.md`
 - `YYYY-MM-DD weave.md`
 - `agent sessions/`
 - `meeting notes/`
@@ -138,6 +145,16 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 - once imported, the day is tracked in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json`
 - import is still best-effort and limited by the recent GitHub user-events feed window
 
+6.7 Vault activity import
+- scans markdown (`.md`) files anywhere under the vault, skipping `daily/`, `sink/`, `_weave/`, `_attachments/`, and any hidden/dotfile directories (`.obsidian/`, `.trash/`, `.git/`, ...)
+- for each file, reads filesystem birthtime (when available, falling back to `ctime`) and mtime
+- a file appears in a day's section as `created` on its creation day and as `modified` on any subsequent edit day inside the window
+- writes a snapshot file at `daily/YYYY/MM/DD/_weave/vault activity.md`
+- `YYYY-MM-DD weave.md` copies that snapshot verbatim into the managed `## Vault activity` section
+- entries are rendered as `- created: [[<path>|<label>]] — <summary>` (label and summary read from frontmatter `title`/`summary` when present); created entries first, then modified, each block sorted by path
+- today is omitted; a day finalizes after a 6-hour stabilization window in the configured local timezone
+- finalized days are tracked in `$XDG_CACHE_HOME/wballethin/weave/vault-activity-manifest.json` and skipped on subsequent runs
+
 7. Daily note integration
 
 - Weave-generated daily note path is fixed at `daily/YYYY/MM/DD/YYYY-MM-DD weave.md`
@@ -151,6 +168,7 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
   - `## Capture`
   - `## Agent sessions`
   - `## GitHub activity`
+  - `## Vault activity`
 - each generated section is wrapped in deterministic HTML comment markers
 - standard note sections render compact bullets with aliased wiki-links and optional summaries
 - agent sessions render as nested project groups with compact summaries and message counts
