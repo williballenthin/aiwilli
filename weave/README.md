@@ -8,12 +8,14 @@ Implemented workflows:
 - AI agent session import from Claude Code and Pi JSONL logs
 - GitHub activity snapshots plus daily-note rendering
 - Vault file-activity snapshots: markdown files outside `daily/` created or modified on a given day
+- Google Workspace activity snapshots: Docs/Slides/Sheets you created, modified, or viewed on a given day
 
 Storage model:
 - Weave writes into `daily/YYYY/MM/DD/`
 - attachments live in `daily/YYYY/MM/DD/_attachments/`
 - GitHub snapshots live in `daily/YYYY/MM/DD/_weave/github activity.md`
 - Vault-activity snapshots live in `daily/YYYY/MM/DD/_weave/vault activity.md`
+- Google Workspace activity snapshots live in `daily/YYYY/MM/DD/_weave/google workspace activity.md`
 - Weave-generated daily notes live at `daily/YYYY/MM/DD/YYYY-MM-DD weave.md`
 - imported notes live under category subdirectories:
   - `agent sessions/`
@@ -47,6 +49,15 @@ Vault file activity:
 - today is omitted; days finalize after a 6-hour stabilization window in the configured local timezone
 - `birthtime` is preferred when available (macOS, Linux 4.11+ ext4/btrfs/xfs via `statx`); falls back to `ctime`, which on Unix can bump on chmod/rename — best-effort
 
+Google Workspace activity:
+- queries Drive v3 for Docs, Slides, and Sheets touched by you: `createdTime` (when you own the file), `modifiedByMeTime`, and `viewedByMeTime`
+- renders one `## Google Workspace activity` section per day; each bullet is one file with its statuses joined: `- [title](url) — created, modified, viewed`
+- snapshot written to `_weave/google workspace activity.md`; sync state tracked at `$XDG_CACHE_HOME/wballethin/weave/drive-activity-manifest.json`
+- today is included and the snapshot is rewritten as a union of previously-recorded entries plus new findings — important because Drive only stores the most recent `viewedByMeTime`/`modifiedByMeTime` per file
+- a day is finalized 24 hours after it ends in the configured local timezone; finalized days are skipped on subsequent runs
+- requires the existing `drive.readonly` OAuth scope (already granted by the calendar setup); no extra credentials needed
+- caveat: view tracking is best-effort — if the daemon doesn't run during a given day, views from that day may be overwritten before they get captured
+
 Recommended environment variables for deployed monitor/email sync:
 - `IMAP_HOST`
 - `IMAP_USER`
@@ -64,6 +75,7 @@ uv --directory weave run weave import calendar --days 365
 uv --directory weave run weave import agent-sessions
 uv --directory weave run weave import github
 uv --directory weave run weave import vault-activity --days 7
+uv --directory weave run weave import drive-activity --days 7
 uv --directory weave run weave rebuild daily
 ```
 
