@@ -83,9 +83,9 @@ def test_build_drive_query_includes_three_time_clauses_and_mimes() -> None:
     assert "trashed = false" in query
     assert "mimeType = 'application/vnd.google-apps.document'" in query
     assert "mimeType = 'application/vnd.google-apps.presentation'" in query
-    assert "viewedByMeTime > '2026-05-10T00:00:00'" in query
-    assert "modifiedByMeTime > '2026-05-10T00:00:00'" in query
-    assert "createdTime > '2026-05-10T00:00:00'" in query
+    assert "viewedByMeTime > '2026-05-10T00:00:00Z'" in query
+    assert "modifiedTime > '2026-05-10T00:00:00Z'" in query
+    assert "createdTime > '2026-05-10T00:00:00Z'" in query
     assert "'me' in owners" in query
 
 

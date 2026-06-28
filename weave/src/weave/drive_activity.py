@@ -99,7 +99,7 @@ class GoogleDriveFilesClient:
 
 
 def format_drive_timestamp(value: dt_mod.datetime) -> str:
-    return value.astimezone(dt_mod.UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    return value.astimezone(dt_mod.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def build_drive_query(since: dt_mod.datetime, mime_types: Iterable[str]) -> str:
@@ -107,7 +107,7 @@ def build_drive_query(since: dt_mod.datetime, mime_types: Iterable[str]) -> str:
     mime_clause = " or ".join(f"mimeType = '{mime}'" for mime in mime_types)
     time_clause = (
         f"(viewedByMeTime > '{timestamp}'"
-        f" or modifiedByMeTime > '{timestamp}'"
+        f" or modifiedTime > '{timestamp}'"
         f" or (createdTime > '{timestamp}' and 'me' in owners))"
     )
     return f"trashed = false and ({mime_clause}) and {time_clause}"
