@@ -124,7 +124,7 @@ def test_render_entry_line_includes_status_and_summary(tmp_path: Path) -> None:
 
     entry = build_entry(vault_root=tmp_path, path=note, status="created")
     assert entry is not None
-    assert render_entry_line(entry) == "- created: [[Projects/foo.md|Foo]] — a summary"
+    assert render_entry_line(entry) == "- created: [[Projects/foo]] — a summary"
 
 
 def test_render_activity_body_orders_created_then_modified(tmp_path: Path) -> None:
@@ -138,9 +138,9 @@ def test_render_activity_body_orders_created_then_modified(tmp_path: Path) -> No
     ]
     body = render_activity_body([e for e in entries if e is not None])
     lines = body.splitlines()
-    assert lines[0].startswith("- created: [[b.md")
-    assert lines[1].startswith("- modified: [[a.md")
-    assert lines[2].startswith("- modified: [[c.md")
+    assert lines[0] == "- created: [[b]]"
+    assert lines[1] == "- modified: [[a]]"
+    assert lines[2] == "- modified: [[c]]"
 
 
 def test_collect_day_entries_buckets_created_and_modified(tmp_path: Path) -> None:
@@ -309,7 +309,7 @@ def test_syncer_finalizes_stabilized_day(tmp_path: Path, monkeypatch: pytest.Mon
 
     snapshot = tmp_path / "daily" / "2026" / "05" / "14" / "_weave" / "vault activity.md"
     assert snapshot.exists()
-    assert "[[Projects/foo.md" in snapshot.read_text()
+    assert "[[Projects/foo]]" in snapshot.read_text()
 
 
 def test_syncer_manifest_dedupes_subsequent_runs(

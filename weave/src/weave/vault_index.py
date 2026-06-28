@@ -170,9 +170,8 @@ def build_entry(
 
 
 def render_entry_line(entry: VaultActivityEntry) -> str:
-    link_target = entry.relative_path.as_posix()
-    safe_label = entry.label.replace("]", "")
-    line = f"- {entry.status}: [[{link_target}|{safe_label}]]"
+    link_target = entry.relative_path.with_suffix("").as_posix()
+    line = f"- {entry.status}: [[{link_target}]]"
     if entry.summary:
         line = f"{line} — {entry.summary}"
     return line
