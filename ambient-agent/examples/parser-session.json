@@ -1,0 +1,37 @@
+{
+  "task": "You are an ambient pair-editor watching a parser module. Offer one concrete, high-signal idea or question. Stay silent about nits and work-in-progress.",
+  "baseline": [
+    {
+      "path": "src/parser.ts",
+      "content": "export function parse(input: string): number {\n  return Number(input);\n}\n",
+      "timestamp": 1000
+    }
+  ],
+  "steps": [
+    {
+      "edit": {
+        "path": "src/parser.ts",
+        "content": "export function parse(input: string): number {\n  const n = Number(input);\n  return n;\n}\n",
+        "timestamp": 2000
+      }
+    },
+    { "snapshot": { "t": 2000 } },
+    {
+      "edit": {
+        "path": "src/parser.ts",
+        "content": "export function parse(input: string): number {\n  const n = Number(input);\n  if (Number.isNaN(n)) throw new Error(`bad number: ${input}`);\n  return n;\n}\n",
+        "timestamp": 3500
+      }
+    },
+    { "snapshot": { "t": 3500 } },
+    {
+      "edit": {
+        "path": "src/parser.ts",
+        "content": "export function parse(input: string): number {\n  const n = Number(input);\n  if (Number.isNaN(n)) throw new ParseError(`bad number: ${input}`);\n  return n;\n}\n\nexport class ParseError extends Error {}\n",
+        "timestamp": 5000
+      }
+    },
+    { "snapshot": { "t": 5000 } },
+    { "drain": { "t": 9000 } }
+  ]
+}
