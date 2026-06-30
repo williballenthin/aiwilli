@@ -1,0 +1,54 @@
+{
+  "task": "You are an ambient pair-editor watching an auth module. Offer one concrete, high-signal idea or question. Stay silent about nits and work-in-progress.",
+  "baseline": [
+    {
+      "path": "src/auth.ts",
+      "content": "export function login(user: string, password: string): boolean {\n  return password.length > 0;\n}\n",
+      "timestamp": 1000
+    },
+    {
+      "path": "test/auth.test.ts",
+      "content": "import { login } from '../src/auth.js';\n\ntest('login accepts non-empty password', () => {\n  expect(login('a', 'b')).toBe(true);\n});\n",
+      "timestamp": 1000
+    }
+  ],
+  "steps": [
+    {
+      "edit": {
+        "path": "src/auth.ts",
+        "content": "export function login(user: string, password: string): boolean {\n  const hash = hashPassword(password);\n  return hash === lookupHash(user);\n}\n",
+        "timestamp": 4000
+      }
+    },
+    { "snapshot": { "t": 4000 } },
+
+    {
+      "edit": {
+        "path": "src/auth.ts",
+        "content": "export function login(user: string, password: string): boolean {\n  const hash = hashPassword(password);\n  return hash === lookupHash(user);\n}\n\nfunction hashPassword(password: string): string {\n  return password;\n}\n",
+        "timestamp": 7000
+      }
+    },
+    { "snapshot": { "t": 7000 } },
+
+    {
+      "edit": {
+        "path": "src/auth.ts",
+        "content": "import { createHash } from 'node:crypto';\n\nexport function login(user: string, password: string): boolean {\n  const hash = hashPassword(password);\n  return hash === lookupHash(user);\n}\n\nfunction hashPassword(password: string): string {\n  return createHash('sha256').update(password).digest('hex');\n}\n",
+        "timestamp": 11000
+      }
+    },
+    { "snapshot": { "t": 11000 } },
+
+    {
+      "edit": {
+        "path": "test/auth.test.ts",
+        "content": "import { login } from '../src/auth.js';\n\ntest('login rejects wrong password', () => {\n  expect(login('a', 'wrong')).toBe(false);\n});\n",
+        "timestamp": 14000
+      }
+    },
+    { "snapshot": { "t": 14000 } },
+
+    { "drain": { "t": 20000 } }
+  ]
+}
