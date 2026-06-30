@@ -218,6 +218,7 @@ def import_calendar(
 
 @import_group.command(name="agent-sessions")
 @add_runtime_options
+@click.option("--days", type=int, default=None)
 def import_agent_sessions(
     vault_root: Path | None,
     verbose: bool,
@@ -227,6 +228,7 @@ def import_agent_sessions(
     github_user: str | None,
     github_timezone: str | None,
     poll_interval: int,
+    days: int | None,
 ) -> None:
     del source, github_user, github_timezone, poll_interval
     setup_logging(verbose=verbose, quiet=quiet)
@@ -246,7 +248,7 @@ def import_agent_sessions(
             entry_type=result.entry_type,
         )
 
-    run = scraper.scrape_once(on_result=handle_result)
+    run = scraper.scrape_once(on_result=handle_result, days_back=days)
     click.echo(run.report.model_dump_json())
 
 

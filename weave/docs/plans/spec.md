@@ -30,7 +30,7 @@ Command behavior:
 - `sync` runs one email batch, one calendar import pass, one agent-session import pass, one GitHub import pass, one daily-note rebuild pass, then exits
 - `import email` processes one email batch only
 - `import calendar` imports calendar notes/chats and supports backfill via `--days` (default: 7)
-- `import agent-sessions` imports session JSONL files from `--agent-sessions` or `WEAVE_AGENT_SESSIONS_DIR`
+- `import agent-sessions` imports session JSONL files from `--agent-sessions` or `WEAVE_AGENT_SESSIONS_DIR`; `--days N` limits to files modified within the last N days
 - `import github` imports finalized GitHub activity and stores a per-day snapshot file
 - `import vault-activity` scans the vault for markdown files created/modified per day and stores a per-day snapshot file
 - `rebuild daily` regenerates Weave daily notes and personal-note embed regions from imported notes plus GitHub and vault-activity snapshot files

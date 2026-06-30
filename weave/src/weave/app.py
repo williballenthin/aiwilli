@@ -15,7 +15,7 @@ from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
@@ -1902,6 +1902,7 @@ class AgentSessionScraper:
     def scrape_once(
         self,
         on_result: Callable[[AgentSessionScrapeResult], None] | None = None,
+        days_back: int | None = None,
     ) -> AgentSessionScrapeRun:
         manifest_path = get_agent_session_manifest_path()
         manifest = self._load_manifest(manifest_path)
@@ -1911,7 +1912,18 @@ class AgentSessionScraper:
         seen_sources: set[str] = set()
         manifest_dirty = False
 
+        if days_back is not None:
+            cutoff = now - timedelta(days=days_back)
+        else:
+            cutoff = None
+
         for jsonl_path in self._find_session_files():
+            if cutoff is not None:
+                file_mtime = datetime.fromtimestamp(
+                    jsonl_path.stat().st_mtime, tz=UTC
+                )
+                if file_mtime < cutoff:
+                    continue
             source_key = str(jsonl_path.resolve())
             seen_sources.add(source_key)
             report.scanned += 1
@@ -1953,9 +1965,10 @@ class AgentSessionScraper:
                 self._save_manifest(manifest_path, manifest)
                 manifest_dirty = False
 
-        stale_sources = set(manifest.sessions) - seen_sources
-        for source_key in stale_sources:
-            del manifest.sessions[source_key]
+        if days_back is None:
+            stale_sources = set(manifest.sessions) - seen_sources
+            for source_key in stale_sources:
+                del manifest.sessions[source_key]
             manifest_dirty = True
         if manifest_dirty or not manifest_path.exists():
             self._save_manifest(manifest_path, manifest)
