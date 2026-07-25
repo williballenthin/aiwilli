@@ -62,11 +62,20 @@
   .toast-host .alert { pointer-events: auto; }
 
   /* Comfortable touch targets: iOS wants ~44px. */
-  .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; }
+  /* iOS wants ~44px; Bootstrap's default and btn-sm are both short of it. */
+  .btn { min-height: 2.75rem; }
+  .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; min-height: 2.75rem; }
+  .btn-link, .leaflet-container .btn { min-height: 0; }
   .accordion-button { padding-top: 1rem; padding-bottom: 1rem; }
   .leaflet-touch .leaflet-bar a { width: 2.25rem; height: 2.25rem; line-height: 2.25rem; }
-  .leaflet-container { font: inherit; }
-  .leaflet-popup-content { margin: .75rem; min-width: 12rem; }
+  /* font:inherit on the container dragged the attribution up to 16px, where it
+     ate 87% of the map's width. Scope it to the popup, which is the only place
+     that wanted it. */
+  .leaflet-popup-content { font: inherit; margin: .75rem; min-width: 12rem; }
+  .leaflet-control-attribution { font-size: .6875rem; }
+  [data-bs-theme="dark"] .leaflet-control-attribution {
+    background: rgba(33, 37, 41, .8); color: var(--bs-body-color); }
+  [data-bs-theme="dark"] .leaflet-control-attribution a { color: var(--bs-link-color); }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
     background: var(--bs-body-bg); color: var(--bs-body-color);
   }
@@ -87,7 +96,7 @@
   /* The entity locked in for step 4, whether or not it is the one being looked at. */
   .dot.is-locked { outline: 3px solid var(--bs-success); outline-offset: 2px; }
 
-  .dropzone { border: 2px dashed var(--bs-border-color); border-radius: var(--bs-border-radius-lg);
+  .dropzone { border: 2px dashed var(--bs-secondary-color); border-radius: var(--bs-border-radius-lg);
               transition: border-color .15s ease-in-out, background-color .15s ease-in-out; cursor: pointer; }
   .dropzone:hover, .dropzone.is-dragging { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle); }
 
@@ -98,27 +107,44 @@
   .scroll-y { overflow-y: auto; overscroll-behavior: contain; }
   .coords { font-variant-numeric: tabular-nums; }
 
+  /* Bootstrap holds .btn-outline-secondary at #6c757d in both themes: 4.7:1 on
+     white but only 3.3:1 on the dark background, under the 4.5:1 these 14px
+     labels need. Lift the resting text only — hover and checked still paint
+     white on #6c757d, which is fine. */
+  [data-bs-theme="dark"] .btn-outline-secondary {
+    --bs-btn-color: #adb5bd; --bs-btn-border-color: #6c757d; }
+
   /* Bootstrap ships no min-width utility, and a flex child defaults to
      min-width:auto — which stops .text-truncate from ever kicking in. */
   .min-w-0 { min-width: 0; }
 
   /* Phase accordion */
   .accordion-button { font-weight: 500; }
-  .accordion-button:not(.collapsed) { box-shadow: none; }
-  .accordion-button:disabled { opacity: .55; }
+  /* Bootstrap's open-state inset shadow is noise here, but blanking box-shadow
+     outright also removes the focus ring, leaving one of the six landmarks
+     invisible to a keyboard. Suppress it only when not focused. */
+  .accordion-button:not(.collapsed):not(:focus-visible) { box-shadow: none; }
+  /* .55 opacity puts the locked titles at 3.60:1 in the light theme. */
+  .accordion-button:disabled { opacity: 1; color: var(--bs-secondary-color); }
   .accordion-button::after { margin-left: .75rem; }
   .phase-num { display: grid; place-items: center; flex: 0 0 auto;
                width: 1.5rem; height: 1.5rem; border-radius: 50%; font-size: .8rem;
                background: var(--bs-secondary-bg); color: var(--bs-secondary-color); }
-  .accordion-button:not(.collapsed) .phase-num { background: var(--bs-primary); color: #fff; }
+  /* Scoped to the neutral state: an unscoped rule here outranks .is-done and
+     .is-error on specificity, which turned the open phase's dot blue and hid
+     the amber warning exactly when the warning was being read. */
+  .accordion-button:not(.collapsed) .phase-num:not(.is-done):not(.is-error) {
+    background: var(--bs-primary); color: #fff; }
   .phase-num.is-done { background: var(--bs-success); color: #fff; }
   .phase-num.is-error { background: var(--bs-warning); color: #000; }
 
   .nearby-head { background: var(--bs-body-bg); }
 
-  /* Streaming panes: wrap hard so a long token run cannot widen the page. */
+  /* Streaming panes: wrap hard so a long token run cannot widen the page.
+     No height cap on a phone — a nested scroller with invisible iOS overlay
+     scrollbars just looks like the model stopped mid-sentence. The page is
+     already the scroller; let these grow into it. */
   .stream-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .875rem;
-                max-height: 24rem; overflow-y: auto; overscroll-behavior: contain;
                 margin: 0; font-family: inherit; }
   #visPromptText { font-family: var(--bs-font-monospace); font-size: .8rem;
                    background: var(--bs-tertiary-bg); }
@@ -133,10 +159,14 @@
      Sidebar scrolls on its own; the map column holds map over details.
      --------------------------------------------------------------- */
   @media (min-width: 992px) {
+    /* Desktop has a real scrollbar and no page-length pressure, so capping
+       these keeps the tab strip and the controls above it in view. */
+    .stream-pre { max-height: 26rem; overflow-y: auto; overscroll-behavior: contain; }
     .phase-map { height: 18rem; }
     #mapNear { height: 22rem; }
     .leaflet-control-scale { display: block; }
-    .btn-group-sm > .btn { padding: .25rem .5rem; font-size: .875rem; }
+    .btn { min-height: 0; }
+    .btn-group-sm > .btn { padding: .25rem .5rem; font-size: .875rem; min-height: 0; }
     .accordion-button { padding-top: .75rem; padding-bottom: .75rem; }
   }
 </style>
@@ -148,7 +178,7 @@
   <!-- Toolbar. Deliberately not sticky: it scrolls away with the content so it
        costs nothing while you work. Room here for a Settings button next. -->
   <div class="toolbar bg-body border-bottom" id="topBar">
-    <div class="d-flex flex-wrap align-items-center gap-2 p-2">
+    <div class="phase-column d-flex flex-wrap align-items-center gap-2 p-2">
       <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport" disabled
               title="Download the photo's position, and the entity you chose, as a .geojson file">
         <i class="bi bi-download me-1"></i>GeoJSON
@@ -175,7 +205,7 @@
                         data-bs-toggle="collapse" data-bs-target="#phasePhoto"
                         aria-expanded="true" aria-controls="phasePhoto" id="phasePhotoBtn">
                   <span class="phase-num" id="phasePhotoNum">1</span>
-                  <span>Photo</span>
+                  <span class="text-nowrap flex-shrink-0">Photo</span>
                   <span class="small text-body-secondary text-truncate ms-auto" id="phasePhotoSummary"></span>
                 </button>
               </h2>
@@ -239,13 +269,14 @@
                         data-bs-toggle="collapse" data-bs-target="#phaseGps" disabled
                         aria-expanded="false" aria-controls="phaseGps" id="phaseGpsBtn">
                   <span class="phase-num" id="phaseGpsNum">2</span>
-                  <span>GPS location</span>
+                  <span class="text-nowrap flex-shrink-0">GPS location</span>
                   <span class="small text-body-secondary text-truncate ms-auto" id="phaseGpsSummary"></span>
                 </button>
               </h2>
               <div id="phaseGps" class="accordion-collapse collapse" data-bs-parent="#phases">
                 <div class="accordion-body p-0">
-                  <div class="phase-map" id="mapGps" aria-label="Map of where the photo was taken"></div>
+                  <div class="phase-map" id="mapGps" role="img"
+                       aria-label="Map of where the photo was taken"></div>
                   <div class="p-3" id="gpsBody"></div>
                 </div>
               </div>
@@ -258,7 +289,7 @@
                         data-bs-toggle="collapse" data-bs-target="#phaseNearby" disabled
                         aria-expanded="false" aria-controls="phaseNearby" id="phaseNearbyBtn">
                   <span class="phase-num" id="phaseNearbyNum">3</span>
-                  <span>Nearby entities</span>
+                  <span class="text-nowrap flex-shrink-0">Nearby entities</span>
                   <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseNearbySpinner"
                         role="status" aria-label="Loading OpenStreetMap data"></span>
                   <span class="small text-body-secondary text-truncate ms-auto" id="phaseNearbySummary"></span>
@@ -284,10 +315,10 @@
                     </div>
                   </div>
 
-                  <div class="px-3 pt-3" id="nearbyStatus"></div>
+                  <div class="px-3 pt-3" id="nearbyStatus" role="status" aria-live="polite"></div>
                   <div class="list-group list-group-flush" id="nearbyList"></div>
 
-                  <div class="phase-map border-top" id="mapNear"
+                  <div class="phase-map border-top" id="mapNear" role="group"
                        aria-label="Map of the photo and the entities near it"></div>
 
                   <!-- Details of whichever entity is selected, in the list or on the map -->
@@ -313,7 +344,7 @@
                         data-bs-toggle="collapse" data-bs-target="#phaseSchema" disabled
                         aria-expanded="false" aria-controls="phaseSchema" id="phaseSchemaBtn">
                   <span class="phase-num" id="phaseSchemaNum">4</span>
-                  <span>Tag schema</span>
+                  <span class="text-nowrap flex-shrink-0">Tag schema</span>
                   <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseSchemaSpinner"
                         role="status" aria-label="Loading the tagging schema"></span>
                   <span class="small text-body-secondary text-truncate ms-auto" id="phaseSchemaSummary"></span>
@@ -331,7 +362,7 @@
                         data-bs-toggle="collapse" data-bs-target="#phaseVision" disabled
                         aria-expanded="false" aria-controls="phaseVision" id="phaseVisionBtn">
                   <span class="phase-num" id="phaseVisionNum">5</span>
-                  <span>AI description</span>
+                  <span class="text-nowrap flex-shrink-0">AI description</span>
                   <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseVisionSpinner"
                         role="status" aria-label="Waiting for the model"></span>
                   <span class="small text-body-secondary text-truncate ms-auto" id="phaseVisionSummary"></span>
@@ -377,6 +408,8 @@
                     </div>
                   </div>
 
+                  <div class="p-3 d-grid" id="visionCta"></div>
+
                 </div>
               </div>
             </div>
@@ -389,7 +422,7 @@
                         data-bs-toggle="collapse" data-bs-target="#phasePropose" disabled
                         aria-expanded="false" aria-controls="phasePropose" id="phaseProposeBtn">
                   <span class="phase-num" id="phaseProposeNum">6</span>
-                  <span>Proposed tags</span>
+                  <span class="text-nowrap flex-shrink-0">Proposed tags</span>
                   <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseProposeSpinner"
                         role="status" aria-label="Waiting for the model"></span>
                   <span class="small text-body-secondary text-truncate ms-auto" id="phaseProposeSummary"></span>
@@ -438,20 +471,18 @@
                 </div>
               </div>
             </div>
+
           </div>
-        </div>
-
-      </aside>
-
     </div>
   </div>
 </div>
 
 <!-- Transient notices, anchored to the viewport rather than to any one section. -->
-<div class="toast-host px-3" id="alertHost"></div>
+<div class="toast-host px-3" id="alertHost" role="status" aria-live="polite"></div>
 
 <!-- Kept outside the accordion so it stays reachable while the upload pane is hidden. -->
-<input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif">
+<input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif"
+       tabindex="-1" aria-hidden="true">
 
 <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsTitle" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
@@ -478,14 +509,16 @@
         <label for="setModel" class="form-label fw-medium mt-2">Vision model</label>
         <div class="form-text mt-0 mb-1">Reads the photograph in step 5. Vision-capable models only.</div>
         <input type="search" class="form-control form-control-sm mb-2" id="modelFilter"
-               placeholder="Filter models…" autocomplete="off" spellcheck="false">
+               placeholder="Filter models…" aria-label="Filter the vision model list"
+               autocomplete="off" spellcheck="false">
         <select class="form-select" id="setModel"></select>
 
         <label for="setTagModel" class="form-label fw-medium mt-3">Tagging model</label>
         <div class="form-text mt-0 mb-1">Turns that description into proposed OSM tags in step 6.
           It reads text, not the photo, so any model will do.</div>
         <input type="search" class="form-control form-control-sm mb-2" id="tagModelFilter"
-               placeholder="Filter models…" autocomplete="off" spellcheck="false">
+               placeholder="Filter models…" aria-label="Filter the tagging model list"
+               autocomplete="off" spellcheck="false">
         <select class="form-select" id="setTagModel"></select>
 
         <p class="form-text mb-0" id="modelsNote"></p>
@@ -715,7 +748,8 @@ out center tags 250;`;
   const ID_SCHEMA_BASE = 'https://cdn.jsdelivr.net/npm/@openstreetmap/id-tagging-schema/dist';
   const TAGINFO = 'https://taginfo.openstreetmap.org/api/4';
   const APP_PREFIX = 'photomap:';
-  const CACHE_PREFIX = APP_PREFIX + 'schema:1:';
+  // v2: inPractice entries gained a label distinguishing key rows from key=value rows.
+  const CACHE_PREFIX = APP_PREFIX + 'schema:2:';
   const CACHE_TTL_MS = 30 * 24 * 3600 * 1000;
 
   let idSchemaPromise = null;
@@ -825,8 +859,15 @@ out center tags 250;`;
       wikiCombination: en?.tags_combination || [],
       implies: en?.tags_implies || [],
       geometry: en ? { node: en.on_node, way: en.on_way, area: en.on_area, relation: en.on_relation } : null,
+      // taginfo returns a key-level row (other_value '') and separate rows per
+      // popular value. Keeping only the key loses the values; keeping both
+      // unlabelled made one key appear three times at different percentages.
       inPractice: (combos?.data || []).map(c => ({
-        key: c.other_key, count: c.together_count, fraction: c.to_fraction,
+        key: c.other_key,
+        value: c.other_value || null,
+        label: c.other_value ? `${c.other_key}=${c.other_value}` : c.other_key,
+        count: c.together_count,
+        fraction: c.to_fraction,
       })),
     };
   }
@@ -982,16 +1023,27 @@ out center tags 250;`;
     { sel: 'setTagModel', filter: 'tagModelFilter', key: 'tagModel', visionOnly: false },
   ];
 
-  function renderModelOptions() {
+  // `only` limits the redraw to one picker; without it both are rebuilt (on
+  // first load and after a refetch).
+  function renderModelOptions(only) {
     for (const p of PICKERS) {
-      const sel = $(p.sel), current = settings[p.key];
+      if (only && p.sel !== only) continue;
+      // What the user has picked but not yet saved outranks the saved value —
+      // otherwise filtering one list threw away an unsaved choice in the other.
+      const sel = $(p.sel), current = sel.value || settings[p.key];
       const q = $(p.filter).value.trim().toLowerCase();
       const list = (modelCache?.models || [])
         .filter(m => !p.visionOnly || m.vision)
         .filter(m => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+      // Without a placeholder the select defaults to the alphabetically first
+      // model, so opening settings only to paste a key and pressing Save would
+      // silently commit a model — and a bill — the user never picked.
+      const placeholder = current ? ''
+        : '<option value="" disabled selected>— choose a model —</option>';
       sel.innerHTML = list.length
-        ? list.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(modelLabel(m))}</option>`).join('')
-        : '<option value="">— nothing matches —</option>';
+        ? placeholder + list.map(m =>
+            `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(modelLabel(m))}</option>`).join('')
+        : '<option value="" disabled selected>— nothing matches —</option>';
       // Keep a saved model selectable even when the filter hides it.
       if (current && !list.some(m => m.id === current)) {
         sel.insertAdjacentHTML('afterbegin',
@@ -1180,6 +1232,9 @@ out center tags 250;`;
 
   function renderGps() {
     const body = $('gpsBody');
+    // Nothing to show on a map without coordinates; an empty grey panel would
+    // just push the explanation of *why* toward the fold.
+    $('mapGps').classList.toggle('d-none', photo.lat == null);
 
     if (photo.lat == null) {
       setPhase('Gps', { state: 'warn', summary: 'No GPS data', enabled: true });
@@ -1211,7 +1266,7 @@ out center tags 250;`;
     body.innerHTML = `
       <table class="table table-sm table-borderless align-middle mb-3">
         ${rows.map(([k, v]) => `
-          <tr><th scope="row" class="text-body-secondary fw-normal pe-3 small" style="width:6.5rem">${esc(k)}</th>
+          <tr><th scope="row" class="text-body-secondary fw-normal pe-3 small" style="width:8.5rem">${esc(k)}</th>
               <td class="coords small">${esc(v)}</td></tr>`).join('')}
       </table>
       <div class="d-grid gap-2">
@@ -1366,7 +1421,7 @@ out center tags 250;`;
 
     $('nearbyRadius').textContent = `${all.length} found within ${photo.nearby.radius} m`;
     $('btnWider').disabled = photo.nearby.radius >= RADII[RADII.length - 1];
-    setPhase('Nearby', { state: 'done', summary: `${shown.length} shown` });
+    setPhase('Nearby', { state: 'done', summary: nearbySummary(shown.length) });
 
     nearbyStatus(shown.length ? '' : `
       <div class="alert alert-info mb-0" role="alert">
@@ -1386,9 +1441,10 @@ out center tags 250;`;
       el.className = `list-group-item list-group-item-action d-flex align-items-center gap-2 py-2${chosen ? ' active' : ''}`;
       el.innerHTML = `
         <i class="bi bi-${f.icon} flex-shrink-0"></i>
-        <span class="text-truncate flex-grow-1 text-start">
-          <span class="fw-medium">${esc(f.name || f.category)}</span>
-          ${f.name ? `<span class="${chosen ? '' : 'text-body-secondary'} small ms-1">${esc(f.category)}</span>` : ''}
+        <span class="d-flex align-items-baseline gap-1 min-w-0 flex-grow-1 text-start">
+          <span class="fw-medium text-truncate">${esc(f.name || f.category)}</span>
+          ${f.name ? `<span class="${chosen ? '' : 'text-body-secondary'} small text-nowrap flex-shrink-0"
+              >${esc(f.category)}</span>` : ''}
         </span>
         <i class="bi bi-check2-circle text-success flex-shrink-0 ${photo.entity?.id === f.id ? '' : 'd-none'}"
            data-locked title="Using this entity"></i>
@@ -1408,6 +1464,12 @@ out center tags 250;`;
     renderFeatureDetail();
     renderNearbyCta();
   }
+
+  /* Once something is committed the header should say *what*, not how many were
+     listed: with the phase collapsed, or the filter hiding the chosen row, the
+     name was otherwise nowhere on the page. */
+  const nearbySummary = shown =>
+    photo.entity ? `Using ${photo.entity.name || photo.entity.category}` : `${shown} shown`;
 
   /* The step's one obvious next action, always last and always primary. */
   function renderNearbyCta() {
@@ -1434,7 +1496,7 @@ out center tags 250;`;
     if (!host) { el.textContent = ''; return; }
     const days = asOf ? Math.floor((Date.now() - asOf) / 86400000) : null;
     const stale = days != null && days > 7;
-    el.className = `small ${stale ? 'text-warning-emphasis' : 'text-body-secondary'}`;
+    el.className = `small px-3 pt-2 mb-0 ${stale ? 'text-warning-emphasis' : 'text-body-secondary'}`;
     el.innerHTML =
       `<i class="bi bi-${stale ? 'exclamation-triangle' : 'database'} me-1"></i>` +
       `via ${esc(host)}` +
@@ -1521,7 +1583,7 @@ out center tags 250;`;
 
     const rows = [
       ['Category', f.category],
-      ['OSM tag', f.pair],
+      ['OSM tag', f.pair, 'code'],
       ['Kind', f.kind === 'place' ? 'Business / destination' : 'Object / street furniture'],
       ['Distance', `${fmtDistance(f.distance)} from the photo`],
       ['Coordinates', `${fmtCoord(f.lat, ['N', 'S'])}, ${fmtCoord(f.lon, ['E', 'W'])}`],
@@ -1540,13 +1602,13 @@ out center tags 250;`;
                 aria-label="Clear selection"><i class="bi bi-x-lg"></i></button>
       </div>
       <table class="table table-sm table-borderless align-middle mb-2">
-        ${rows.map(([k, v]) => `
+        ${rows.map(([k, v, as]) => `
           <tr>
             <th scope="row" class="text-body-secondary fw-normal pe-3 small" style="width:8.5rem">${esc(k)}</th>
             <td class="small text-break">${
-              /^https?:\/\//.test(v)
-                ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>`
-                : esc(v)}</td>
+              /^https?:\/\//.test(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>`
+              : as === 'code' ? `<code>${esc(v)}</code>`
+              : esc(v)}</td>
           </tr>`).join('')}
       </table>
       ${extra.length ? `
@@ -1568,23 +1630,26 @@ out center tags 250;`;
     // Committing lives in the step's primary button at the end of the section.
     // Only the reverse — releasing — needs an affordance here, next to the state
     // it undoes; two "use this" buttons on one screen would just compete.
+    // Committing is the step's primary button at the end of the section. Only the
+    // reverse gets a control here, beside the state it undoes — two "use this"
+    // buttons on one screen would compete for the same press.
     const locked = photo.entity?.id === f.id;
-    const use = document.createElement('button');
-    use.type = 'button';
-    use.id = 'btnUseEntity';
-    use.className = `btn btn-sm w-100 mt-2 ${locked ? 'btn-outline-secondary' : 'btn-outline-success'}`;
-    use.setAttribute('aria-pressed', String(locked));
-    use.innerHTML = locked
-      ? '<i class="bi bi-x-circle me-1"></i>Stop using this entity'
-      : '<i class="bi bi-check2-circle me-1"></i>Use this entity';
-    use.addEventListener('click', () => locked ? unlockEntity() : lockEntity(f));
-    host.appendChild(use);
+    if (locked) {
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.id = 'btnUseEntity';
+      use.className = 'btn btn-outline-secondary w-100 mt-2';
+      use.setAttribute('aria-pressed', 'true');
+      use.innerHTML = '<i class="bi bi-x-circle me-1"></i>Stop using this entity';
+      use.addEventListener('click', unlockEntity);
+      host.appendChild(use);
+    }
 
     const hint = document.createElement('p');
     hint.className = 'text-body-secondary small text-center mt-2 mb-0';
     hint.textContent = locked
       ? 'Committed — the tag schema is step 4.'
-      : 'Double-tapping it in the list or on the map does the same.';
+      : 'Use the button below, or double-tap it in the list or on the map.';
     host.appendChild(hint);
   }
 
@@ -1617,6 +1682,8 @@ out center tags 250;`;
     if (photo.place?.id !== f.id) choosePlace(f, 'map');   // 'map': don't yank the page around
     refreshLockIndicators();
     renderFeatureDetail();
+    renderNearbyCta();     // the step's own CTA advances once something is committed
+    setPhase('Nearby', { state: 'done', summary: nearbySummary(nearbyMarkers.size) });
     setPhase('Schema', { state: 'todo', summary: '', enabled: true });
     openPhase('Schema');
     loadSchema(f);
@@ -1634,6 +1701,8 @@ out center tags 250;`;
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
     setPhase('Propose', { state: 'todo', summary: '', enabled: false });
     photo.facts = null; photo.examples = null;
+    renderNearbyCta();     // ...and goes back to offering the commit when released
+    setPhase('Nearby', { state: 'done', summary: nearbySummary(nearbyMarkers.size) });
     collapse($('phaseSchema')).hide();
     collapse($('phaseVision')).hide();
     collapse($('phasePropose')).hide();
@@ -1695,13 +1764,13 @@ out center tags 250;`;
           <div class="min-w-0 flex-grow-1">
             <div class="d-flex flex-wrap align-items-baseline gap-2">
               <span class="fw-medium">${esc(fd.label)}</span>
-              ${fd.type ? `<span class="badge text-bg-light">${esc(fd.type)}</span>` : ''}
+              ${fd.type ? `<span class="badge border text-body-secondary fw-normal">${esc(fd.type)}</span>` : ''}
             </div>
             <div class="small text-body-secondary text-break"><code>${fd.keys.map(esc).join('</code>, <code>') || '—'}</code></div>
             ${fd.options.length ? `<div class="small text-body-secondary text-break mt-1">
                 e.g. ${fd.options.slice(0, 6).map(esc).join(', ')}${fd.optionCount > 6 ? ` … (${fd.optionCount})` : ''}
               </div>` : ''}
-            ${have ? `<div class="small text-success text-break mt-1">already set:
+            ${have ? `<div class="small text-success-emphasis text-break mt-1">already set:
                 <code>${esc(f.tags[fd.keys.find(present)])}</code></div>` : ''}
           </div>
         </li>`;
@@ -1723,14 +1792,14 @@ out center tags 250;`;
         </div>
         ${s.tag?.description ? `<p class="small text-body-secondary mt-2 mb-0">${esc(s.tag.description)}</p>` : ''}
         ${geom.length ? `<div class="mt-2">${geom.map(g =>
-            `<span class="badge text-bg-light me-1">${esc(g)}</span>`).join('')}</div>` : ''}
+            `<span class="badge border text-body-secondary fw-normal me-1">${esc(g)}</span>`).join('')}</div>` : ''}
         ${s.id?.terms?.length ? `<div class="small text-body-secondary mt-2">
             Also called: ${s.id.terms.map(esc).join(', ')}</div>` : ''}
       </div>
 
       ${s.id?.recommended?.length ? `
         <div class="px-3 pt-3 pb-1">
-          <div class="fw-medium">How it is normally described</div>
+          <h3 class="fw-medium fs-6 mb-1">How it is normally described</h3>
           <div class="small text-body-secondary">
             The fields the reference OSM editor shows for this preset, in its own order.
             A tick means this particular entity already carries that key.
@@ -1748,20 +1817,21 @@ out center tags 250;`;
 
       ${s.tag?.wikiCombination?.length ? `
         <div class="p-3 pb-0">
-          <div class="fw-medium">Combinations the wiki suggests</div>
+          <h3 class="fw-medium fs-6 mb-1">Combinations the wiki suggests</h3>
           <div class="mt-1">${s.tag.wikiCombination.map(k =>
             `<code class="me-2 small">${esc(k)}</code>`).join('')}</div>
         </div>` : ''}
 
       ${s.tag?.inPractice?.length ? `
         <div class="p-3 pb-0">
-          <div class="fw-medium">What mappers actually add</div>
-          <div class="small text-body-secondary mb-2">Share of all <code>${esc(s.pair)}</code> objects carrying each key.</div>
+          <h3 class="fw-medium fs-6 mb-1">What mappers actually add</h3>
+          <div class="small text-body-secondary mb-2">Share of all <code>${esc(s.pair)}</code> objects
+            carrying each key, and the most common values where taginfo reports them.</div>
           ${s.tag.inPractice.map(c => `
             <div class="d-flex align-items-center gap-2 mb-1">
-              <code class="small text-truncate" style="flex:0 0 9rem">${esc(c.key)}</code>
+              <code class="small text-truncate" style="flex:0 0 9rem">${esc(c.label || c.key)}</code>
               <div class="progress flex-grow-1" style="height:.5rem" role="progressbar"
-                   aria-label="${esc(c.key)}" aria-valuenow="${Math.round(c.fraction * 100)}"
+                   aria-label="${esc(c.label || c.key)}" aria-valuenow="${Math.round(c.fraction * 100)}"
                    aria-valuemin="0" aria-valuemax="100">
                 <div class="progress-bar" style="width:${Math.round(c.fraction * 100)}%"></div>
               </div>
@@ -1806,11 +1876,7 @@ out center tags 250;`;
         </p>
       </div>`;
 
-    const counts = [
-      s.id?.recommended?.length ? `${s.id.recommended.length} fields` : null,
-      s.tag?.inPractice?.length ? `${s.tag.inPractice.length} common keys` : null,
-    ].filter(Boolean).join(' · ');
-    setPhase('Schema', { state: 'done', summary: counts || s.pair });
+    setPhase('Schema', { state: 'done', summary: s.pair });
     setPhase('Vision', { state: 'todo', summary: '', enabled: true });
     prepareVision();
 
@@ -1934,11 +2000,12 @@ out center tags 250;`;
         <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.model)}
       </div>
       <div class="d-grid gap-2">
-        <button class="btn btn-sm ${running ? 'btn-outline-danger' : 'btn-primary'}" type="button" id="btnRunVision">
+        <button class="btn ${running ? 'btn-outline-danger' : 'btn-outline-primary'}" type="button" id="btnRunVision">
           <i class="bi bi-${running ? 'stop-circle' : 'stars'} me-1"></i>${running ? 'Stop' : 'Describe this photo'}
         </button>
       </div>
-      <p class="small text-body-secondary mt-2 mb-0" id="visionStatus"></p>` : `
+      <p class="small text-body-secondary mt-2 mb-0" id="visionStatus"
+         role="status" aria-live="polite"></p>` : `
       <div class="alert alert-info mb-0" role="alert">
         <i class="bi bi-info-circle me-1"></i>
         ${settings.apiKey ? 'Choose a vision model' : 'Add an OpenRouter API key'} to describe the photo.
@@ -1958,6 +2025,7 @@ out center tags 250;`;
       + 'long edge — the size at which the finest legible text stops improving.';
     $('visThinkText').textContent = '';
     $('visOutText').textContent = '';
+    $('visionCta').replaceChildren();
     $('visThinkTab').disabled = true;
     renderVisionControls();
     bootstrap.Tab.getOrCreateInstance($('visPromptTab')).show();
@@ -2108,10 +2176,10 @@ out center tags 250;`;
       const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
       const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
       finish('done', `${words} words`,
-        `<i class="bi bi-check-circle text-success me-1"></i>${words} words${tokens}${cost}`
-        + '<span class="d-grid mt-3"><button class="btn btn-primary" type="button" id="btnCtaPropose">'
-        + 'What tags does this support?<i class="bi bi-arrow-right ms-1"></i></button></span>');
-      $('btnCtaPropose')?.addEventListener('click', () => openPhase('Propose'));
+        `<i class="bi bi-check-circle text-success me-1"></i>${words} words${tokens}${cost}`);
+      $('visionCta').innerHTML = '<button class="btn btn-primary" type="button" id="btnCtaPropose">'
+        + 'What tags does this support?<i class="bi bi-arrow-right ms-1"></i></button>';
+      $('btnCtaPropose').addEventListener('click', () => openPhase('Propose'));
     } catch (e) {
       if (e.name === 'AbortError') {
         finish('todo', 'Stopped', '<i class="bi bi-slash-circle me-1"></i>Stopped.');
@@ -2163,8 +2231,8 @@ out center tags 250;`;
     });
 
     const existing = Object.entries(f.tags).map(([k, v]) => `  ${k} = ${v}`);
-    const usage = (s?.tag?.inPractice || []).slice(0, 10)
-      .map(c => `  ${c.key} — on ${Math.round(c.fraction * 100)}% of them`);
+    const usage = (s?.tag?.inPractice || []).slice(0, 12)
+      .map(c => `  ${c.label || c.key} — on ${Math.round(c.fraction * 100)}% of them`);
 
     const examples = ex.map((tags, i) =>
       `  Example ${i + 1}:\n` + Object.entries(tags).slice(0, 18)
@@ -2245,12 +2313,13 @@ out center tags 250;`;
         <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.tagModel)}
       </div>
       <div class="d-grid">
-        <button class="btn btn-sm ${running ? 'btn-outline-danger' : 'btn-outline-primary'}"
+        <button class="btn ${running ? 'btn-outline-danger' : 'btn-outline-primary'}"
                 type="button" id="btnRunPropose">
           <i class="bi bi-${running ? 'stop-circle' : 'magic'} me-1"></i>${running ? 'Stop' : 'Propose tags'}
         </button>
       </div>
-      <p class="small text-body-secondary mt-2 mb-0" id="proposeStatus"></p>`;
+      <p class="small text-body-secondary mt-2 mb-0" id="proposeStatus"
+         role="status" aria-live="polite"></p>`;
     $('btnRunPropose').addEventListener('click', () => running ? proposeAbort.abort() : runPropose());
   }
 
@@ -2417,7 +2486,7 @@ out center tags 250;`;
 
     const groups = [
       ['add', 'New tags', 'plus-circle text-success'],
-      ['update', 'Changes to existing tags', 'pencil-square text-warning'],
+      ['update', 'Changes to existing tags', 'pencil-square text-warning-emphasis'],
       ['same', 'Already correct', 'check2 text-body-tertiary'],
     ];
 
@@ -2426,7 +2495,7 @@ out center tags 250;`;
       if (!rows.length) return '';
       return `
         <div class="px-3 pt-3">
-          <div class="fw-medium small"><i class="bi bi-${icon} me-1"></i>${title} (${rows.length})</div>
+          <h3 class="fw-medium small fs-6 mb-1"><i class="bi bi-${icon} me-1"></i>${title} (${rows.length})</h3>
         </div>
         <div class="list-group list-group-flush">
           ${rows.map(([f, i]) => `
@@ -2570,9 +2639,9 @@ out center tags 250;`;
     const file = [...fileList].find(f => /^image\//.test(f.type) || /\.(hei[cf]|jpe?g|tiff?|png|webp)$/i.test(f.name));
     if (!file) { flashAlert('That file is not an image.', 'warning'); return; }
     loadPhoto(file).then(() => {
-      if (photo.lat == null) {
-        flashAlert('That photo carries no GPS data, so it cannot be placed on the map.', 'warning');
-      } else if (matchMedia('(max-width: 991.98px)').matches) {
+      // No toast for the missing-GPS case: step 2 turns amber and explains it
+      // in full, and a floating warning landed on top of that explanation.
+      if (photo.lat != null && matchMedia('(max-width: 991.98px)').matches) {
         $('mapGps').scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
@@ -2614,8 +2683,8 @@ out center tags 250;`;
   }
 
   $('btnSettings').addEventListener('click', openSettings);
-  $('modelFilter').addEventListener('input', renderModelOptions);
-  $('tagModelFilter').addEventListener('input', renderModelOptions);
+  $('modelFilter').addEventListener('input', () => renderModelOptions('setModel'));
+  $('tagModelFilter').addEventListener('input', () => renderModelOptions('setTagModel'));
   $('btnReloadModels').addEventListener('click', () => populateModels(true));
   $('btnRevealKey').addEventListener('click', () => {
     const el = $('setApiKey');

@@ -46,11 +46,20 @@ where the reader put it, so browsing down a list of candidates is not interrupte
 page jumping. Scroll to the map when you want to look at it.
 
 Other phone-specific handling: `viewport-fit=cover` plus `env(safe-area-inset-*)` so the
-Dynamic Island and home indicator do not overlap content; ~44 px minimum tap targets; no
-nested scroll regions; the scale bar is hidden where it would collide with the
-attribution; and marker popups are deliberately terse and skipped entirely on phone list
-selections, because a tall popup covers most of a short map when the full record is
-already in the pane below it.
+Dynamic Island and home indicator do not overlap content; a 2.75 rem (44 px) floor on every
+button below the `lg` breakpoint; no nested scroll regions, including the streaming panes,
+which grow into the page rather than trapping text behind an invisible iOS overlay
+scrollbar; the scale bar is hidden where it would collide with the attribution; and marker
+popups are deliberately terse and skipped entirely on phone list selections, because a tall
+popup covers most of a short map when the full record is already in the pane below it.
+
+Accessibility: every phase header is a real `<button>` that keeps its focus ring when
+expanded, the status dot beside it stays green or amber whether or not its phase is the
+open one, the six section titles are `<h3>`s, the long-running regions (nearby search,
+schema, description, proposals) are `aria-live="polite"`, both maps carry `role="img"`
+with a description of what they show, and text clears 4.5:1 against its background in
+both themes — Bootstrap's own `.btn-outline-secondary` needed lifting to get there in the
+dark one.
 
 ## Phases
 
@@ -91,16 +100,17 @@ things:
   fills the detail pane. Cheap and reversible; browse as many as you like.
 - **A double click or double tap commits** — on the row or on the map point. That locks
   the entity in, fetches its tag schema, and unlocks step 4. The step's primary button at
-  the end of the section (*Use &lt;entity&gt;*) does the same thing, as does the smaller
-  **Use this entity** button in the detail pane; once committed that button becomes
-  *Stop using this entity*, which is the only way back.
+  the end of the section (*Use &lt;entity&gt;*) does the same thing. Once committed, the detail
+  pane grows a **Stop using this entity** button, which is the only way back; before that it
+  offers no commit button of its own, so there is exactly one primary action per step.
 
 Selection is never delayed waiting to see whether a second tap arrives: the first tap acts
 immediately and the second one escalates. Nothing moves under the finger between the two,
 because selecting does not scroll the page.
 
 A committed entity keeps a green ring on the map and a green tick in the list, even while
-you select other entities to compare against it.
+you select other entities to compare against it, and step 3's header changes from
+*N shown* to *Using &lt;name&gt;* so the commitment is still legible with the phase collapsed.
 
 ## Nearby entities
 
@@ -121,7 +131,8 @@ them without losing sight of the map.
   street furniture such as waste baskets, post boxes, benches, hydrants and bus stops.
   Filtering re-plots the map so it always matches the list. Rows are one line each —
   icon, name, category, distance — 41 px rather than the 86 px a two-line row took; the
-  Business/Object label lives in the filter above, so repeating it per row was noise.
+  Business/Object label lives in the filter above, so repeating it per row was noise. A long
+  name truncates; the category beside it does not, so it never decays to `S…`.
 - The search starts at 150 m and widens automatically (400 m, 1 km, 2.5 km) when an area
   is too sparse to fill the list; **Wider** steps it out manually.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
@@ -246,8 +257,12 @@ says so. Use a key scoped and budgeted for this.
 The model picker lists only vision-capable models — those whose
 `architecture.input_modalities` include `image`, 183 of OpenRouter's 345 at the time of
 writing — with their input price per million tokens and whether they support reasoning.
-A filter box narrows the list. The catalogue is cached under `photomap:models:1:openrouter`
+A filter box narrows the list. The catalogue is cached under `photomap:models:2:openrouter`
 for **24 hours**, with a *Reload model list* button to force a refresh.
+
+Neither picker preselects anything: until you choose, both read *— choose a model —*, so
+opening Settings just to paste a key cannot silently commit you to whichever model sorts
+first. Typing in one picker's filter leaves an unsaved choice in the other alone.
 
 ### Image size
 
@@ -297,7 +312,9 @@ supports. It reads text, not the photo, so any model will do.
 - the **schema**: each key the reference editor offers for this kind of object, with its
   type and permitted values;
 - the **documentation**: the wiki's description of what the tag means;
-- **how often each companion key is really used** on objects with this tag;
+- **how often each companion key is really used** on objects with this tag, including the
+  most common values where taginfo reports them (`building` and `building=yes` are separate
+  rows there, and conflating them made one key appear several times at different figures);
 - **idiomatic examples** — the tag sets of the most thoroughly tagged real objects of the
   same kind near the photo. The wiki says what a tag means but never shows what a
   well-tagged instance looks like; real neighbours do, and they carry regional convention
