@@ -66,6 +66,8 @@
          border: 2px solid var(--bs-body-bg); box-shadow: var(--bs-box-shadow-sm);
          font-size: .7rem; transition: width .12s ease, height .12s ease; }
   .dot.is-selected { width: 2.2rem; height: 2.2rem; font-size: .95rem; z-index: 1000; }
+  /* The entity locked in for step 4, whether or not it is the one being looked at. */
+  .dot.is-locked { outline: 3px solid var(--bs-success); outline-offset: 2px; }
 
   .dropzone { border: 2px dashed var(--bs-border-color); border-radius: var(--bs-border-radius-lg);
               transition: border-color .15s ease-in-out, background-color .15s ease-in-out; cursor: pointer; }
@@ -288,6 +290,24 @@
               </div>
             </div>
 
+            <!-- Phase 4 — how this kind of thing is described in OSM -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phaseSchema" disabled
+                        aria-expanded="false" aria-controls="phaseSchema" id="phaseSchemaBtn">
+                  <span class="phase-num" id="phaseSchemaNum">4</span>
+                  <span>Tag schema</span>
+                  <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseSchemaSpinner"
+                        role="status" aria-label="Loading the tagging schema"></span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phaseSchemaSummary"></span>
+                </button>
+              </h2>
+              <div id="phaseSchema" class="accordion-collapse collapse" data-bs-parent="#phases">
+                <div class="accordion-body p-0" id="schemaBody"></div>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -499,9 +519,161 @@ out center tags 250;`;
     throw lastErr || new Error('Overpass unreachable');
   }
 
+  /* ---------- tagging schema for an entity type ----------
+     Two sources, because they answer different questions:
+       - the iD tagging schema is what the reference OSM editor puts in front of
+         a mapper, so its field list is the idiomatic way to describe the thing;
+       - taginfo carries the wiki's prose description, which geometries the tag
+         is valid on, the wiki's suggested combinations, and how often each
+         companion key is actually used in the database.
+     The three iD files are ~176 kB over the wire (brotli) and are fetched at
+     most once per session; the small derived result is cached in localStorage
+     so a repeat visit for the same tag needs no network at all. */
+
+  const ID_SCHEMA_BASE = 'https://cdn.jsdelivr.net/npm/@openstreetmap/id-tagging-schema/dist';
+  const TAGINFO = 'https://taginfo.openstreetmap.org/api/4';
+  const CACHE_PREFIX = 'photomap:schema:1:';
+  const CACHE_TTL_MS = 30 * 24 * 3600 * 1000;
+
+  let idSchemaPromise = null;
+  function loadIdSchema() {
+    idSchemaPromise ||= (async () => {
+      const [presets, fields, tr] = await Promise.all(
+        ['presets.json', 'fields.json', 'translations/en.json']
+          .map(f => fetch(`${ID_SCHEMA_BASE}/${f}`).then(r => {
+            if (!r.ok) throw new Error(`iD schema ${f}: HTTP ${r.status}`);
+            return r.json();
+          })));
+      const t = (tr.en || tr).presets;
+      return { presets, fields, tPresets: t.presets || {}, tFields: t.fields || {} };
+    })().catch(e => { idSchemaPromise = null; throw e; });
+    return idSchemaPromise;
+  }
+
+  const cacheGet = key => {
+    try {
+      const raw = localStorage.getItem(CACHE_PREFIX + key);
+      if (!raw) return null;
+      const v = JSON.parse(raw);
+      if (Date.now() - v.fetchedAt > CACHE_TTL_MS) return null;
+      return v;
+    } catch { return null; }
+  };
+
+  const cacheSet = (key, value) => {
+    try { localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value)); }
+    catch {
+      // Quota reached — drop our own cached schemas and try once more.
+      try {
+        for (const k of Object.keys(localStorage))
+          if (k.startsWith(CACHE_PREFIX)) localStorage.removeItem(k);
+        localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value));
+      } catch { /* give up; the schema still works, it just is not cached */ }
+    }
+  };
+
+  /** Field ids resolve to one or more real OSM keys; both shapes occur. */
+  const fieldKeys = def => def?.key ? [def.key] : (def?.keys || []);
+
+  const FIELD_TYPE_LABEL = {
+    combo: 'choice', typeCombo: 'choice', multiCombo: 'choices', semiCombo: 'choices',
+    manyCombo: 'choices', check: 'yes / no', defaultCheck: 'yes / no', onewayCheck: 'yes / no',
+    text: 'text', textarea: 'text', localized: 'text', number: 'number', tel: 'phone',
+    email: 'email', url: 'link', address: 'address', wikipedia: 'wikipedia',
+    wikidata: 'wikidata', date: 'date', identifier: 'identifier', roadheight: 'height',
+    roadspeed: 'speed', restrictions: 'turn restrictions', structureRadio: 'structure',
+    access: 'access', cycleway: 'cycleway', colour: 'colour', networkCombo: 'network',
+  };
+
+  function describeFields(ids, { fields, tFields }) {
+    const seen = new Set();
+    return (ids || []).map(id => {
+      if (seen.has(id)) return null;
+      seen.add(id);
+      const def = fields[id], t = tFields[id] || {};
+      if (!def) return null;
+      const options = t.options
+        ? Object.values(t.options)
+        : (def.options || []);
+      return {
+        id,
+        label: t.label || titleCase(id.replace(/[/_]/g, ' ')),
+        keys: fieldKeys(def),
+        type: FIELD_TYPE_LABEL[def.type] || def.type || '',
+        options: options.slice(0, 12),
+        optionCount: options.length,
+      };
+    }).filter(Boolean);
+  }
+
+  /** Find the iD preset whose tags match this key=value exactly, else the key. */
+  function findPreset(presets, key, value) {
+    let bare = null;
+    for (const [id, p] of Object.entries(presets)) {
+      const t = p.tags;
+      if (!t || p.searchable === false) continue;
+      const entries = Object.entries(t);
+      if (entries.length !== 1) continue;
+      if (entries[0][0] !== key) continue;
+      if (entries[0][1] === value) return [id, p];
+      if (entries[0][1] === '*') bare = [id, p];
+    }
+    return bare || [null, null];
+  }
+
+  async function fetchTaginfo(key, value) {
+    const q = `key=${encodeURIComponent(key)}&value=${encodeURIComponent(value)}`;
+    const [wiki, combos] = await Promise.all([
+      fetch(`${TAGINFO}/tag/wiki_pages?${q}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${TAGINFO}/tag/combinations?${q}&page=1&rp=12&sortname=together_count&sortorder=desc`)
+        .then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    const en = wiki?.data?.find(d => d.lang === 'en') || wiki?.data?.[0] || null;
+    return {
+      description: en?.description || null,
+      wikiCombination: en?.tags_combination || [],
+      implies: en?.tags_implies || [],
+      geometry: en ? { node: en.on_node, way: en.on_way, area: en.on_area, relation: en.on_relation } : null,
+      inPractice: (combos?.data || []).map(c => ({
+        key: c.other_key, count: c.together_count, fraction: c.to_fraction,
+      })),
+    };
+  }
+
+  async function buildSchema(pair) {
+    const cached = cacheGet(pair);
+    if (cached) return cached;
+
+    const [key, value] = pair.split('=');
+    // Both halves are independent; a taginfo outage should not lose the preset.
+    const [idPart, tagPart] = await Promise.all([
+      loadIdSchema().then(s => {
+        const [presetId, preset] = findPreset(s.presets, key, value);
+        if (!preset) return null;
+        const t = s.tPresets[presetId] || {};
+        return {
+          presetId,
+          name: t.name || titleCase(value),
+          terms: (t.terms || []).slice(0, 8),
+          geometry: preset.geometry || [],
+          recommended: describeFields(preset.fields, s),
+          optional: describeFields(preset.moreFields, s),
+        };
+      }).catch(e => ({ error: e.message })),
+      fetchTaginfo(key, value).catch(e => ({ error: e.message })),
+    ]);
+
+    const schema = { pair, key, value, fetchedAt: Date.now(), id: idPart, tag: tagPart };
+    if (!idPart?.error || !tagPart?.error) cacheSet(pair, schema);   // don't cache a total failure
+    return schema;
+  }
+
   /* ---------- state: exactly one photo ---------- */
   let photo = null;                      // {name, size, lat, lon, alt, taken, make, model, thumb,
-                                         //  marker, nearby?: {...}, place?: feature}
+                                         //  marker, nearby?: {...},
+                                         //  place?: feature   — highlighted, being looked at
+                                         //  entity?: feature  — locked in, drives phase 4
+                                         //  schema?: {...}}
   const nearbyMarkers = new Map();       // feature id -> Leaflet marker
   let placeLine = null;                  // connector from photo to selected entity
 
@@ -551,7 +723,7 @@ out center tags 250;`;
       num.classList.toggle('is-error', state === 'warn');
       num.innerHTML = state === 'done' ? '<i class="bi bi-check-lg"></i>'
                     : state === 'warn' ? '<i class="bi bi-exclamation-lg"></i>'
-                    : { Photo: '1', Gps: '2', Nearby: '3' }[name];
+                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4' }[name];
     }
   }
 
@@ -739,14 +911,17 @@ out center tags 250;`;
     renderNearby();
   }
 
-  const dotIcon = (f, selected) => L.divIcon({
-    className: '',
-    html: `<div class="dot ${selected ? 'text-bg-success is-selected' : 'text-bg-warning'}"
-                data-feature="${esc(f.id)}"><i class="bi bi-${f.icon}"></i></div>`,
-    iconSize: selected ? [35, 35] : [26, 26],
-    iconAnchor: selected ? [18, 18] : [13, 13],
-    popupAnchor: [0, selected ? -18 : -13],
-  });
+  const dotIcon = (f, selected) => {
+    const locked = photo?.entity?.id === f.id;
+    return L.divIcon({
+      className: '',
+      html: `<div class="dot ${selected ? 'text-bg-success is-selected' : 'text-bg-warning'}${locked ? ' is-locked' : ''}"
+                  data-feature="${esc(f.id)}"><i class="bi bi-${f.icon}"></i></div>`,
+      iconSize: selected ? [35, 35] : [26, 26],
+      iconAnchor: selected ? [18, 18] : [13, 13],
+      popupAnchor: [0, selected ? -18 : -13],
+    });
+  };
 
   function clearNearbyLayers() {
     for (const m of nearbyMarkers.values()) map.removeLayer(m);
@@ -769,8 +944,9 @@ out center tags 250;`;
           <div class="fw-semibold">${esc(f.name || f.category)}</div>
           <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} away</div>
         </div>`, { closeButton: false });
-      // Picking a point on the map drives the list, same as picking a row drives the map.
-      marker.on('click', () => choosePlace(f, 'map'));
+      // Picking a point on the map drives the list, same as picking a row drives
+      // the map; a quick second tap on the same point locks it in.
+      marker.on('click', () => { if (!countTap(f.id)) choosePlace(f, 'map'); else lockEntity(f); });
       nearbyMarkers.set(f.id, marker);
     }
   }
@@ -808,6 +984,8 @@ out center tags 250;`;
           <div class="text-truncate">
             <span class="fw-medium">${esc(f.name || f.category)}</span>
             ${f.name ? `<span class="text-body-secondary small ms-1">${esc(f.category)}</span>` : ''}
+            <span class="badge text-bg-success ms-1 ${photo.entity?.id === f.id ? '' : 'd-none'}"
+                  data-locked><i class="bi bi-check2-circle me-1"></i>Using</span>
           </div>
           <div class="small ${chosen ? '' : 'text-body-secondary'}">
             <span class="badge rounded-pill ${f.kind === 'place' ? 'text-bg-primary' : 'text-bg-secondary'} me-1">
@@ -817,7 +995,12 @@ out center tags 250;`;
           </div>
         </div>
         <i class="bi bi-${chosen ? 'check-circle-fill' : 'circle'} flex-shrink-0"></i>`;
-      el.addEventListener('click', () => choosePlace(chosen ? null : f, 'list'));
+      el.addEventListener('click', () => {
+        // First tap looks at it, a quick second tap commits to it. Selection happens
+        // immediately either way, so nothing waits on a double-tap timer.
+        if (countTap(f.id)) lockEntity(f);
+        else choosePlace(photo.place?.id === f.id ? null : f, 'list');
+      });
       list.appendChild(el);
     }
 
@@ -890,9 +1073,12 @@ out center tags 250;`;
 
     // Scroll last: the detail pane has just been un-hidden below the map, and
     // until it exists the page cannot scroll far enough to bring the map up.
+    // Deferred past the double-tap window, because scrolling the list out from
+    // under a finger makes the second tap of a double-tap impossible to land.
+    clearTimeout(pendingScroll);
     if (scrollToMap) {
-      requestAnimationFrame(() =>
-        document.querySelector('.map-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      pendingScroll = setTimeout(() =>
+        document.querySelector('.map-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' }), 470);
     }
   }
 
@@ -951,6 +1137,248 @@ out center tags 250;`;
       </a>`;
 
     $('btnClearPlace').addEventListener('click', () => choosePlace(null, 'list'));
+
+    const locked = photo.entity?.id === f.id;
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.id = 'btnUseEntity';
+    use.className = `btn w-100 mt-2 ${locked ? 'btn-success' : 'btn-outline-success'}`;
+    use.setAttribute('aria-pressed', String(locked));
+    use.innerHTML = locked
+      ? '<i class="bi bi-check2-circle me-1"></i>Using this entity'
+      : '<i class="bi bi-circle me-1"></i>Use this entity';
+    use.addEventListener('click', () => locked ? unlockEntity() : lockEntity(f));
+    host.appendChild(use);
+
+    const hint = document.createElement('p');
+    hint.className = 'text-body-secondary small text-center mt-2 mb-0';
+    hint.textContent = locked
+      ? 'Locked in — the tag schema is in step 4.'
+      : 'Or double-tap it in the list or on the map.';
+    host.appendChild(hint);
+  }
+
+  /* ---------- locking an entity in ---------- */
+
+  // First tap selects, a quick second tap on the same thing commits. Selection is
+  // never delayed waiting to see whether a second tap arrives.
+  let lastTap = { id: null, at: 0 };
+  let pendingScroll = null;
+  function countTap(id) {
+    const now = Date.now();
+    const isDouble = lastTap.id === id && now - lastTap.at < 450;
+    lastTap = { id: isDouble ? null : id, at: now };
+    return isDouble;
+  }
+
+  /** Repaint lock indicators without tearing down and rebuilding the layers. */
+  function refreshLockIndicators() {
+    for (const [id, marker] of nearbyMarkers) {
+      const f = photo.nearby?.features.find(x => x.id === id);
+      if (f) marker.setIcon(dotIcon(f, photo.place?.id === id));
+    }
+    for (const row of document.querySelectorAll('#nearbyList .list-group-item')) {
+      row.querySelector('[data-locked]')
+        ?.classList.toggle('d-none', row.dataset.feature !== photo.entity?.id);
+    }
+  }
+
+  function lockEntity(f) {
+    clearTimeout(pendingScroll);       // committing supersedes the pending map scroll
+    photo.entity = f;
+    if (photo.place?.id !== f.id) choosePlace(f, 'map');   // 'map': don't yank the page around
+    clearTimeout(pendingScroll);
+    refreshLockIndicators();
+    renderFeatureDetail();
+    setPhase('Schema', { state: 'todo', summary: '', enabled: true });
+    openPhase('Schema');
+    loadSchema(f);
+    // Phase 4 is what the commit produced, so put it on screen.
+    setTimeout(() => $('phaseSchemaBtn').scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  }
+
+  function unlockEntity() {
+    photo.entity = null;
+    photo.schema = null;
+    refreshLockIndicators();
+    renderFeatureDetail();
+    $('schemaBody').replaceChildren();
+    setPhase('Schema', { state: 'todo', summary: '', enabled: false });
+    bootstrap.Collapse.getOrCreateInstance($('phaseSchema')).hide();
+  }
+
+  /* ---------- phase 4: the tag schema for that entity type ---------- */
+
+  async function loadSchema(f) {
+    const pair = f.pair;
+    const cached = cacheGet(pair);
+    $('phaseSchemaSpinner').classList.toggle('d-none', !!cached);
+    $('phaseSchemaSummary').classList.toggle('d-none', !cached);
+    setPhase('Schema', { state: cached ? 'todo' : 'busy', summary: cached ? '' : 'Loading…' });
+
+    if (!cached) {
+      $('schemaBody').innerHTML = `
+        <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
+          <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+          Fetching the schema for <code class="ms-1">${esc(pair)}</code>&hellip;
+        </div>`;
+    }
+
+    let schema;
+    try {
+      schema = await buildSchema(pair);
+    } catch (e) {
+      $('phaseSchemaSpinner').classList.add('d-none');
+      $('phaseSchemaSummary').classList.remove('d-none');
+      setPhase('Schema', { state: 'warn', summary: 'Unavailable' });
+      $('schemaBody').innerHTML = `
+        <div class="p-3">
+          <div class="alert alert-warning mb-0" role="alert">
+            <i class="bi bi-exclamation-triangle me-1"></i>Could not load the tagging schema.
+            <div class="small mt-1 text-body-secondary">${esc(e.message)}</div>
+            <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnRetrySchema">
+              <i class="bi bi-arrow-clockwise me-1"></i>Try again
+            </button>
+          </div>
+        </div>`;
+      $('btnRetrySchema')?.addEventListener('click', () => loadSchema(f));
+      return;
+    }
+
+    // A slower selection may have superseded this one.
+    if (photo?.entity?.pair !== pair) return;
+    photo.schema = schema;
+    $('phaseSchemaSpinner').classList.add('d-none');
+    $('phaseSchemaSummary').classList.remove('d-none');
+    renderSchema(schema, f);
+  }
+
+  function renderSchema(s, f) {
+    const present = k => Object.prototype.hasOwnProperty.call(f.tags, k);
+    const fieldRow = fd => {
+      const have = fd.keys.some(present);
+      return `
+        <li class="list-group-item d-flex align-items-start gap-2 px-3">
+          <i class="bi bi-${have ? 'check-circle-fill text-success' : 'circle text-body-tertiary'} mt-1 flex-shrink-0"></i>
+          <div class="min-w-0 flex-grow-1">
+            <div class="d-flex flex-wrap align-items-baseline gap-2">
+              <span class="fw-medium">${esc(fd.label)}</span>
+              ${fd.type ? `<span class="badge text-bg-light">${esc(fd.type)}</span>` : ''}
+            </div>
+            <div class="small text-body-secondary text-break"><code>${fd.keys.map(esc).join('</code>, <code>') || '—'}</code></div>
+            ${fd.options.length ? `<div class="small text-body-secondary text-break mt-1">
+                e.g. ${fd.options.slice(0, 6).map(esc).join(', ')}${fd.optionCount > 6 ? ` … (${fd.optionCount})` : ''}
+              </div>` : ''}
+            ${have ? `<div class="small text-success text-break mt-1">already set:
+                <code>${esc(f.tags[fd.keys.find(present)])}</code></div>` : ''}
+          </div>
+        </li>`;
+    };
+
+    const geom = s.id?.geometry?.length ? s.id.geometry
+      : s.tag?.geometry ? Object.entries(s.tag.geometry).filter(([, v]) => v).map(([k]) => k) : [];
+
+    const wikiUrl = `https://wiki.openstreetmap.org/wiki/Tag:${encodeURIComponent(s.key)}%3D${encodeURIComponent(s.value)}`;
+    const taginfoUrl = `https://taginfo.openstreetmap.org/tags/${encodeURIComponent(s.key)}=${encodeURIComponent(s.value)}`;
+    const age = new Date(s.fetchedAt).toLocaleDateString(undefined, { dateStyle: 'medium' });
+
+    $('schemaBody').innerHTML = `
+      <div class="p-3 border-bottom">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-${f.icon} fs-5 text-success"></i>
+          <span class="fw-semibold">${esc(s.id?.name || titleCase(s.value))}</span>
+          <code class="ms-auto small">${esc(s.pair)}</code>
+        </div>
+        ${s.tag?.description ? `<p class="small text-body-secondary mt-2 mb-0">${esc(s.tag.description)}</p>` : ''}
+        ${geom.length ? `<div class="mt-2">${geom.map(g =>
+            `<span class="badge text-bg-light me-1">${esc(g)}</span>`).join('')}</div>` : ''}
+        ${s.id?.terms?.length ? `<div class="small text-body-secondary mt-2">
+            Also called: ${s.id.terms.map(esc).join(', ')}</div>` : ''}
+      </div>
+
+      ${s.id?.recommended?.length ? `
+        <div class="px-3 pt-3 pb-1">
+          <div class="fw-medium">How it is normally described</div>
+          <div class="small text-body-secondary">
+            The fields the reference OSM editor shows for this preset, in its own order.
+            A tick means this particular entity already carries that key.
+          </div>
+        </div>
+        <ul class="list-group list-group-flush">${s.id.recommended.map(fieldRow).join('')}</ul>` : ''}
+
+      ${s.id?.optional?.length ? `
+        <div class="p-3 pb-0">
+          <details class="small">
+            <summary class="text-body-secondary">${s.id.optional.length} further optional fields</summary>
+            <ul class="list-group list-group-flush mt-2">${s.id.optional.map(fieldRow).join('')}</ul>
+          </details>
+        </div>` : ''}
+
+      ${s.tag?.wikiCombination?.length ? `
+        <div class="p-3 pb-0">
+          <div class="fw-medium">Combinations the wiki suggests</div>
+          <div class="mt-1">${s.tag.wikiCombination.map(k =>
+            `<code class="me-2 small">${esc(k)}</code>`).join('')}</div>
+        </div>` : ''}
+
+      ${s.tag?.inPractice?.length ? `
+        <div class="p-3 pb-0">
+          <div class="fw-medium">What mappers actually add</div>
+          <div class="small text-body-secondary mb-2">Share of all <code>${esc(s.pair)}</code> objects carrying each key.</div>
+          ${s.tag.inPractice.map(c => `
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <code class="small text-truncate" style="flex:0 0 9rem">${esc(c.key)}</code>
+              <div class="progress flex-grow-1" style="height:.5rem" role="progressbar"
+                   aria-label="${esc(c.key)}" aria-valuenow="${Math.round(c.fraction * 100)}"
+                   aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" style="width:${Math.round(c.fraction * 100)}%"></div>
+              </div>
+              <span class="small text-body-secondary coords" style="flex:0 0 2.5rem;text-align:right">${Math.round(c.fraction * 100)}%</span>
+            </div>`).join('')}
+        </div>` : ''}
+
+      ${s.id?.error && s.tag?.error ? `
+        <div class="p-3"><div class="alert alert-warning mb-0 small" role="alert">
+          Both schema sources failed: ${esc(s.id.error)}; ${esc(s.tag.error)}
+        </div></div>` : s.id?.error ? `
+        <div class="p-3 pb-0"><div class="alert alert-warning mb-0 small" role="alert">
+          Editor preset unavailable (${esc(s.id.error)}) — showing wiki data only.
+        </div></div>` : s.tag?.error ? `
+        <div class="p-3 pb-0"><div class="alert alert-warning mb-0 small" role="alert">
+          Wiki data unavailable (${esc(s.tag.error)}) — showing the editor preset only.
+        </div></div>` : ''}
+
+      <div class="p-3">
+        <div class="d-grid gap-2">
+          <a class="btn btn-sm btn-outline-secondary" href="${wikiUrl}" target="_blank" rel="noopener">
+            <i class="bi bi-book me-1"></i>Full documentation on the OSM wiki
+          </a>
+          <a class="btn btn-sm btn-outline-secondary" href="${taginfoUrl}" target="_blank" rel="noopener">
+            <i class="bi bi-bar-chart me-1"></i>Usage statistics on taginfo
+          </a>
+        </div>
+        <p class="small text-body-secondary mt-2 mb-0" id="schemaCacheNote">
+          <i class="bi bi-hdd me-1"></i>Cached in this browser &middot; fetched ${esc(age)}
+          <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button" id="btnRefreshSchema">refresh</button>
+        </p>
+        <p class="small text-body-secondary mt-1 mb-0">
+          Preset from the
+          <a href="https://github.com/openstreetmap/id-tagging-schema" target="_blank" rel="noopener">iD tagging schema</a>;
+          description and usage from
+          <a href="https://taginfo.openstreetmap.org/" target="_blank" rel="noopener">taginfo</a>.
+        </p>
+      </div>`;
+
+    const counts = [
+      s.id?.recommended?.length ? `${s.id.recommended.length} fields` : null,
+      s.tag?.inPractice?.length ? `${s.tag.inPractice.length} common keys` : null,
+    ].filter(Boolean).join(' · ');
+    setPhase('Schema', { state: 'done', summary: counts || s.pair });
+
+    $('btnRefreshSchema').addEventListener('click', () => {
+      try { localStorage.removeItem(CACHE_PREFIX + s.pair); } catch { /* nothing to do */ }
+      loadSchema(f);
+    });
   }
 
   /* ---------- map-wide actions ---------- */
@@ -980,10 +1408,12 @@ out center tags 250;`;
     $('featureDetail').classList.add('d-none');
     $('nearbySource').textContent = '';
     $('nearbyRadius').textContent = '';
+    $('schemaBody').replaceChildren();
     nearbyStatus('');
     setPhase('Photo', { state: 'todo', summary: '', enabled: true });
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
+    setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     $('btnFit').disabled = true;
     $('btnExport').disabled = true;
     openPhase('Photo');

@@ -45,7 +45,29 @@ Location toggle, and phase 3 stays locked.
 **3 · Nearby entities.** The 10 nearest things OpenStreetMap knows about, businesses and
 street furniture alike. See below.
 
+**4 · Tag schema.** Once one of those entities is committed to, how that *kind* of thing
+is described in OpenStreetMap. See below.
+
 More phases will be added after these.
+
+## Selecting versus committing
+
+Two different actions, because looking at a candidate and choosing it are different
+things:
+
+- **A single click or tap selects** — highlights the point green, draws the connector,
+  fills the detail pane. Cheap and reversible; browse as many as you like.
+- **A double click or double tap commits** — on the row or on the map point. That locks
+  the entity in, fetches its tag schema, and unlocks step 4. The **Use this entity**
+  toggle under the details does the same thing, and pressing it again releases it.
+
+Selection is never delayed waiting to see whether a second tap arrives: the first tap
+acts immediately and the second one escalates. The map scroll that follows a selection on
+mobile *is* deferred past the double-tap window, though — scrolling the list out from
+under a finger would make the second tap impossible to land.
+
+A committed entity keeps a green ring on the map and a **Using** badge in the list, even
+while you select other entities to compare against it.
 
 ## Nearby entities
 
@@ -85,6 +107,38 @@ recently mapped feature is missing entirely from one and first in the list on th
 
 The page therefore prints which host answered and that host's database timestamp beneath
 the results, and flags it in warning colours when the data is more than a week old.
+
+## Tag schema
+
+Committing to an entity fills step 4 with everything known about how that *entity type*
+is described, drawn from two sources that answer different questions:
+
+- The **[iD tagging schema](https://github.com/openstreetmap/id-tagging-schema)** is what
+  the reference OSM editor puts in front of a mapper. Its preset for the tag gives the
+  human name, synonyms, valid geometries, and — the useful part — the ordered list of
+  fields the editor offers, which is as close to a definition of *idiomatic* as OSM has.
+  Each field is shown with its label, real key(s), value type and example values, and is
+  ticked when the selected entity already carries that key, with its current value.
+  Optional extra fields sit behind a disclosure.
+- **[taginfo](https://taginfo.openstreetmap.org/)** supplies the wiki's prose description
+  of the tag, which geometries it is documented for, the combinations the wiki recommends,
+  and how often every companion key is *actually* used on objects with this tag — the last
+  one shown as a bar per key, which is a good corrective to what the wiki recommends.
+
+Both are best-effort and independent: if one fails the other is still rendered, with a
+note saying which is missing. Links to the full wiki page and the taginfo page close it out.
+
+### Caching
+
+The three iD schema files total about 176 kB brotli-compressed. They are fetched at most
+once per session, and only on a cache miss.
+
+What goes into `localStorage` is the small **derived** schema — around 5 kB per tag, keyed
+`photomap:schema:1:<key>=<value>` with a fetch timestamp and a 30-day TTL — not the raw
+bundles, which would not fit. So a repeat visit for a tag already seen renders step 4 with
+no network at all. Quota errors are handled by evicting this app's own cached schemas and
+retrying once; if that still fails the schema is simply not cached. A **refresh** link
+under the results drops the entry and refetches.
 
 ## Getting GPS data off an iPhone
 
