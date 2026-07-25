@@ -232,9 +232,41 @@ writing — with their input price per million tokens and whether they support r
 A filter box narrows the list. The catalogue is cached under `photomap:models:1:openrouter`
 for **24 hours**, with a *Reload model list* button to force a refresh.
 
-The photo is re-encoded as JPEG at up to 2048 px on its long edge before sending: small
-print on signs is the whole point of this step, so it is not downscaled aggressively. The
-Harrogate example goes over as about 385 kB rather than the original 4 MB.
+### Image size
+
+The photo is re-encoded before sending, at **1536 px on the long edge, JPEG quality 0.70**.
+No setting, no prompt — it just happens.
+
+Those numbers were measured rather than picked. The test photo (a wall sign shot at
+4284 × 5712, 4.1 MB) was rendered at a range of sizes and OCR'd, counting how many of the
+sign's phrases came back — coarse headline through to the smallest print:
+
+| long edge | 512 | 768 | 1024 | 1280 | **1536** | 2048 | 2560 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| phrases read | 3 | 6 | 7 | 11 | **12** | 12 | 12 |
+| kB @ q85 | 35 | 77 | 135 | 200 | 278 | 466 | 680 |
+
+Below 1280 the small print is gone. Above 1536 nothing further is recovered, so 2048 and
+2560 were paying for pixels nobody can read.
+
+Quality turned out to be a nearly free axis. At 1536 the OCR score is **identical from q90
+down to q55** while the file shrinks from 358 kB to 137 kB — legibility here is bound by
+resolution, not compression. q0.70 sits in the middle of that flat region.
+
+The two knobs do different jobs, which is worth keeping straight:
+
+- **pixel dimensions** drive the image *tokens* the model bills for;
+- **JPEG quality** drives the *bytes* uploaded off a phone.
+
+Result: 4.1 MB → **185 kB at 1152 × 1536**, a 23× reduction. OCR run over the exact bytes
+that go on the wire still recovers the finest line on the sign — *"Apologies we may have to
+close the facility at short notice due to bad weather or staff shortages"*. Since a vision
+model generally reads worse-quality images better than Tesseract does, that is a
+conservative floor.
+
+A byte-budget backstop covers photos busier than the test one: if 1536 px at q0.70 still
+exceeds 400 kB, quality steps down to 0.60 then 0.50. Resolution is never sacrificed,
+because that is the axis legibility actually depends on.
 
 ## Getting GPS data off an iPhone
 

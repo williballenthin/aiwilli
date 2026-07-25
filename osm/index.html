@@ -1657,7 +1657,28 @@ out center tags 250;`;
 
   /* ---------- phase 5: what a vision model sees ---------- */
 
-  const IMAGE_MAX_EDGE = 2048;   // small print on signs is the whole point; do not skimp
+  /*
+   * Sizing was measured, not guessed, by OCR-ing this project's test photo (a wall
+   * sign shot at 4284x5712) at a range of sizes and qualities:
+   *
+   *   long edge   512  768 1024 1280 1536 2048 2560
+   *   words read    3    6    7   11   12   12   12   <- plateaus at 1536
+   *
+   * Below 1280 the small print is gone; above 1536 nothing more is recovered, so
+   * 2048 and 2560 were paying for pixels no one can read. 1536 also happens to be
+   * just under the point where some providers downscale server-side anyway.
+   *
+   * Quality is a separate axis and a much cheaper one: at 1536 the OCR score is
+   * identical from q90 all the way down to q55, while the file shrinks 358kB -> 137kB.
+   * Legibility here is bound by resolution, not by compression. q0.70 sits in the
+   * middle of that flat region.
+   *
+   * Note the two knobs do different jobs: pixel dimensions drive the image *token*
+   * cost the model bills for, JPEG quality drives the *bytes* uploaded off a phone.
+   */
+  const IMAGE_MAX_EDGE = 1536;
+  const IMAGE_QUALITY_STEPS = [0.70, 0.60, 0.50];
+  const IMAGE_BYTE_BUDGET = 400 * 1024;   // backstop for busier photos than the test one
 
   async function photoDataUrl() {
     if (photo.dataUrl) return photo.dataUrl;
@@ -1669,8 +1690,16 @@ out center tags 250;`;
     const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h });
     canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
     bmp.close?.();
-    photo.dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-    photo.dataUrlSize = [w, h];
+
+    // Step quality down only if a detailed photo blows the budget at the default.
+    let url = '';
+    for (const q of IMAGE_QUALITY_STEPS) {
+      url = canvas.toDataURL('image/jpeg', q);
+      photo.dataUrlQuality = q;
+      if (url.length * 0.75 <= IMAGE_BYTE_BUDGET) break;
+    }
+    photo.dataUrl = url;
+    photo.dataUrlSize = [w, h, Math.round(url.length * 0.75 / 1024)];
     return photo.dataUrl;
   }
 
@@ -1758,8 +1787,9 @@ out center tags 250;`;
 
   function prepareVision() {
     $('visPromptText').textContent = buildPrompt();
-    $('visImageNote').textContent = 'Plus the photograph itself, re-encoded as JPEG at up to '
-      + `${IMAGE_MAX_EDGE} px on its long edge.`;
+    $('visImageNote').textContent =
+      `Plus the photograph itself, re-encoded as JPEG at up to ${IMAGE_MAX_EDGE} px on its `
+      + 'long edge — the size at which the finest legible text stops improving.';
     $('visThinkText').textContent = '';
     $('visOutText').textContent = '';
     $('visThinkTab').disabled = true;
@@ -1795,6 +1825,10 @@ out center tags 250;`;
 
     try {
       const dataUrl = await photoDataUrl();
+      const [iw, ih, ikb] = photo.dataUrlSize;
+      $('visImageNote').textContent =
+        `Plus the photograph, sent as ${iw}x${ih} JPEG at quality ${photo.dataUrlQuality} — `
+        + `${ikb} kB, down from ${fmtSize(photo.size)}.`;
       visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Waiting for the model…');
 
       const body = {
