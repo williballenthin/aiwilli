@@ -24,9 +24,10 @@ as it should, and the view is always the one the step means to show. They frame 
 and re-frame when you pick an entity, which is why there is no longer a Fit button.
 
 **Every phase ends with one primary blue button** — the obvious thing to press to make
-progress: *Where was it taken?* → *Find what's nearby* → *Use &lt;entity&gt;* → *How is this
-described?* → *Describe the photo*. Secondary actions stay outlined so they never compete
-with it.
+progress: *Where was it taken?* → *Find what's nearby* → *Use &lt;entity&gt;* → *Describe the
+photo* → *Propose tags*. Secondary actions stay outlined so they never compete with it.
+Committing an entity goes **straight to extraction**: step 4 is reference material, offered
+as an outlined *Inspect the tag schema* beside the primary button, not the next stop.
 
 Every button carries a visible text label, not just an icon, and a `title` that spells out
 what it does:
@@ -99,10 +100,12 @@ things:
 - **A single click or tap selects** — highlights the point green, draws the connector,
   fills the detail pane. Cheap and reversible; browse as many as you like.
 - **A double click or double tap commits** — on the row or on the map point. That locks
-  the entity in, fetches its tag schema, and unlocks step 4. The step's primary button at
-  the end of the section (*Use &lt;entity&gt;*) does the same thing. Once committed, the detail
-  pane grows a **Stop using this entity** button, which is the only way back; before that it
-  offers no commit button of its own, so there is exactly one primary action per step.
+  the entity in, unlocks steps 4 and 5, starts fetching the tag schema in the background
+  and **opens step 5**, which shows *Getting ready — reading the tag schema* until it
+  lands. The step's primary button at the end of the section (*Use &lt;entity&gt;*) does the
+  same thing. Once committed, the detail pane grows a **Stop using this entity** button,
+  which is the only way back; before that it offers no commit button of its own, so there
+  is exactly one primary action per step.
 
 Selection is never delayed waiting to see whether a second tap arrives: the first tap acts
 immediately and the second one escalates. Nothing moves under the finger between the two,
@@ -131,8 +134,11 @@ them without losing sight of the map.
   street furniture such as waste baskets, post boxes, benches, hydrants and bus stops.
   Filtering re-plots the map so it always matches the list. Rows are one line each —
   icon, name, category, distance — 41 px rather than the 86 px a two-line row took; the
-  Business/Object label lives in the filter above, so repeating it per row was noise. A long
+  Business/Object label lives in the filter, so repeating it per row was noise. A long
   name truncates; the category beside it does not, so it never decays to `S…`.
+- The filter and **Wider** sit **below** the list, on a single row. The results are what
+  the step is for, so they come first, and one row rather than two keeps more of them on
+  a phone screen.
 - The search starts at 150 m and widens automatically (400 m, 1 km, 2.5 km) when an area
   is too sparse to fill the list; **Wider** steps it out manually.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
@@ -197,8 +203,8 @@ note saying which is missing. Links to the full wiki page and the taginfo page c
 The three iD schema files total about 176 kB brotli-compressed. They are fetched at most
 once per session, and only on a cache miss.
 
-What goes into `localStorage` is the small **derived** schema — around 5 kB per tag, keyed
-`photomap:schema:1:<key>=<value>` with a fetch timestamp and a 30-day TTL — not the raw
+What goes into `localStorage` is the small **derived** schema — around 11 kB per tag, keyed
+`photomap:schema:3:<key>=<value>` with a fetch timestamp and a 30-day TTL — not the raw
 bundles, which would not fit. So a repeat visit for a tag already seen renders step 4 with
 no network at all. Quota errors are handled by evicting this app's own cached schemas and
 retrying once; if that still fails the schema is simply not cached. A **refresh** link
@@ -210,17 +216,19 @@ Step 5 sends the photograph to a vision model through
 [OpenRouter](https://openrouter.ai/) and streams the answer back. It never runs on its
 own — describing a photo costs money, so it waits for the button.
 
-Three horizontal tabs, deliberately not another accordion, because these are three views
-of one operation rather than three steps:
+Two horizontal tabs, deliberately not another accordion, because these are two views of
+one operation rather than two steps:
 
 - **Prompt** — exactly the text that will be sent, shown before you run anything, plus a
   note about the attached image. Nothing is hidden.
-- **Thinking** — the reasoning trace, streamed live, for models that emit one. The tab
-  stays disabled until a trace actually arrives, and reasoning is only requested from
-  models whose `supported_parameters` advertise it.
 - **Description** — the answer, streamed. The view moves here by itself when the model
   stops thinking and starts writing. Word count, token counts and cost land underneath
   when it finishes.
+
+Reasoning is still **requested** from models that advertise it — it makes the answer
+better — but the trace is **never shown**, here or in step 6. Reading a model's working
+out is not useful for this job, and it pushed the answer off the screen. While reasoning
+is streaming the status line says *Thinking…* and nothing more.
 
 A **progress bar reports the upload** byte by byte while the photo goes up — `fetch` cannot
 report upload progress, so this step uses `XMLHttpRequest`, whose `upload` events give real
@@ -263,6 +271,13 @@ for **24 hours**, with a *Reload model list* button to force a refresh.
 Neither picker preselects anything: until you choose, both read *— choose a model —*, so
 opening Settings just to paste a key cannot silently commit you to whichever model sorts
 first. Typing in one picker's filter leaves an unsaved choice in the other alone.
+
+**Tagging reasoning effort** — `off`, `low`, `medium` or `high`, sent as OpenRouter's
+`reasoning.effort` on the step-6 call and **defaulting to high**. Step 6 is the step that
+rewards thinking: it has to pick from controlled vocabularies and get `opening_hours`
+syntax exactly right, and both are the kind of thing a model gets wrong when it answers
+quickly. Higher effort costs more and takes longer; models without reasoning support
+ignore it, and the chosen level is shown next to the model name in step 6.
 
 ### Image size
 
@@ -310,7 +325,19 @@ supports. It reads text, not the photo, so any model will do.
 
 - the object's identity and **every tag it already carries**, so it can tell new from changed;
 - the **schema**: each key the reference editor offers for this kind of object, with its
-  type and permitted values;
+  type and **every permitted value, never a sample**. A truncated list reads as permission
+  to invent the rest, and the model cannot tell what it was not shown, so nothing is
+  elided — all 60 values of `sport`, all 41 of `payment:`. The prompt says explicitly that
+  the lists are complete;
+- **which of those vocabularies are controlled**. iD says so directly — `customValues:
+  false`, or a checkbox or radio widget with no free-text path — so those keys are marked
+  *ONE OF these values, and nothing else*, and the model is told that a value outside the
+  list is simply wrong and that proposing nothing beats inventing something. Everything
+  else is marked *usual values*, where a listed value is preferred but the photograph can
+  overrule it. The values given are the raw tag values, with the English label in
+  parentheses where it disambiguates (`multi (Unspecified Other Sports)`); an earlier
+  version passed the display names through as if they were the values, which told the
+  model that `building` accepts "Unspecified Building Type";
 - the **documentation**: the wiki's description of what the tag means;
 - **how often each companion key is really used** on objects with this tag, including the
   most common values where taginfo reports them (`building` and `building=yes` are separate
@@ -330,14 +357,42 @@ is schema-checked at the source — while the vocabulary inside stays OSM's own.
 carries two things a bare tag list could not: the **evidence** for each fact, quoted from
 the description, and a **confidence**.
 
-Prompt, thinking and the structured response each get a tab, as in step 5.
+Prompt and the structured response each get a tab, as in step 5. The reasoning trace is
+requested — at high effort by default, see Settings — but never displayed.
+
+### opening_hours
+
+`opening_hours` is the one value a model gets wrong in ways that look right: it is a real
+grammar, and `Mon-Fri 9am-5pm` is not it. Two things guard it.
+
+The prompt **teaches the grammar** — two-letter day abbreviations, 24-hour `HH:MM`,
+commas within a day, semicolons between days, `off`, `24/7`, seasons first — and warns
+that the answer is machine-validated.
+
+Then it actually is. Every proposed value on an hours key is run through
+[opening_hours.js](https://github.com/opening-hours/opening_hours.js), the reference
+implementation the OSM tooling uses. It is 146 kB brotli, most of it holiday tables, so it
+is **loaded lazily** — only when a proposal carries such a key — with an SRI hash. Three
+outcomes:
+
+| verdict | badge | what happens |
+| --- | --- | --- |
+| parses cleanly | green **valid** | ticked, stageable, nothing else to do |
+| parses with warnings | amber **check syntax** | **unticked**, the validator's own message is shown, and `prettifyValue()`'s canonical form is offered behind a *use it* link |
+| does not parse | red **invalid syntax** | the parse error is shown, the checkbox is **disabled**, and the value cannot reach the changeset whatever else happens |
+
+The canonical form is offered, never applied for you: `Mo-Fr 9-5` prettifies to
+`Mo-Fr 09:00-05:00`, which is syntactically clean and factually wrong. Applying it
+re-validates the rewritten value, and only the value changes — the evidence quoted from
+the photo stays as transcribed.
 
 ### Reviewing and staging
 
 Each proposed fact is sorted against the object's current tags into **New**, **Changes to
 existing** (showing the value it would replace) and **Already correct** (shown for
-completeness, not selectable). Every actionable one has a checkbox, ticked by default;
-the save button counts what is selected.
+completeness, not selectable). Every actionable one has a checkbox, ticked by default
+unless the hours validator has something to say about it; the save button counts what is
+selected.
 
 Saving writes a changeset entry to `localStorage` under
 `photomap:changes:1:<type>/<id>`, holding the chosen tags, the value each one replaces,
@@ -360,6 +415,8 @@ of that setting.
 
 `index.html` is the whole application. Bootstrap 5.3, Bootstrap Icons, Leaflet and exifr
 load from CDNs with subresource-integrity hashes; there is no build step.
+`opening_hours.js` loads the same way but **on demand**, the first time a proposal carries
+an hours key, so a run that never reaches step 6 never pays for it.
 
 ## Deployment
 

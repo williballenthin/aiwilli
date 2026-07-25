@@ -298,8 +298,15 @@
               <div id="phaseNearby" class="accordion-collapse collapse" data-bs-parent="#phases">
                 <div class="accordion-body p-0">
 
-                  <div class="p-3 border-bottom nearby-head">
-                    <div class="btn-group btn-group-sm w-100" role="group" aria-label="Filter nearby results">
+                  <div class="px-3 pt-3" id="nearbyStatus" role="status" aria-live="polite"></div>
+                  <p class="px-3 pt-3 mb-2 small text-body-secondary" id="nearbyRadius"></p>
+                  <div class="list-group list-group-flush" id="nearbyList"></div>
+
+                  <!-- Below the list, not above it: the results are what you came for, and
+                       one row rather than two keeps more of them on a phone screen. -->
+                  <div class="p-3 border-top d-flex align-items-center gap-2 nearby-head">
+                    <div class="btn-group btn-group-sm flex-grow-1" role="group"
+                         aria-label="Filter nearby results">
                       <input type="radio" class="btn-check" name="nearbyFilter" id="filterAll" value="all" checked>
                       <label class="btn btn-outline-secondary" for="filterAll">All</label>
                       <input type="radio" class="btn-check" name="nearbyFilter" id="filterPlaces" value="place">
@@ -307,16 +314,10 @@
                       <input type="radio" class="btn-check" name="nearbyFilter" id="filterObjects" value="object">
                       <label class="btn btn-outline-secondary" for="filterObjects">Objects</label>
                     </div>
-                    <div class="d-flex align-items-center gap-2 mt-2">
-                      <span class="text-body-secondary small" id="nearbyRadius"></span>
-                      <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" id="btnWider">
-                        <i class="bi bi-arrows-angle-expand me-1"></i>Wider
-                      </button>
-                    </div>
+                    <button class="btn btn-sm btn-outline-secondary flex-shrink-0" type="button" id="btnWider">
+                      <i class="bi bi-arrows-angle-expand me-1"></i>Wider
+                    </button>
                   </div>
-
-                  <div class="px-3 pt-3" id="nearbyStatus" role="status" aria-live="polite"></div>
-                  <div class="list-group list-group-flush" id="nearbyList"></div>
 
                   <div class="phase-map border-top" id="mapNear" role="group"
                        aria-label="Map of the photo and the entities near it"></div>
@@ -380,11 +381,6 @@
                               aria-selected="true"><i class="bi bi-body-text me-1"></i>Prompt</button>
                     </li>
                     <li class="nav-item" role="presentation">
-                      <button class="nav-link" id="visThinkTab" data-bs-toggle="tab"
-                              data-bs-target="#visThink" type="button" role="tab" aria-controls="visThink"
-                              aria-selected="false" disabled><i class="bi bi-lightbulb me-1"></i>Thinking</button>
-                    </li>
-                    <li class="nav-item" role="presentation">
                       <button class="nav-link" id="visOutTab" data-bs-toggle="tab"
                               data-bs-target="#visOut" type="button" role="tab" aria-controls="visOut"
                               aria-selected="false"><i class="bi bi-card-text me-1"></i>Description</button>
@@ -399,9 +395,6 @@
                       </p>
                       <pre class="stream-pre border rounded p-2 mb-2" id="visPromptText"></pre>
                       <p class="small text-body-secondary mb-0" id="visImageNote"></p>
-                    </div>
-                    <div class="tab-pane fade" id="visThink" role="tabpanel" aria-labelledby="visThinkTab">
-                      <pre class="stream-pre text-body-secondary mb-0" id="visThinkText"></pre>
                     </div>
                     <div class="tab-pane fade" id="visOut" role="tabpanel" aria-labelledby="visOutTab">
                       <div class="stream-pre mb-0" id="visOutText"></div>
@@ -440,11 +433,6 @@
                               aria-selected="true"><i class="bi bi-body-text me-1"></i>Prompt</button>
                     </li>
                     <li class="nav-item" role="presentation">
-                      <button class="nav-link" id="propThinkTab" data-bs-toggle="tab"
-                              data-bs-target="#propThink" type="button" role="tab" aria-controls="propThink"
-                              aria-selected="false" disabled><i class="bi bi-lightbulb me-1"></i>Thinking</button>
-                    </li>
-                    <li class="nav-item" role="presentation">
                       <button class="nav-link" id="propJsonTab" data-bs-toggle="tab"
                               data-bs-target="#propJson" type="button" role="tab" aria-controls="propJson"
                               aria-selected="false"><i class="bi bi-braces me-1"></i>Response</button>
@@ -456,9 +444,6 @@
                          aria-labelledby="propPromptTab">
                       <p class="small text-body-secondary">Exactly what is sent to the tagging model.</p>
                       <pre class="stream-pre border rounded p-2 mb-0" id="propPromptText"></pre>
-                    </div>
-                    <div class="tab-pane fade" id="propThink" role="tabpanel" aria-labelledby="propThinkTab">
-                      <pre class="stream-pre text-body-secondary mb-0" id="propThinkText"></pre>
                     </div>
                     <div class="tab-pane fade" id="propJson" role="tabpanel" aria-labelledby="propJsonTab">
                       <pre class="stream-pre border rounded p-2 mb-0" id="propJsonText"></pre>
@@ -521,7 +506,20 @@
                autocomplete="off" spellcheck="false">
         <select class="form-select" id="setTagModel"></select>
 
-        <p class="form-text mb-0" id="modelsNote"></p>
+        <label for="setTagEffort" class="form-label fw-medium mt-3">Tagging reasoning effort</label>
+        <div class="form-text mt-0 mb-1">How hard the tagging model thinks before answering.
+          Choosing a value from a controlled vocabulary and getting
+          <code>opening_hours</code> syntactically right both reward thinking, so this
+          defaults to high. Higher effort costs more and takes longer, and models without
+          reasoning support ignore it.</div>
+        <select class="form-select" id="setTagEffort">
+          <option value="high">High — the default</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+          <option value="off">Off — no reasoning</option>
+        </select>
+
+        <p class="form-text mb-0 mt-3" id="modelsNote"></p>
         <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnReloadModels">
           <i class="bi bi-arrow-clockwise me-1"></i>Reload model list
         </button>
@@ -749,7 +747,9 @@ out center tags 250;`;
   const TAGINFO = 'https://taginfo.openstreetmap.org/api/4';
   const APP_PREFIX = 'photomap:';
   // v2: inPractice entries gained a label distinguishing key rows from key=value rows.
-  const CACHE_PREFIX = APP_PREFIX + 'schema:2:';
+  // v3: options became {value,label} pairs holding raw tag values rather than
+  //     display names, are no longer truncated, and carry a `closed` flag.
+  const CACHE_PREFIX = APP_PREFIX + 'schema:3:';
   const CACHE_TTL_MS = 30 * 24 * 3600 * 1000;
 
   let idSchemaPromise = null;
@@ -810,6 +810,16 @@ out center tags 250;`;
     access: 'access', cycleway: 'cycleway', colour: 'colour', networkCombo: 'network',
   };
 
+  /* Which fields have a controlled vocabulary and which merely suggest values.
+     iD says so directly: `customValues: false` means the editor refuses anything
+     off the list, and the yes/no and radio widgets have no free-text path at
+     all. Everything else is a suggestion list over an open vocabulary. */
+  const CHECK_TYPES = new Set(['check', 'defaultCheck', 'onewayCheck']);
+  const CLOSED_TYPES = new Set([...CHECK_TYPES, 'radio', 'structureRadio',
+                                'access', 'directionalCombo']);
+  const isClosedVocabulary = def =>
+    def.customValues === false || CLOSED_TYPES.has(def.type);
+
   function describeFields(ids, { fields, tFields }) {
     const seen = new Set();
     return (ids || []).map(id => {
@@ -817,16 +827,31 @@ out center tags 250;`;
       seen.add(id);
       const def = fields[id], t = tFields[id] || {};
       if (!def) return null;
-      const options = t.options
-        ? Object.values(t.options)
-        : (def.options || []);
+      // The translation file keys options by raw value — the keys are what OSM
+      // stores, the values are only English display names. Reading the display
+      // names as if they were tag values told the model that `building` accepts
+      // "Unspecified Building Type".
+      let options = t.options
+        ? Object.entries(t.options).map(([value, label]) => ({
+            value, label: typeof label === 'string' ? label : (label?.title || ''),
+          }))
+        : (def.options || []).map(value => ({ value, label: '' }));
+      // A checkbox carries no options list, but it does have a vocabulary, and
+      // the tagging prompt has no other way to learn what it is.
+      if (!options.length && CHECK_TYPES.has(def.type)) {
+        options = (def.type === 'onewayCheck' ? ['yes', 'no', '-1'] : ['yes', 'no'])
+          .map(value => ({ value, label: '' }));
+      }
       return {
         id,
         label: t.label || titleCase(id.replace(/[/_]/g, ' ')),
         keys: fieldKeys(def),
         type: FIELD_TYPE_LABEL[def.type] || def.type || '',
-        options: options.slice(0, 12),
+        // The whole list, not a sample: the tagging prompt has to be able to
+        // state every value a closed field will accept.
+        options,
         optionCount: options.length,
+        closed: isClosedVocabulary(def),
       };
     }).filter(Boolean);
   }
@@ -945,11 +970,14 @@ out center tags 250;`;
   const MODELS_PREFIX = APP_PREFIX + 'models:2:';
   const MODELS_TTL_MS = 24 * 3600 * 1000;
 
+  const TAG_EFFORTS = ['off', 'low', 'medium', 'high'];
+  const SETTINGS_DEFAULTS = { apiKey: '', model: '', tagModel: '', tagEffort: 'high' };
   const loadSettings = () => {
     try {
-      return { apiKey: '', model: '', tagModel: '',
-               ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
-    } catch { return { apiKey: '', model: '', tagModel: '' }; }
+      const s = { ...SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+      if (!TAG_EFFORTS.includes(s.tagEffort)) s.tagEffort = SETTINGS_DEFAULTS.tagEffort;
+      return s;
+    } catch { return { ...SETTINGS_DEFAULTS }; }
   };
   let settings = loadSettings();
   const saveSettings = () => {
@@ -1058,6 +1086,7 @@ out center tags 250;`;
     $('setApiKey').value = settings.apiKey || '';
     $('modelFilter').value = '';
     $('tagModelFilter').value = '';
+    $('setTagEffort').value = settings.tagEffort;
     settingsModal.show();
     populateModels(false);
   }
@@ -1476,8 +1505,16 @@ out center tags 250;`;
     const host = $('nearbyCta');
     const sel = photo.place, locked = photo.entity;
     if (locked) {
-      host.innerHTML = `<button class="btn btn-primary" type="button" id="btnCtaSchema">
-        How is this described?<i class="bi bi-arrow-right ms-1"></i></button>`;
+      // Extraction is the point of committing; the schema is reference material
+      // most runs never need to open, so it goes second and stays outlined.
+      host.innerHTML = `
+        <button class="btn btn-primary" type="button" id="btnCtaDescribe">
+          <i class="bi bi-stars me-1"></i>Describe the photo<i class="bi bi-arrow-right ms-1"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnCtaSchema">
+          <i class="bi bi-list-columns-reverse me-1"></i>Inspect the tag schema
+        </button>`;
+      $('btnCtaDescribe').addEventListener('click', () => openPhase('Vision'));
       $('btnCtaSchema').addEventListener('click', () => openPhase('Schema'));
     } else if (sel) {
       host.innerHTML = `<button class="btn btn-primary" type="button" id="btnCtaUse">
@@ -1685,15 +1722,21 @@ out center tags 250;`;
     renderNearbyCta();     // the step's own CTA advances once something is committed
     setPhase('Nearby', { state: 'done', summary: nearbySummary(nearbyMarkers.size) });
     setPhase('Schema', { state: 'todo', summary: '', enabled: true });
-    openPhase('Schema');
+    // Extraction is where committing is meant to lead. The schema still loads —
+    // both prompts are built from it — but it is reference material, so step 5
+    // opens now and shows that it is getting ready.
+    photo.schemaPending = true;
+    setPhase('Vision', { state: 'todo', summary: '', enabled: true });
+    prepareVision();
+    openPhase('Vision');
     loadSchema(f);
-    // Phase 4 is what the commit produced, so put it on screen.
-    setTimeout(() => $('phaseSchemaBtn').scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    setTimeout(() => $('phaseVisionBtn').scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
   }
 
   function unlockEntity() {
     photo.entity = null;
     photo.schema = null;
+    photo.schemaPending = false;
     refreshLockIndicators();
     renderFeatureDetail();
     $('schemaBody').replaceChildren();
@@ -1743,12 +1786,18 @@ out center tags 250;`;
           </div>
         </div>`;
       $('btnRetrySchema')?.addEventListener('click', () => loadSchema(f));
+      // The schema only supplies subjects to look for; a description is still
+      // worth having without it, so step 5 stays usable.
+      photo.schemaPending = false;
+      setPhase('Vision', { state: 'todo', summary: '', enabled: true });
+      prepareVision();
       return;
     }
 
     // A slower selection may have superseded this one.
     if (photo?.entity?.pair !== pair) return;
     photo.schema = schema;
+    photo.schemaPending = false;
     $('phaseSchemaSpinner').classList.add('d-none');
     $('phaseSchemaSummary').classList.remove('d-none');
     renderSchema(schema, f);
@@ -1765,10 +1814,12 @@ out center tags 250;`;
             <div class="d-flex flex-wrap align-items-baseline gap-2">
               <span class="fw-medium">${esc(fd.label)}</span>
               ${fd.type ? `<span class="badge border text-body-secondary fw-normal">${esc(fd.type)}</span>` : ''}
+              ${fd.closed ? '<span class="badge border text-body-secondary fw-normal">fixed list</span>' : ''}
             </div>
             <div class="small text-body-secondary text-break"><code>${fd.keys.map(esc).join('</code>, <code>') || '—'}</code></div>
             ${fd.options.length ? `<div class="small text-body-secondary text-break mt-1">
-                e.g. ${fd.options.slice(0, 6).map(esc).join(', ')}${fd.optionCount > 6 ? ` … (${fd.optionCount})` : ''}
+                ${fd.closed ? 'one of' : 'e.g.'}
+                ${fd.options.slice(0, 6).map(o => esc(o.value)).join(', ')}${fd.optionCount > 6 ? ` … (${fd.optionCount})` : ''}
               </div>` : ''}
             ${have ? `<div class="small text-success-emphasis text-break mt-1">already set:
                 <code>${esc(f.tags[fd.keys.find(present)])}</code></div>` : ''}
@@ -1995,6 +2046,18 @@ out center tags 250;`;
     const ready = !!settings.apiKey && !!settings.model;
     const running = !!visionAbort;
 
+    // Committing opens this step straight away, so it can be on screen while the
+    // schema it draws its focus subjects from is still in flight.
+    if (photo?.schemaPending && !running) {
+      host.innerHTML = `
+        <div class="d-flex align-items-center gap-2 text-body-secondary py-2" role="status" aria-live="polite">
+          <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+          Getting ready — reading the tag schema for
+          <code>${esc(photo.entity.pair)}</code>&hellip;
+        </div>`;
+      return;
+    }
+
     host.innerHTML = ready ? `
       <div class="small text-body-secondary text-truncate mb-2">
         <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.model)}
@@ -2023,10 +2086,8 @@ out center tags 250;`;
     $('visImageNote').textContent =
       `Plus the photograph itself, re-encoded as JPEG at up to ${IMAGE_MAX_EDGE} px on its `
       + 'long edge — the size at which the finest legible text stops improving.';
-    $('visThinkText').textContent = '';
     $('visOutText').textContent = '';
     $('visionCta').replaceChildren();
-    $('visThinkTab').disabled = true;
     renderVisionControls();
     bootstrap.Tab.getOrCreateInstance($('visPromptTab')).show();
   }
@@ -2040,9 +2101,7 @@ out center tags 250;`;
     $('phaseVisionSpinner').classList.remove('d-none');
     $('phaseVisionSummary').classList.add('d-none');
     setPhase('Vision', { state: 'busy' });
-    $('visThinkText').textContent = '';
     $('visOutText').textContent = '';
-    $('visThinkTab').disabled = true;
     visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Encoding the photo…');
 
     // Status is written last: renderVisionControls rebuilds the block that holds it.
@@ -2052,7 +2111,6 @@ out center tags 250;`;
       $('phaseVisionSummary').classList.remove('d-none');
       setPhase('Vision', { state, summary });
       $('visOutText').classList.remove('cursor-blink');
-      $('visThinkText').classList.remove('cursor-blink');
       renderVisionControls();
       visStatus(status);
     };
@@ -2123,21 +2181,15 @@ out center tags 250;`;
             if (parsed.usage) usage = parsed.usage;
 
             const d = parsed.choices?.[0]?.delta || {};
+            // Reasoning is still requested — it makes the answer better — but the
+            // trace itself is never shown; only the fact that it is running.
             const reasoning = d.reasoning ?? d.reasoning_content;
             if (reasoning) {
-              if (!think) {
-                $('visThinkTab').disabled = false;
-                $('visThinkText').classList.add('cursor-blink');
-                bootstrap.Tab.getOrCreateInstance($('visThinkTab')).show();
-                visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
-              }
+              if (!think) visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
               think += reasoning;
-              $('visThinkText').textContent = think;
-              $('visThinkText').scrollTop = $('visThinkText').scrollHeight;
             }
             if (d.content) {
               if (!out) {
-                $('visThinkText').classList.remove('cursor-blink');
                 bootstrap.Tab.getOrCreateInstance($('visOutTab')).show();
                 visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Writing…');
               }
@@ -2220,15 +2272,27 @@ out center tags 250;`;
 
   function buildProposePrompt() {
     const f = photo.entity, s = photo.schema, ex = photo.examples || [];
+    // recommended and optional are deduped within themselves but overlap each
+    // other, and a repeated 41-value list is pure token cost. Dedupe on the
+    // resolved keys rather than the field id: payment_multi and
+    // payment_multi_fee are two ids for the one `payment:` key.
+    const byKeys = new Set();
     const fields = [...(s?.id?.recommended || []), ...(s?.id?.optional || [])]
-      .filter(x => x.keys.length && !x.keys.some(k => UNPHOTOGRAPHABLE.test(k)));
+      .filter(x => x.keys.length && !x.keys.some(k => UNPHOTOGRAPHABLE.test(k)))
+      .filter(x => !byKeys.has(x.keys.join('|')) && byKeys.add(x.keys.join('|')));
 
-    const fieldLines = fields.slice(0, 28).map(x => {
+    // Every value, never a sample: a truncated list reads as permission to
+    // invent the rest, and the model cannot tell what it was not shown.
+    const optionLine = o => o.label && o.label.toLowerCase() !== o.value.replace(/_/g, ' ')
+      ? `${o.value} (${o.label})` : o.value;
+    const fieldLines = fields.map(x => {
       const opts = x.options.length
-        ? `  values include: ${x.options.slice(0, 10).join(', ')}${x.optionCount > 10 ? ', …' : ''}`
+        ? `\n  ${x.closed ? 'ONE OF these values, and nothing else' : 'usual values'}`
+          + ` (${x.optionCount}): ${x.options.map(optionLine).join(', ')}`
         : '';
-      return `- ${x.keys.join(' / ')} — ${x.label}${x.type ? ` (${x.type})` : ''}\n${opts}`.trimEnd();
+      return `- ${x.keys.join(' / ')} — ${x.label}${x.type ? ` (${x.type})` : ''}${opts}`;
     });
+    const anyClosed = fields.some(x => x.closed && x.options.length);
 
     const existing = Object.entries(f.tags).map(([k, v]) => `  ${k} = ${v}`);
     const usage = (s?.tag?.inPractice || []).slice(0, 12)
@@ -2249,7 +2313,16 @@ out center tags 250;`;
       existing.length ? existing.join('\n') : '  (none)',
       '',
       'THE SCHEMA FOR THIS KIND OF OBJECT',
-      'These are the keys the reference editor offers for it:',
+      'These are the keys the reference editor offers for it. Where a list of values is',
+      'given it is complete — nothing has been left out.',
+      anyClosed
+        ? 'A key marked "ONE OF these values" has a controlled vocabulary: the editor will\n'
+          + 'not accept anything else, so a value outside that list is simply wrong. A key\n'
+          + 'marked "usual values" has an open vocabulary — prefer a listed value, but a\n'
+          + 'different one is allowed when the photograph plainly shows something else.'
+        : 'Where a key is marked "usual values" the vocabulary is open — prefer a listed\n'
+          + 'value, but a different one is allowed when the photograph plainly shows\n'
+          + 'something else.',
       fieldLines.join('\n'),
       '',
       usage.length ? 'HOW OFTEN EACH KEY IS ACTUALLY USED ON OBJECTS WITH THIS TAG' : '',
@@ -2257,6 +2330,20 @@ out center tags 250;`;
       '',
       examples ? 'REAL EXAMPLES OF WELL-TAGGED OBJECTS OF THIS KIND NEARBY' : '',
       examples,
+      '',
+      'IF YOU PROPOSE opening_hours',
+      'It has a strict grammar and is machine-validated after you answer; a value that',
+      'does not parse is discarded. Write it like this:',
+      '- Days are the two-letter English abbreviations Mo Tu We Th Fr Sa Su, in ranges',
+      '  (Mo-Fr) or lists (Mo,We,Fr). "Weekends" is Sa,Su. PH means public holidays.',
+      '- Times are 24-hour with a colon and two digits either side: 09:00-17:30, never',
+      '  9am-5pm, 9.00-17.30, 9-5 or 17.30h.',
+      '- Several times in one day are comma-separated: Mo-Fr 09:00-12:00,13:00-17:00.',
+      '- Different days are semicolon-separated: Mo-Fr 09:00-17:00; Sa 10:00-16:00.',
+      '- Closed on some days is "off": Mo-Fr off; Sa-Su 10:00-17:00. Always open is 24/7.',
+      '- Seasons come first: Apr-Oct Mo-Su 08:00-20:00.',
+      '- Transcribe only the hours the photograph shows. Do not fill in days it is silent',
+      '  about, and do not convert an ambiguous time into a guess.',
       '',
       'A DESCRIPTION OF A PHOTOGRAPH OF THIS OBJECT',
       'Written by someone told to describe only what they could see:',
@@ -2273,7 +2360,10 @@ out center tags 250;`;
       '- Only propose a tag if the description states it. Do not infer from the object',
       '  type, the name, the location, or from what is usual for this kind of place.',
       '- Prefer the keys in the schema above. Match the formatting conventions of the',
-      '  real examples, particularly for opening_hours and addresses.',
+      '  real examples, particularly for addresses.',
+      '- For a key with a controlled vocabulary, use one of the listed values verbatim.',
+      '  If the photograph shows something that no listed value describes, propose no',
+      '  tag for that key rather than inventing a value.',
       '- Include a tag that already exists only if the description shows a different',
       '  value for it.',
       '- If the description supports nothing, return an empty list. That is a valid answer.',
@@ -2311,6 +2401,8 @@ out center tags 250;`;
     host.innerHTML = `
       <div class="small text-body-secondary text-truncate mb-2">
         <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.tagModel)}
+        ${model?.reasoning && settings.tagEffort !== 'off'
+          ? `<span class="ms-1">&middot; ${esc(settings.tagEffort)} reasoning effort</span>` : ''}
       </div>
       <div class="d-grid">
         <button class="btn ${running ? 'btn-outline-danger' : 'btn-outline-primary'}"
@@ -2340,9 +2432,7 @@ out center tags 250;`;
     $('phaseProposeSpinner').classList.remove('d-none');
     $('phaseProposeSummary').classList.add('d-none');
     setPhase('Propose', { state: 'busy' });
-    $('propThinkText').textContent = '';
     $('propJsonText').textContent = '';
-    $('propThinkTab').disabled = true;
     $('proposeList').replaceChildren();
     $('proposeCta').replaceChildren();
 
@@ -2352,7 +2442,6 @@ out center tags 250;`;
       $('phaseProposeSummary').classList.remove('d-none');
       setPhase('Propose', { state, summary });
       $('propJsonText').classList.remove('cursor-blink');
-      $('propThinkText').classList.remove('cursor-blink');
       renderProposeControls();
       propStatus(status);
     };
@@ -2366,7 +2455,11 @@ out center tags 250;`;
       usage: { include: true },
       messages: [{ role: 'user', content: prompt }],
     };
-    if (model?.reasoning) body.reasoning = { enabled: true };
+    // Effort is worth spending here: the model has to pick from controlled
+    // vocabularies and get opening_hours syntax exactly right.
+    if (model?.reasoning && settings.tagEffort !== 'off') {
+      body.reasoning = { enabled: true, effort: settings.tagEffort };
+    }
     if (model?.structured !== false) {
       body.response_format = {
         type: 'json_schema',
@@ -2403,20 +2496,12 @@ out center tags 250;`;
             const d = parsed.choices?.[0]?.delta || {};
             const reasoning = d.reasoning ?? d.reasoning_content;
             if (reasoning) {
-              if (!think) {
-                $('propThinkTab').disabled = false;
-                $('propThinkText').classList.add('cursor-blink');
-                bootstrap.Tab.getOrCreateInstance($('propThinkTab')).show();
-                propStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
-              }
+              if (!think) propStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
               think += reasoning;
-              $('propThinkText').textContent = think;
-              $('propThinkText').scrollTop = $('propThinkText').scrollHeight;
             }
             if (d.content) {
               if (!out) {
-                $('propThinkText').classList.remove('cursor-blink');
-                bootstrap.Tab.getOrCreateInstance($('propJsonTab')).show();
+                          bootstrap.Tab.getOrCreateInstance($('propJsonTab')).show();
                 propStatus('<span class="spinner-border spinner-border-sm me-1"></span>Writing facts…');
               }
               out += d.content;
@@ -2452,6 +2537,8 @@ out center tags 250;`;
         .filter(f => f && typeof f.key === 'string' && typeof f.value === 'string' && f.key && f.value)
         .map(f => ({ ...f, enabled: true }));
       renderProposals();
+      await validateHours(photo.facts);
+      renderProposals();
 
       const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
       const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
@@ -2464,6 +2551,67 @@ out center tags 250;`;
     }
   }
 
+  /* ---------- opening_hours ----------
+     This is the one value a model gets wrong in ways that look right: the
+     syntax is a real grammar, and "Mon-Fri 9am-5pm" is not it. opening_hours.js
+     is the reference implementation the OSM tooling uses, so rather than
+     approximate it, load it — but only when a proposal actually needs it, since
+     it is 146 kB over the wire, most of that holiday tables. */
+
+  const OPENING_HOURS_SRC = 'https://cdn.jsdelivr.net/npm/opening_hours@3.14.0/build/opening_hours.js';
+  const OPENING_HOURS_SRI = 'sha384-uIiwaEY9lcaLbVvBvyOdxlIJYKqzfs+WUhmcBsnbtjuO18r9MR2BItpyLhOToe1V';
+  // The family, not just the bare key: service_times and the :signed variants
+  // share the grammar.
+  const HOURS_KEY = /(^|:)opening_hours(:|$)|^service_times$|^collection_times$|^happy_hours$/;
+
+  let hoursLibPromise = null;
+  const loadHoursLib = () => hoursLibPromise ||= new Promise((resolve, reject) => {
+    if (window.opening_hours) { resolve(window.opening_hours); return; }
+    const el = document.createElement('script');
+    el.src = OPENING_HOURS_SRC;
+    el.integrity = OPENING_HOURS_SRI;
+    el.crossOrigin = 'anonymous';
+    el.onload = () => window.opening_hours
+      ? resolve(window.opening_hours)
+      : reject(new Error('opening_hours loaded but exported nothing'));
+    el.onerror = () => { hoursLibPromise = null; reject(new Error('could not load the opening_hours validator')); };
+    document.head.appendChild(el);
+  });
+
+  /** null when the value is not an hours value or the library never arrived. */
+  function checkHours(OH, key, value) {
+    if (!OH || !HOURS_KEY.test(key)) return null;
+    try {
+      const oh = new OH(value, null, { tag_key: key.split(':').pop() === 'opening_hours' ? 'opening_hours' : undefined });
+      const warnings = oh.getWarnings().map(w => String(w).replace(/\s+/g, ' ').trim());
+      let canonical = null;
+      try {
+        const pretty = oh.prettifyValue();
+        if (pretty && pretty !== value) canonical = pretty;
+      } catch { /* prettify is a nicety */ }
+      return { ok: true, warnings, canonical };
+    } catch (e) {
+      return { ok: false, warnings: [], canonical: null,
+               error: String(e.message || e).replace(/\s+/g, ' ').trim() };
+    }
+  }
+
+  /** Annotate the hours facts in place; resolves once the library has had its go. */
+  async function validateHours(facts) {
+    if (!facts.some(f => HOURS_KEY.test(f.key))) return;
+    let OH = null;
+    try { OH = await loadHoursLib(); }
+    catch { for (const f of facts) if (HOURS_KEY.test(f.key)) f.hours = { unavailable: true }; return; }
+    for (const f of facts) {
+      const v = checkHours(OH, f.key, f.value);
+      if (!v) continue;
+      f.hours = v;
+      // A value that does not parse cannot be staged, and one the validator
+      // grumbles about is not ticked for you.
+      if (!v.ok || v.warnings.length) f.enabled = false;
+    }
+  }
+
   /** Sort each proposed fact against what the object already carries. */
   const classify = f => {
     const current = photo.entity.tags[f.key];
@@ -2472,6 +2620,35 @@ out center tags 250;`;
   };
 
   const CONF_CLASS = { high: 'text-bg-success', medium: 'text-bg-warning', low: 'text-bg-secondary' };
+
+  const hoursBadge = f => {
+    const h = f.hours;
+    if (!h || h.unavailable) return '';
+    if (!h.ok) return '<span class="badge text-bg-danger">invalid syntax</span>';
+    if (h.warnings.length) return '<span class="badge text-bg-warning">check syntax</span>';
+    return '<span class="badge text-bg-success"><i class="bi bi-check2 me-1"></i>valid</span>';
+  };
+
+  /* The validator's own message, and the value it would rather have. Applying
+     the canonical form is offered, never done for you: "Mo-Fr 9-5" prettifies
+     to 09:00-05:00, which is syntactically clean and factually wrong. */
+  const hoursNote = (f, i) => {
+    const h = f.hours;
+    if (!h || h.unavailable) return '';
+    if (!h.ok) {
+      return `<div class="small text-danger-emphasis text-break mt-1">
+        <i class="bi bi-x-octagon me-1"></i>opening_hours will not parse: ${esc(h.error || '')}
+        <span class="d-block">Cannot be staged. Re-run, or fix it in an OSM editor.</span></div>`;
+    }
+    if (!h.warnings.length && !h.canonical) return '';
+    return `<div class="small text-warning-emphasis text-break mt-1">
+      ${h.warnings.length ? `<i class="bi bi-exclamation-triangle me-1"></i>${esc(h.warnings[0])}` : ''}
+      ${h.canonical ? `<span class="d-block mt-1">Canonical form:
+          <code>${esc(h.canonical)}</code>
+          <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button"
+                  data-canonical="${i}">use it</button></span>` : ''}
+    </div>`;
+  };
 
   function renderProposals() {
     const host = $('proposeList');
@@ -2501,16 +2678,19 @@ out center tags 250;`;
           ${rows.map(([f, i]) => `
             <label class="list-group-item d-flex gap-2 align-items-start py-2">
               <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" data-fact="${i}"
-                     ${f.enabled && kind !== 'same' ? 'checked' : ''} ${kind === 'same' ? 'disabled' : ''}>
+                     ${f.enabled && kind !== 'same' ? 'checked' : ''}
+                     ${kind === 'same' || f.hours?.ok === false ? 'disabled' : ''}>
               <span class="min-w-0 flex-grow-1">
                 <span class="d-flex flex-wrap align-items-baseline gap-1">
                   <code class="small">${esc(f.key)}</code>
                   <span class="badge ${CONF_CLASS[f.confidence] || 'text-bg-secondary'}">${esc(f.confidence || '?')}</span>
+                  ${hoursBadge(f)}
                 </span>
                 <div class="text-break"><code class="small">${esc(f.value)}</code></div>
                 ${kind === 'update' ? `<div class="small text-body-secondary text-break">
                     replaces <code>${esc(photo.entity.tags[f.key])}</code></div>` : ''}
                 ${f.evidence ? `<div class="small text-body-secondary fst-italic text-break">“${esc(f.evidence)}”</div>` : ''}
+                ${hoursNote(f, i)}
               </span>
             </label>`).join('')}
         </div>`;
@@ -2522,11 +2702,24 @@ out center tags 250;`;
         renderProposeCta();
       });
     }
+    for (const btn of host.querySelectorAll('button[data-canonical]')) {
+      btn.addEventListener('click', async e => {
+        e.preventDefault();                       // the row is a <label>
+        const fact = photo.facts[Number(btn.dataset.canonical)];
+        fact.value = fact.hours.canonical;
+        fact.enabled = true;
+        await validateHours([fact]);              // the rewrite has to clear it too
+        if (fact.hours?.ok && !fact.hours.warnings.length) fact.enabled = true;
+        renderProposals();
+      });
+    }
     renderProposeCta();
   }
 
+  // A value the validator rejects never reaches the changeset, whatever the
+  // checkbox says.
   const enabledFacts = () => (photo.facts || [])
-    .filter(f => f.enabled && classify(f) !== 'same');
+    .filter(f => f.enabled && classify(f) !== 'same' && f.hours?.ok !== false);
 
   function renderProposeCta() {
     const host = $('proposeCta');
@@ -2588,11 +2781,9 @@ out center tags 250;`;
     $('nearbyRadius').textContent = '';
     $('schemaBody').replaceChildren();
     $('visPromptText').textContent = '';
-    $('visThinkText').textContent = '';
     $('visOutText').textContent = '';
     $('visionControls').replaceChildren();
     $('propPromptText').textContent = '';
-    $('propThinkText').textContent = '';
     $('propJsonText').textContent = '';
     $('proposeControls').replaceChildren();
     $('proposeList').replaceChildren();
@@ -2697,6 +2888,7 @@ out center tags 250;`;
       const chosen = $(p.sel).value;
       if (chosen) settings[p.key] = chosen;
     }
+    if (TAG_EFFORTS.includes($('setTagEffort').value)) settings.tagEffort = $('setTagEffort').value;
     saveSettings();
     settingsModal.hide();
     if (photo?.entity) { renderVisionControls(); renderProposeControls(); }
