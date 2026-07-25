@@ -381,6 +381,63 @@
               </div>
             </div>
 
+
+            <!-- Phase 6 — tags this photo could contribute back to OSM -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phasePropose" disabled
+                        aria-expanded="false" aria-controls="phasePropose" id="phaseProposeBtn">
+                  <span class="phase-num" id="phaseProposeNum">6</span>
+                  <span>Proposed tags</span>
+                  <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseProposeSpinner"
+                        role="status" aria-label="Waiting for the model"></span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phaseProposeSummary"></span>
+                </button>
+              </h2>
+              <div id="phasePropose" class="accordion-collapse collapse" data-bs-parent="#phases">
+                <div class="accordion-body p-0">
+
+                  <div class="p-3 border-bottom" id="proposeControls"></div>
+
+                  <ul class="nav nav-tabs px-2 pt-2 flex-nowrap" role="tablist">
+                    <li class="nav-item" role="presentation">
+                      <button class="nav-link active" id="propPromptTab" data-bs-toggle="tab"
+                              data-bs-target="#propPrompt" type="button" role="tab" aria-controls="propPrompt"
+                              aria-selected="true"><i class="bi bi-body-text me-1"></i>Prompt</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                      <button class="nav-link" id="propThinkTab" data-bs-toggle="tab"
+                              data-bs-target="#propThink" type="button" role="tab" aria-controls="propThink"
+                              aria-selected="false" disabled><i class="bi bi-lightbulb me-1"></i>Thinking</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                      <button class="nav-link" id="propJsonTab" data-bs-toggle="tab"
+                              data-bs-target="#propJson" type="button" role="tab" aria-controls="propJson"
+                              aria-selected="false"><i class="bi bi-braces me-1"></i>Response</button>
+                    </li>
+                  </ul>
+
+                  <div class="tab-content p-3 border-bottom">
+                    <div class="tab-pane fade show active" id="propPrompt" role="tabpanel"
+                         aria-labelledby="propPromptTab">
+                      <p class="small text-body-secondary">Exactly what is sent to the tagging model.</p>
+                      <pre class="stream-pre border rounded p-2 mb-0" id="propPromptText"></pre>
+                    </div>
+                    <div class="tab-pane fade" id="propThink" role="tabpanel" aria-labelledby="propThinkTab">
+                      <pre class="stream-pre text-body-secondary mb-0" id="propThinkText"></pre>
+                    </div>
+                    <div class="tab-pane fade" id="propJson" role="tabpanel" aria-labelledby="propJsonTab">
+                      <pre class="stream-pre border rounded p-2 mb-0" id="propJsonText"></pre>
+                    </div>
+                  </div>
+
+                  <div id="proposeList"></div>
+                  <div class="p-3 d-grid" id="proposeCta"></div>
+
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -419,9 +476,18 @@
         </p>
 
         <label for="setModel" class="form-label fw-medium mt-2">Vision model</label>
+        <div class="form-text mt-0 mb-1">Reads the photograph in step 5. Vision-capable models only.</div>
         <input type="search" class="form-control form-control-sm mb-2" id="modelFilter"
                placeholder="Filter models…" autocomplete="off" spellcheck="false">
         <select class="form-select" id="setModel"></select>
+
+        <label for="setTagModel" class="form-label fw-medium mt-3">Tagging model</label>
+        <div class="form-text mt-0 mb-1">Turns that description into proposed OSM tags in step 6.
+          It reads text, not the photo, so any model will do.</div>
+        <input type="search" class="form-control form-control-sm mb-2" id="tagModelFilter"
+               placeholder="Filter models…" autocomplete="off" spellcheck="false">
+        <select class="form-select" id="setTagModel"></select>
+
         <p class="form-text mb-0" id="modelsNote"></p>
         <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnReloadModels">
           <i class="bi bi-arrow-clockwise me-1"></i>Reload model list
@@ -835,12 +901,14 @@ out center tags 250;`;
 
   const OPENROUTER = 'https://openrouter.ai/api/v1';
   const SETTINGS_KEY = APP_PREFIX + 'settings:1';
-  const MODELS_PREFIX = APP_PREFIX + 'models:1:';
+  const MODELS_PREFIX = APP_PREFIX + 'models:2:';
   const MODELS_TTL_MS = 24 * 3600 * 1000;
 
   const loadSettings = () => {
-    try { return { apiKey: '', model: '', ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
-    catch { return { apiKey: '', model: '' }; }
+    try {
+      return { apiKey: '', model: '', tagModel: '',
+               ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+    } catch { return { apiKey: '', model: '', tagModel: '' }; }
   };
   let settings = loadSettings();
   const saveSettings = () => {
@@ -857,15 +925,16 @@ out center tags 250;`;
     if (!res.ok) throw new Error(`OpenRouter model list: HTTP ${res.status}`);
     const json = await res.json();
     const models = (json.data || [])
-      .filter(m => (m.architecture?.input_modalities || []).includes('image'))
       .map(m => ({
         id: m.id,
         name: m.name || m.id,
         ctx: m.context_length || null,
         prompt: m.pricing?.prompt ?? null,
         completion: m.pricing?.completion ?? null,
-        // Only ask for a reasoning trace from models that advertise it.
+        vision: (m.architecture?.input_modalities || []).includes('image'),
+        // Only ask for a reasoning trace, or a JSON schema, from models that advertise them.
         reasoning: (m.supported_parameters || []).some(p => p === 'reasoning' || p === 'include_reasoning'),
+        structured: (m.supported_parameters || []).includes('structured_outputs'),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
     writeCache(MODELS_PREFIX, 'openrouter', { models });
@@ -884,6 +953,8 @@ out center tags 250;`;
     return `${m.name}${price ? ` — ${price} in` : ''}${m.reasoning ? ' · reasoning' : ''}`;
   };
 
+  const findModel = id => modelCache?.models.find(m => m.id === id);
+
   let modelCache = null;   // {models, fetchedAt}
 
   async function populateModels(force) {
@@ -899,23 +970,33 @@ out center tags 250;`;
       return;
     }
     const age = Math.round((Date.now() - modelCache.fetchedAt) / 3600000);
-    note.textContent = `${modelCache.models.length} vision-capable models · list cached for 24 h` +
-      (age >= 1 ? ` · ${age} h old` : ' · just fetched');
+    const vis = modelCache.models.filter(m => m.vision).length;
+    note.textContent = `${modelCache.models.length} models, ${vis} of them vision-capable · ` +
+      'list cached for 24 h' + (age >= 1 ? ` · ${age} h old` : ' · just fetched');
     renderModelOptions();
   }
 
+  /** Two pickers: the vision one is limited to models that can read an image. */
+  const PICKERS = [
+    { sel: 'setModel', filter: 'modelFilter', key: 'model', visionOnly: true },
+    { sel: 'setTagModel', filter: 'tagModelFilter', key: 'tagModel', visionOnly: false },
+  ];
+
   function renderModelOptions() {
-    const sel = $('setModel');
-    const q = $('modelFilter').value.trim().toLowerCase();
-    const list = (modelCache?.models || [])
-      .filter(m => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
-    sel.innerHTML = list.length
-      ? list.map(m => `<option value="${esc(m.id)}"${m.id === settings.model ? ' selected' : ''}>${esc(modelLabel(m))}</option>`).join('')
-      : '<option value="">— nothing matches —</option>';
-    // Keep a saved model selectable even when the filter hides it.
-    if (settings.model && !list.some(m => m.id === settings.model)) {
-      sel.insertAdjacentHTML('afterbegin',
-        `<option value="${esc(settings.model)}" selected>${esc(settings.model)} (current)</option>`);
+    for (const p of PICKERS) {
+      const sel = $(p.sel), current = settings[p.key];
+      const q = $(p.filter).value.trim().toLowerCase();
+      const list = (modelCache?.models || [])
+        .filter(m => !p.visionOnly || m.vision)
+        .filter(m => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+      sel.innerHTML = list.length
+        ? list.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(modelLabel(m))}</option>`).join('')
+        : '<option value="">— nothing matches —</option>';
+      // Keep a saved model selectable even when the filter hides it.
+      if (current && !list.some(m => m.id === current)) {
+        sel.insertAdjacentHTML('afterbegin',
+          `<option value="${esc(current)}" selected>${esc(current)} (current)</option>`);
+      }
     }
   }
 
@@ -924,8 +1005,61 @@ out center tags 250;`;
   function openSettings() {
     $('setApiKey').value = settings.apiKey || '';
     $('modelFilter').value = '';
+    $('tagModelFilter').value = '';
     settingsModal.show();
     populateModels(false);
+  }
+
+  /* ---------- idiomatic examples ----------
+     The wiki says what a tag means; it does not show what a well-tagged instance
+     actually looks like. Real objects do. Ask Overpass for other things carrying
+     the same tag near this photo, keep the most thoroughly tagged of them, and
+     let those stand as worked examples. Regional ones are preferred because
+     tagging conventions vary by country. */
+
+  const EXAMPLES_PREFIX = APP_PREFIX + 'examples:1:';
+  const EXAMPLES_TTL_MS = 30 * 24 * 3600 * 1000;
+  const EXAMPLE_COUNT = 4;
+
+  async function fetchExamples(pair, lat, lon) {
+    const hit = readCache(EXAMPLES_PREFIX, pair, EXAMPLES_TTL_MS);
+    if (hit) return hit.examples;
+
+    const [key, value] = pair.split('=');
+    let best = [], ok = false;
+
+    // A bounding box, not around: Overpass optimises bbox lookups and times out
+    // on a 30 km `around` over nwr. Longitude is widened by 1/cos(lat) so the
+    // box stays roughly square wherever on earth the photo was taken.
+    for (const dLat of [0.25, 1.0]) {
+      const dLon = dLat / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+      const bbox = [lat - dLat, lon - dLon, lat + dLat, lon + dLon]
+        .map(n => n.toFixed(4)).join(',');
+      const q = `[out:json][timeout:25];nwr["${key}"="${value}"]["name"](${bbox});out tags 60;`;
+      let json;
+      try {
+        const res = await fetch(OVERPASS[0], {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ data: q }),
+        });
+        json = JSON.parse(await res.text());
+      } catch { continue; }
+      // Overpass reports a timeout as a 200 with an empty list and a remark.
+      // Taking that for "there are none" would poison the cache for a month.
+      if (json.remark) continue;
+      ok = true;
+
+      best = (json.elements || [])
+        .map(e => e.tags || {})
+        .filter(t => Object.keys(t).length >= 4)
+        .filter(t => !photo?.entity || t.name !== photo.entity.name)   // not the object being edited
+        .sort((a, b) => Object.keys(b).length - Object.keys(a).length)
+        .slice(0, EXAMPLE_COUNT);
+      if (best.length >= 2) break;
+    }
+    if (ok) writeCache(EXAMPLES_PREFIX, pair, { examples: best });
+    return best;
   }
 
   /* ---------- state: exactly one photo ---------- */
@@ -983,7 +1117,7 @@ out center tags 250;`;
       num.classList.toggle('is-error', state === 'warn');
       num.innerHTML = state === 'done' ? '<i class="bi bi-check-lg"></i>'
                     : state === 'warn' ? '<i class="bi bi-exclamation-lg"></i>'
-                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4', Vision: '5' }[name];
+                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4', Vision: '5', Propose: '6' }[name];
     }
   }
 
@@ -1498,8 +1632,11 @@ out center tags 250;`;
     $('schemaBody').replaceChildren();
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
+    setPhase('Propose', { state: 'todo', summary: '', enabled: false });
+    photo.facts = null; photo.examples = null;
     collapse($('phaseSchema')).hide();
     collapse($('phaseVision')).hide();
+    collapse($('phasePropose')).hide();
   }
 
   /* ---------- phase 4: the tag schema for that entity type ---------- */
@@ -1963,11 +2100,18 @@ out center tags 250;`;
 
       if (!out && !think) throw new Error('the model returned nothing');
 
+      photo.description = out.trim();
+      setPhase('Propose', { state: 'todo', summary: '', enabled: true });
+      preparePropose();
+
       const words = out.trim() ? out.trim().split(/\s+/).length : 0;
       const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
       const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
       finish('done', `${words} words`,
-        `<i class="bi bi-check-circle text-success me-1"></i>${words} words${tokens}${cost}`);
+        `<i class="bi bi-check-circle text-success me-1"></i>${words} words${tokens}${cost}`
+        + '<span class="d-grid mt-3"><button class="btn btn-primary" type="button" id="btnCtaPropose">'
+        + 'What tags does this support?<i class="bi bi-arrow-right ms-1"></i></button></span>');
+      $('btnCtaPropose')?.addEventListener('click', () => openPhase('Propose'));
     } catch (e) {
       if (e.name === 'AbortError') {
         finish('todo', 'Stopped', '<i class="bi bi-slash-circle me-1"></i>Stopped.');
@@ -1976,6 +2120,383 @@ out center tags 250;`;
       finish('warn', 'Failed',
         `<span class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}</span>`);
     }
+  }
+
+  /* ---------- phase 6: propose OSM tags ----------
+     The model answers in JSON, but the *content* of that JSON is OSM keys and
+     values — no invented vocabulary to translate. JSON only supplies the
+     envelope, so parsing is not a matter of guessing at prose, and it carries
+     the evidence and confidence per fact that a bare "k=v" list could not. */
+
+  const CHANGES_PREFIX = APP_PREFIX + 'changes:1:';
+
+  const FACTS_SCHEMA = {
+    type: 'object', additionalProperties: false,
+    required: ['facts'],
+    properties: {
+      facts: {
+        type: 'array',
+        items: {
+          type: 'object', additionalProperties: false,
+          required: ['key', 'value', 'evidence', 'confidence'],
+          properties: {
+            key: { type: 'string', description: 'an OpenStreetMap tag key, e.g. opening_hours' },
+            value: { type: 'string', description: 'the tag value exactly as it should be stored' },
+            evidence: { type: 'string', description: 'the words in the description that support this' },
+            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          },
+        },
+      },
+    },
+  };
+
+  function buildProposePrompt() {
+    const f = photo.entity, s = photo.schema, ex = photo.examples || [];
+    const fields = [...(s?.id?.recommended || []), ...(s?.id?.optional || [])]
+      .filter(x => x.keys.length && !x.keys.some(k => UNPHOTOGRAPHABLE.test(k)));
+
+    const fieldLines = fields.slice(0, 28).map(x => {
+      const opts = x.options.length
+        ? `  values include: ${x.options.slice(0, 10).join(', ')}${x.optionCount > 10 ? ', …' : ''}`
+        : '';
+      return `- ${x.keys.join(' / ')} — ${x.label}${x.type ? ` (${x.type})` : ''}\n${opts}`.trimEnd();
+    });
+
+    const existing = Object.entries(f.tags).map(([k, v]) => `  ${k} = ${v}`);
+    const usage = (s?.tag?.inPractice || []).slice(0, 10)
+      .map(c => `  ${c.key} — on ${Math.round(c.fraction * 100)}% of them`);
+
+    const examples = ex.map((tags, i) =>
+      `  Example ${i + 1}:\n` + Object.entries(tags).slice(0, 18)
+        .map(([k, v]) => `    ${k} = ${v}`).join('\n')).join('\n');
+
+    return [
+      `You are proposing OpenStreetMap tags for one existing object: ${f.id}.`,
+      '',
+      'WHAT THE OBJECT IS',
+      `${s?.id?.name || f.category} (${f.pair}).`,
+      s?.tag?.description ? `The tag is documented as: ${s.tag.description}` : '',
+      '',
+      'TAGS IT ALREADY CARRIES',
+      existing.length ? existing.join('\n') : '  (none)',
+      '',
+      'THE SCHEMA FOR THIS KIND OF OBJECT',
+      'These are the keys the reference editor offers for it:',
+      fieldLines.join('\n'),
+      '',
+      usage.length ? 'HOW OFTEN EACH KEY IS ACTUALLY USED ON OBJECTS WITH THIS TAG' : '',
+      usage.join('\n'),
+      '',
+      examples ? 'REAL EXAMPLES OF WELL-TAGGED OBJECTS OF THIS KIND NEARBY' : '',
+      examples,
+      '',
+      'A DESCRIPTION OF A PHOTOGRAPH OF THIS OBJECT',
+      'Written by someone told to describe only what they could see:',
+      '"""',
+      (photo.description || '').trim(),
+      '"""',
+      '',
+      'TASK',
+      'Propose the tags this photograph supports. For each one give the OSM key, the',
+      'value exactly as it should be stored, the words in the description that support',
+      'it, and your confidence.',
+      '',
+      'RULES',
+      '- Only propose a tag if the description states it. Do not infer from the object',
+      '  type, the name, the location, or from what is usual for this kind of place.',
+      '- Prefer the keys in the schema above. Match the formatting conventions of the',
+      '  real examples, particularly for opening_hours and addresses.',
+      '- Include a tag that already exists only if the description shows a different',
+      '  value for it.',
+      '- If the description supports nothing, return an empty list. That is a valid answer.',
+    ].filter(l => l !== '').join('\n');
+  }
+
+  let proposeAbort = null;
+
+  function renderProposeControls() {
+    const host = $('proposeControls');
+    if (!host) return;
+    const model = findModel(settings.tagModel);
+    const ready = !!settings.apiKey && !!settings.tagModel && !!photo?.description;
+    const running = !!proposeAbort;
+
+    if (!settings.apiKey || !settings.tagModel) {
+      host.innerHTML = `
+        <div class="alert alert-info mb-0" role="alert">
+          <i class="bi bi-info-circle me-1"></i>
+          Choose a <strong>tagging model</strong> in settings to propose tags.
+          <button class="btn btn-sm btn-outline-secondary mt-2 w-100" type="button" id="btnOpenSettings2">
+            <i class="bi bi-gear me-1"></i>Open settings
+          </button>
+        </div>`;
+      $('btnOpenSettings2').addEventListener('click', openSettings);
+      return;
+    }
+    if (!photo?.description) {
+      host.innerHTML = '<div class="alert alert-info mb-0" role="alert">'
+        + '<i class="bi bi-info-circle me-1"></i>Describe the photo in step 5 first — '
+        + 'these proposals are drawn from that description.</div>';
+      return;
+    }
+
+    host.innerHTML = `
+      <div class="small text-body-secondary text-truncate mb-2">
+        <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.tagModel)}
+      </div>
+      <div class="d-grid">
+        <button class="btn btn-sm ${running ? 'btn-outline-danger' : 'btn-outline-primary'}"
+                type="button" id="btnRunPropose">
+          <i class="bi bi-${running ? 'stop-circle' : 'magic'} me-1"></i>${running ? 'Stop' : 'Propose tags'}
+        </button>
+      </div>
+      <p class="small text-body-secondary mt-2 mb-0" id="proposeStatus"></p>`;
+    $('btnRunPropose').addEventListener('click', () => running ? proposeAbort.abort() : runPropose());
+  }
+
+  async function preparePropose() {
+    if (!photo?.entity) return;
+    try { photo.examples = await fetchExamples(photo.entity.pair, photo.lat, photo.lon); }
+    catch { photo.examples = []; }
+    $('propPromptText').textContent = buildProposePrompt();
+    renderProposeControls();
+  }
+
+  const propStatus = html => { const el = $('proposeStatus'); if (el) el.innerHTML = html; };
+
+  async function runPropose() {
+    const model = findModel(settings.tagModel);
+    proposeAbort = new AbortController();
+    renderProposeControls();
+    $('phaseProposeSpinner').classList.remove('d-none');
+    $('phaseProposeSummary').classList.add('d-none');
+    setPhase('Propose', { state: 'busy' });
+    $('propThinkText').textContent = '';
+    $('propJsonText').textContent = '';
+    $('propThinkTab').disabled = true;
+    $('proposeList').replaceChildren();
+    $('proposeCta').replaceChildren();
+
+    const finish = (state, summary, status) => {
+      proposeAbort = null;
+      $('phaseProposeSpinner').classList.add('d-none');
+      $('phaseProposeSummary').classList.remove('d-none');
+      setPhase('Propose', { state, summary });
+      $('propJsonText').classList.remove('cursor-blink');
+      $('propThinkText').classList.remove('cursor-blink');
+      renderProposeControls();
+      propStatus(status);
+    };
+
+    const prompt = buildProposePrompt();
+    $('propPromptText').textContent = prompt;
+
+    const body = {
+      model: settings.tagModel,
+      stream: true,
+      usage: { include: true },
+      messages: [{ role: 'user', content: prompt }],
+    };
+    if (model?.reasoning) body.reasoning = { enabled: true };
+    if (model?.structured !== false) {
+      body.response_format = {
+        type: 'json_schema',
+        json_schema: { name: 'osm_facts', strict: true, schema: FACTS_SCHEMA },
+      };
+    }
+
+    let think = '', out = '', usage = null;
+    try {
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        proposeAbort.signal.addEventListener('abort', () => xhr.abort());
+        xhr.open('POST', `${OPENROUTER}/chat/completions`);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', `Bearer ${settings.apiKey}`);
+        xhr.setRequestHeader('HTTP-Referer', location.origin);
+        xhr.setRequestHeader('X-Title', 'Photo Map');
+
+        let seen = 0;
+        const consume = () => {
+          const chunk = xhr.responseText.slice(seen);
+          const cut = chunk.lastIndexOf('\n');
+          if (cut < 0) return;
+          seen += cut + 1;
+          for (const line of chunk.slice(0, cut).split('\n')) {
+            const t = line.trim();
+            if (!t.startsWith('data:')) continue;
+            const payload = t.slice(5).trim();
+            if (payload === '[DONE]') return;
+            let parsed;
+            try { parsed = JSON.parse(payload); } catch { continue; }
+            if (parsed.error) { reject(new Error(parsed.error.message || 'stream error')); return; }
+            if (parsed.usage) usage = parsed.usage;
+            const d = parsed.choices?.[0]?.delta || {};
+            const reasoning = d.reasoning ?? d.reasoning_content;
+            if (reasoning) {
+              if (!think) {
+                $('propThinkTab').disabled = false;
+                $('propThinkText').classList.add('cursor-blink');
+                bootstrap.Tab.getOrCreateInstance($('propThinkTab')).show();
+                propStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
+              }
+              think += reasoning;
+              $('propThinkText').textContent = think;
+              $('propThinkText').scrollTop = $('propThinkText').scrollHeight;
+            }
+            if (d.content) {
+              if (!out) {
+                $('propThinkText').classList.remove('cursor-blink');
+                bootstrap.Tab.getOrCreateInstance($('propJsonTab')).show();
+                propStatus('<span class="spinner-border spinner-border-sm me-1"></span>Writing facts…');
+              }
+              out += d.content;
+              $('propJsonText').textContent = out;
+              $('propJsonText').scrollTop = $('propJsonText').scrollHeight;
+            }
+          }
+        };
+        xhr.onprogress = consume;
+        xhr.onerror = () => reject(new Error('network error reaching OpenRouter'));
+        xhr.onabort = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        xhr.onload = () => {
+          if (xhr.status < 200 || xhr.status >= 300) {
+            let detail = (xhr.responseText || '').slice(0, 300);
+            try { detail = JSON.parse(xhr.responseText).error?.message || detail; } catch { /* raw */ }
+            reject(new Error(`HTTP ${xhr.status} — ${detail}`));
+            return;
+          }
+          consume();
+          resolve();
+        };
+        $('propJsonText').classList.add('cursor-blink');
+        xhr.send(JSON.stringify(body));
+      });
+
+      // Some models still wrap JSON in a fence despite the schema.
+      const raw = out.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+      let facts;
+      try { facts = JSON.parse(raw).facts; } catch { throw new Error('the model did not return valid JSON'); }
+      if (!Array.isArray(facts)) throw new Error('no "facts" array in the response');
+
+      photo.facts = facts
+        .filter(f => f && typeof f.key === 'string' && typeof f.value === 'string' && f.key && f.value)
+        .map(f => ({ ...f, enabled: true }));
+      renderProposals();
+
+      const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
+      const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
+      finish('done', `${photo.facts.length} proposed`,
+        `<i class="bi bi-check-circle text-success me-1"></i>${photo.facts.length} facts${tokens}${cost}`);
+    } catch (e) {
+      if (e.name === 'AbortError') { finish('todo', 'Stopped', '<i class="bi bi-slash-circle me-1"></i>Stopped.'); return; }
+      finish('warn', 'Failed',
+        `<span class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}</span>`);
+    }
+  }
+
+  /** Sort each proposed fact against what the object already carries. */
+  const classify = f => {
+    const current = photo.entity.tags[f.key];
+    if (current === undefined) return 'add';
+    return current === f.value ? 'same' : 'update';
+  };
+
+  const CONF_CLASS = { high: 'text-bg-success', medium: 'text-bg-warning', low: 'text-bg-secondary' };
+
+  function renderProposals() {
+    const host = $('proposeList');
+    const facts = photo.facts || [];
+    if (!facts.length) {
+      host.innerHTML = '<div class="p-3"><div class="alert alert-info mb-0" role="alert">'
+        + '<i class="bi bi-info-circle me-1"></i>The model proposed nothing the description supports.'
+        + '</div></div>';
+      $('proposeCta').replaceChildren();
+      return;
+    }
+
+    const groups = [
+      ['add', 'New tags', 'plus-circle text-success'],
+      ['update', 'Changes to existing tags', 'pencil-square text-warning'],
+      ['same', 'Already correct', 'check2 text-body-tertiary'],
+    ];
+
+    host.innerHTML = groups.map(([kind, title, icon]) => {
+      const rows = facts.map((f, i) => [f, i]).filter(([f]) => classify(f) === kind);
+      if (!rows.length) return '';
+      return `
+        <div class="px-3 pt-3">
+          <div class="fw-medium small"><i class="bi bi-${icon} me-1"></i>${title} (${rows.length})</div>
+        </div>
+        <div class="list-group list-group-flush">
+          ${rows.map(([f, i]) => `
+            <label class="list-group-item d-flex gap-2 align-items-start py-2">
+              <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" data-fact="${i}"
+                     ${f.enabled && kind !== 'same' ? 'checked' : ''} ${kind === 'same' ? 'disabled' : ''}>
+              <span class="min-w-0 flex-grow-1">
+                <span class="d-flex flex-wrap align-items-baseline gap-1">
+                  <code class="small">${esc(f.key)}</code>
+                  <span class="badge ${CONF_CLASS[f.confidence] || 'text-bg-secondary'}">${esc(f.confidence || '?')}</span>
+                </span>
+                <div class="text-break"><code class="small">${esc(f.value)}</code></div>
+                ${kind === 'update' ? `<div class="small text-body-secondary text-break">
+                    replaces <code>${esc(photo.entity.tags[f.key])}</code></div>` : ''}
+                ${f.evidence ? `<div class="small text-body-secondary fst-italic text-break">“${esc(f.evidence)}”</div>` : ''}
+              </span>
+            </label>`).join('')}
+        </div>`;
+    }).join('');
+
+    for (const box of host.querySelectorAll('input[data-fact]')) {
+      box.addEventListener('change', () => {
+        photo.facts[Number(box.dataset.fact)].enabled = box.checked;
+        renderProposeCta();
+      });
+    }
+    renderProposeCta();
+  }
+
+  const enabledFacts = () => (photo.facts || [])
+    .filter(f => f.enabled && classify(f) !== 'same');
+
+  function renderProposeCta() {
+    const host = $('proposeCta');
+    const n = enabledFacts().length;
+    host.innerHTML = `<button class="btn btn-primary" type="button" id="btnSaveChangeset" ${n ? '' : 'disabled'}>
+      <i class="bi bi-save me-1"></i>${n ? `Save ${n} change${n === 1 ? '' : 's'}` : 'Nothing selected'}
+    </button><p class="small text-body-secondary text-center mt-2 mb-0" id="saveNote">
+      Kept in this browser. Nothing is sent to OpenStreetMap yet.</p>`;
+    $('btnSaveChangeset').addEventListener('click', saveChangeset);
+  }
+
+  /** Stage the edit locally, merged with anything already staged for this object. */
+  function saveChangeset() {
+    const f = photo.entity;
+    const chosen = enabledFacts();
+    if (!chosen.length) return;
+
+    const key = f.id;
+    const prev = readCache(CHANGES_PREFIX, key, Infinity) || { osm: f.id, tags: {}, base: {}, sources: [] };
+    for (const fact of chosen) {
+      prev.tags[fact.key] = fact.value;
+      if (!(fact.key in prev.base)) prev.base[fact.key] = f.tags[fact.key] ?? null;
+    }
+    prev.name = f.name || null;
+    prev.pair = f.pair;
+    prev.sources = [...(prev.sources || []).filter(s => s.photo !== photo.name), {
+      photo: photo.name,
+      lat: Number(photo.lat.toFixed(6)), lon: Number(photo.lon.toFixed(6)),
+      visionModel: settings.model, tagModel: settings.tagModel,
+      at: new Date().toISOString(),
+    }];
+    writeCache(CHANGES_PREFIX, key, prev);
+
+    const total = Object.keys(localStorage).filter(k => k.startsWith(CHANGES_PREFIX)).length;
+    $('saveNote').innerHTML =
+      `<i class="bi bi-check-circle text-success me-1"></i>Saved ${chosen.length} tag`
+      + `${chosen.length === 1 ? '' : 's'} for <code>${esc(f.id)}</code>. `
+      + `${total} object${total === 1 ? '' : 's'} staged in this browser, awaiting upload to OpenStreetMap.`;
+    setPhase('Propose', { state: 'done', summary: `${chosen.length} saved` });
   }
 
   /* ---------- map-wide actions ---------- */
@@ -2001,12 +2522,19 @@ out center tags 250;`;
     $('visThinkText').textContent = '';
     $('visOutText').textContent = '';
     $('visionControls').replaceChildren();
+    $('propPromptText').textContent = '';
+    $('propThinkText').textContent = '';
+    $('propJsonText').textContent = '';
+    $('proposeControls').replaceChildren();
+    $('proposeList').replaceChildren();
+    $('proposeCta').replaceChildren();
     nearbyStatus('');
     setPhase('Photo', { state: 'todo', summary: '', enabled: true });
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
+    setPhase('Propose', { state: 'todo', summary: '', enabled: false });
     $('btnExport').disabled = true;
     openPhase('Photo');
     for (const m of Object.values(maps)) m.setView([20, 0], 2);
@@ -2087,6 +2615,7 @@ out center tags 250;`;
 
   $('btnSettings').addEventListener('click', openSettings);
   $('modelFilter').addEventListener('input', renderModelOptions);
+  $('tagModelFilter').addEventListener('input', renderModelOptions);
   $('btnReloadModels').addEventListener('click', () => populateModels(true));
   $('btnRevealKey').addEventListener('click', () => {
     const el = $('setApiKey');
@@ -2095,11 +2624,13 @@ out center tags 250;`;
   });
   $('btnSaveSettings').addEventListener('click', () => {
     settings.apiKey = $('setApiKey').value.trim();
-    const chosen = $('setModel').value;
-    if (chosen) settings.model = chosen;
+    for (const p of PICKERS) {
+      const chosen = $(p.sel).value;
+      if (chosen) settings[p.key] = chosen;
+    }
     saveSettings();
     settingsModal.hide();
-    if (photo?.entity) renderVisionControls();
+    if (photo?.entity) { renderVisionControls(); renderProposeControls(); }
   });
 
   $('btnExport').addEventListener('click', exportGeoJson);

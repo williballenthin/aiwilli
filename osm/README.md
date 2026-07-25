@@ -77,6 +77,9 @@ is described in OpenStreetMap. See below.
 **5 · AI description.** Sends the photo to a vision model with the committed entity and
 its schema as context, and streams back an exhaustive description. See below.
 
+**6 · Proposed tags.** Turns that description into OSM tags, sorts them against what the
+object already carries, and stages the ones you approve. See below.
+
 More phases will be added after these.
 
 ## Selecting versus committing
@@ -281,6 +284,49 @@ conservative floor.
 A byte-budget backstop covers photos busier than the test one: if 1536 px at q0.70 still
 exceeds 400 kB, quality steps down to 0.60 then 0.50. Resolution is never sacrificed,
 because that is the axis legibility actually depends on.
+
+## Proposed tags
+
+Step 6 takes the description from step 5 and asks a **second, separate model** — its own
+setting, chosen independently of the vision model — which OSM tags that description
+supports. It reads text, not the photo, so any model will do.
+
+### What it is given
+
+- the object's identity and **every tag it already carries**, so it can tell new from changed;
+- the **schema**: each key the reference editor offers for this kind of object, with its
+  type and permitted values;
+- the **documentation**: the wiki's description of what the tag means;
+- **how often each companion key is really used** on objects with this tag;
+- **idiomatic examples** — the tag sets of the most thoroughly tagged real objects of the
+  same kind near the photo. The wiki says what a tag means but never shows what a
+  well-tagged instance looks like; real neighbours do, and they carry regional convention
+  with them, which matters for `opening_hours` and addresses. They come from a bounding-box
+  Overpass query (a 30 km `around` times out), cached for 30 days.
+
+### The response format
+
+The model answers in **JSON whose content is OSM keys and values**. Straight `key=value`
+prose would need brittle parsing; a bespoke format would need translating. JSON supplies
+only the envelope — requested through OpenRouter's `json_schema` structured output, so it
+is schema-checked at the source — while the vocabulary inside stays OSM's own. It also
+carries two things a bare tag list could not: the **evidence** for each fact, quoted from
+the description, and a **confidence**.
+
+Prompt, thinking and the structured response each get a tab, as in step 5.
+
+### Reviewing and staging
+
+Each proposed fact is sorted against the object's current tags into **New**, **Changes to
+existing** (showing the value it would replace) and **Already correct** (shown for
+completeness, not selectable). Every actionable one has a checkbox, ticked by default;
+the save button counts what is selected.
+
+Saving writes a changeset entry to `localStorage` under
+`photomap:changes:1:<type>/<id>`, holding the chosen tags, the value each one replaces,
+and provenance — which photo, its coordinates, and which two models were involved.
+Staging the same object again merges rather than overwrites. **Nothing is sent to
+OpenStreetMap**; the page says so, and collecting and uploading these is a later step.
 
 ## Getting GPS data off an iPhone
 
