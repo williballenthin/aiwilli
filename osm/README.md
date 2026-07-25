@@ -13,17 +13,22 @@ The page is built mobile first, targeting an iPhone held portrait — an iPhone 
 402 × 874 CSS px. The base stylesheet is the phone layout and the desktop split-pane is
 the `min-width: 992px` override, not the other way round.
 
-There is **no header, title bar or toolbar**. On a phone every row of chrome is a row of
-content lost, so the phases start at the very top of the viewport and the shell itself
-carries the safe-area insets a header would otherwise have absorbed.
+There is no app title and no persistent chrome. A small toolbar sits at the top, but it is
+**ordinary content, not sticky** — it scrolls away as soon as you move down the page, so it
+costs nothing while you work, and it is there again when you scroll back to the top.
 
-The three actions that used to live in a top bar moved to where they belong:
+Every button carries a visible text label, not just an icon, and a `title` that spells out
+what it does:
 
-| Action | Now lives |
+| Button | What it does |
 | --- | --- |
-| Fit the map | a control on the map, beside the zoom buttons — costs no page height |
-| Download GeoJSON | step 2, next to the location it exports |
-| Light / dark | past every phase at the foot of the sidebar; appearance follows the device by default, so this is only an override |
+| **Fit map** | Zooms the map out until the photo pin and every nearby entity dot fit on screen at once. Disabled until a photo with coordinates is loaded. |
+| **GeoJSON** | Downloads `photo-location.geojson` — one Point feature at the photo's coordinates, with its filename, capture time, camera, and the entity you committed to (its OSM id, name, tag and distance). Disabled until a photo with coordinates is loaded. |
+| **Theme** | Switches between the light and dark colour scheme. The page already follows the device setting, so this is only an override, and the choice is remembered. |
+
+The row wraps, so more buttons can be added. On a 402 px screen the three above use 287 px
+of 386 px; a fourth (a Settings button, say) needs about 93 px and so will fall to a second
+row — harmless for a bar that scrolls away, and avoidable by shortening a label.
 
 On a phone the page scrolls: phases, then the map, then the details of whatever is
 selected. **The detail pane always sits directly under the map**, so picking an entity

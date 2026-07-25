@@ -40,12 +40,13 @@
   }
   .safe-bottom { padding-bottom: calc(.5rem + env(safe-area-inset-bottom)); }
 
+  /* The toolbar is ordinary content: no position:sticky, no fixed. It leaves the
+     screen as you scroll and comes back when you scroll to the top. */
+  .toolbar { flex-shrink: 0; }
+  .toolbar .btn { min-height: 2.5rem; }
+
   #map { height: 45dvh; background: var(--bs-tertiary-bg); }
   .map-wrap { scroll-margin-top: .5rem; }
-
-  /* Map-corner buttons, sized to match Leaflet's own zoom control. */
-  .leaflet-bar a.map-btn { display: grid; place-items: center; font-size: 1rem; }
-  .leaflet-bar a.map-btn.is-disabled { opacity: .4; pointer-events: none; }
 
   /* Comfortable touch targets: iOS wants ~44px. */
   .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; }
@@ -136,6 +137,25 @@
 
 <body class="bg-body-tertiary">
 <div class="app-shell">
+
+  <!-- Toolbar. Deliberately not sticky: it scrolls away with the content so it
+       costs nothing while you work. Room here for a Settings button next. -->
+  <div class="toolbar bg-body border-bottom" id="topBar">
+    <div class="d-flex flex-wrap align-items-center gap-2 p-2">
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnFit" disabled
+              title="Zoom the map out until the photo and every nearby entity fit on screen">
+        <i class="bi bi-arrows-fullscreen me-1"></i>Fit map
+      </button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport" disabled
+              title="Download the photo's position, and the entity you chose, as a .geojson file">
+        <i class="bi bi-download me-1"></i>GeoJSON
+      </button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme"
+              title="Switch between the light and dark colour scheme">
+        <i class="bi bi-circle-half me-1"></i>Theme
+      </button>
+    </div>
+  </div>
 
   <div class="container-fluid app-body">
     <div class="row g-0 h-100">
@@ -288,15 +308,6 @@
             </div>
 
           </div>
-
-          <!-- Appearance follows the system; this is only an override, so it sits
-               past every phase rather than taking space at the top. -->
-          <div class="p-3 d-flex align-items-center gap-2">
-            <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme">
-              <i class="bi bi-circle-half me-1"></i>Light / dark
-            </button>
-            <span class="small text-body-secondary">Follows your device by default.</span>
-          </div>
         </div>
 
       </aside>
@@ -346,19 +357,6 @@
 
   /* ---------- map ---------- */
   const map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
-
-  // "Fit" is a map action, so it lives on the map rather than costing page height.
-  const fitControl = L.control({ position: 'bottomright' });
-  fitControl.onAdd = () => {
-    const bar = L.DomUtil.create('div', 'leaflet-bar');
-    bar.innerHTML = '<a href="#" class="map-btn is-disabled" id="btnFit" role="button" ' +
-      'title="Fit the photo and everything near it" ' +
-      'aria-label="Fit the photo and everything near it"><i class="bi bi-arrows-fullscreen"></i></a>';
-    L.DomEvent.disableClickPropagation(bar);
-    L.DomEvent.on(bar, 'click', e => { L.DomEvent.preventDefault(e); fitEverything(); });
-    return bar;
-  };
-  fitControl.addTo(map);
 
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.control.scale({ imperial: true, position: 'bottomleft' }).addTo(map);
@@ -820,7 +818,8 @@ out center tags 250;`;
     renderGps();
     if (photo.lat != null) {
       plotPhoto();
-      $('btnFit').classList.remove('is-disabled');
+      $('btnFit').disabled = false;
+      $('btnExport').disabled = false;
     }
     openPhase('Gps');
   }
@@ -869,9 +868,6 @@ out center tags 250;`;
            target="_blank" rel="noopener" id="gpsOsmLink">
           <i class="bi bi-box-arrow-up-right me-1"></i>View this spot on OpenStreetMap
         </a>
-        <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport">
-          <i class="bi bi-download me-1"></i>Download as GeoJSON
-        </button>
         <button class="btn btn-sm btn-primary" type="button" id="btnGoNearby">
           <i class="bi bi-pin-map me-1"></i>Find what's nearby
         </button>
@@ -881,7 +877,6 @@ out center tags 250;`;
       summary: `${fmtCoord(photo.lat, ['N', 'S'])}, ${fmtCoord(photo.lon, ['E', 'W'])}` });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: true });
     $('btnGoNearby').addEventListener('click', () => openPhase('Nearby'));
-    $('btnExport').addEventListener('click', exportGeoJson);
   }
 
   function plotPhoto() {
@@ -1481,7 +1476,8 @@ out center tags 250;`;
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
-    $('btnFit').classList.add('is-disabled');
+    $('btnFit').disabled = true;
+    $('btnExport').disabled = true;
     openPhase('Photo');
     map.setView([20, 0], 2);
   }
@@ -1558,6 +1554,8 @@ out center tags 250;`;
     el.addEventListener('change', renderNearby);
   }
 
+  $('btnFit').addEventListener('click', fitEverything);
+  $('btnExport').addEventListener('click', exportGeoJson);
   $('btnTheme').addEventListener('click', () =>
     setTheme(document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark'));
 
