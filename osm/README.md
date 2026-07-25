@@ -1,64 +1,59 @@
 # osm
 
-Photo Map is a single static HTML page that reads the GPS coordinates out of photos you
-add from an iPhone (or anywhere else) and plots them on an OpenStreetMap map.
+Photo Map is a single static HTML page that takes one photo, reads the GPS coordinates
+out of its EXIF data, places it on an OpenStreetMap map, and shows what OpenStreetMap has
+mapped around it.
 
-Everything runs in the browser. No photo, thumbnail, or coordinate is ever uploaded —
-the page is served as a plain static file and does no network calls beyond map tiles.
+Everything runs in the browser. The photo is never uploaded — the page is served as a
+plain static file and makes no network calls beyond map tiles and the Overpass API.
 
-## What it does
+## Phases
 
-- accepts photos via a file picker or drag-and-drop, including HEIC/HEIF from iOS
-- extracts GPS latitude/longitude, altitude, capture time, and camera model from EXIF
-- plots each located photo as a numbered pin on an OpenStreetMap map and fits the view to them
-- lists every photo with its thumbnail and coordinates; selecting one flies the map to its pin
-- shows full per-photo metadata in a modal, with a deep link to the same spot on openstreetmap.org
-- lists the 10 nearest OpenStreetMap entities to a photo — businesses and street furniture
-  alike — and lets you pick the one the photo is actually of
-- calls out photos that carry no GPS data instead of silently dropping them
-- exports the located photos as GeoJSON, including any chosen place
-- follows the system light/dark preference, with a manual toggle
+The sidebar is a vertical accordion, one phase at a time. Each header carries a status
+dot — grey for pending, green tick for done, amber for a problem — and a one-line
+summary, so the collapsed phases still tell you where things stand. Later phases stay
+locked until the earlier ones can supply what they need.
 
-## Getting GPS data off an iPhone
+**1 · Photo.** Choose a file, or drop one in. The page handles one photo at a time, so
+once it is loaded the upload pane is replaced by a thumbnail with the file name, capture
+date, camera and size, and the flow moves on. *Use a different photo* starts over.
 
-iOS only hands location data to a web page if you ask it to, per upload:
+**2 · GPS location.** Latitude, longitude, altitude, capture time and camera, plus a deep
+link to the same spot on openstreetmap.org. The photo appears on the map as a red camera
+pin. If the photo carries no coordinates the phase turns amber, explains the iPhone
+Location toggle, and phase 3 stays locked.
 
-1. Tap **Choose photos** and pick **Photo Library**.
-2. Tap **Options** at the bottom-left of the picker.
-3. Turn **Location** on, then select your photos.
+**3 · Nearby entities.** The 10 nearest things OpenStreetMap knows about, businesses and
+street furniture alike. See below.
 
-Photos captured through the picker's **Take Photo** option never carry GPS, regardless of
-that setting.
+More phases will be added after these.
 
 ## Nearby entities
 
-Select a located photo, then open the **Nearby** tab in the sidebar. It queries the
-[Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) for everything mapped
-around that photo and lists the 10 nearest. The tab lives in the sidebar rather than in a
-dialog so the list and the map are usable at the same time.
-
 Every entity in the list is also drawn on the map as an **amber dot**, distinct from the
-photo's own pin. Selection is two-way:
+photo's red pin. Selection is two-way:
 
-- click a **row** and its point turns green, grows, opens its popup, and the map pans to fit
-  it together with the photo;
+- click a **row** and its point turns green, grows, opens its popup, and the map pans to
+  fit it together with the photo;
 - click a **point** and the matching row goes active and scrolls into view.
 
-Either way a dashed connector is drawn back to the photo, the photo's row is labelled with
-the choice, and the full details appear in a table under the list — category, OSM tag,
-kind, distance, coordinates, plus address, opening hours, phone, website and any other
-tags the element carries, with every raw tag behind a disclosure. That makes it possible
-to browse the results one by one and compare them.
+Either way a dashed connector is drawn back to the photo and the full details appear in a
+table under the list — category, OSM tag, kind, distance, coordinates, plus address,
+opening hours, phone, website and any other tags the element carries, with every raw tag
+behind a disclosure. That makes it possible to browse the results one by one and compare
+them.
 
 - **Businesses / Objects** filters split shops, restaurants, hotels and offices from
-  street furniture such as waste baskets, post boxes, benches, hydrants, and bus stops.
+  street furniture such as waste baskets, post boxes, benches, hydrants and bus stops.
   Filtering re-plots the map so it always matches the list.
 - The search starts at 150 m and widens automatically (400 m, 1 km, 2.5 km) when an area
   is too sparse to fill the list; **Wider** steps it out manually.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
-  surveillance cameras, survey points, antennas, utility poles, manholes, street cabinets,
+  surveillance cameras, survey points, antennas, utility poles, manholes, street cabinets
   and street lamps. See `EXCLUDED` in `index.html` to change that.
-- Results are fetched once per photo and cached, and only when the tab is opened.
+- Overpass is queried once, when the phase is first opened, and the result is cached.
+  A spinner runs in the phase header, and the body reports the radius being searched and
+  says so when it widens.
 
 ### Which server answered, and how old its data is
 
@@ -72,10 +67,21 @@ recently mapped feature is missing entirely from one and first in the list on th
 The page therefore prints which host answered and that host's database timestamp beneath
 the results, and flags it in warning colours when the data is more than a week old.
 
+## Getting GPS data off an iPhone
+
+iOS only hands location data to a web page if you ask it to, per upload:
+
+1. Tap **Choose a photo** and pick **Photo Library**.
+2. Tap **Options** at the bottom-left of the picker.
+3. Turn **Location** on, then select the photo.
+
+A photo captured through the picker's **Take Photo** option never carries GPS, regardless
+of that setting.
+
 ## Files
 
-`index.html` is the whole application. Bootstrap 5.3, Bootstrap Icons, Leaflet, and
-exifr load from CDNs with subresource-integrity hashes; there is no build step.
+`index.html` is the whole application. Bootstrap 5.3, Bootstrap Icons, Leaflet and exifr
+load from CDNs with subresource-integrity hashes; there is no build step.
 
 ## Deployment
 
@@ -88,19 +94,21 @@ sprite exec -s osm -- sprite-services create photomap \
   --cmd /.sprite/bin/python3 \
   --args "-u,-m,http.server,8080,--bind,0.0.0.0,--directory,/home/sprite/site" \
   --http-port 8080
-sprite url update --auth public -s osm
 ```
 
 Registering the server as a sprite service (rather than backgrounding it from `exec`)
-is what makes it durable: the sprite proxy routes public traffic to the service's
-`--http-port` and starts the service on demand when a request arrives after a sleep.
+is what makes it durable: the sprite proxy routes traffic to the service's `--http-port`
+and starts the service on demand when a request arrives after a sleep.
 
-Redeploy by re-running the `--file` upload; `http.server` reads from disk per request,
-so no restart is needed.
+The URL is restricted to the org (`--url-auth sprite`), so reaching it needs a Sprites
+token — `curl -H "Authorization: Bearer $SPRITES_API_KEY"` — or a browser signed in to
+the account. `sprite url update --auth public -s osm` opens it to anyone with the link.
 
-To publish an update:
+To publish an update, re-run the `--file` upload; `http.server` reads from disk per
+request, so no restart is needed:
 
 ```bash
 sprite exec -s osm --file osm/index.html:/home/sprite/site/index.html -- true
-curl -sS -o /dev/null -w '%{http_code}\n' https://osm-blpqo.sprites.app/
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $SPRITES_API_KEY" https://osm-blpqo.sprites.app/
 ```

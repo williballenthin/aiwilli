@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>Photo Map &middot; plot iPhone photos on OpenStreetMap</title>
-<meta name="description" content="Drop in photos from your iPhone and see where they were taken, on an OpenStreetMap map. Everything runs in the browser.">
+<title>Photo Map &middot; place a photo on OpenStreetMap</title>
+<meta name="description" content="Add one photo from your iPhone, read its GPS position, and find what OpenStreetMap has mapped around it. Everything runs in the browser.">
 <meta name="theme-color" content="#0d6efd">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%230d6efd' d='M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10m0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6'/%3E%3C/svg%3E">
 
@@ -33,15 +33,14 @@
   }
   [data-bs-theme="dark"] .leaflet-tile { filter: brightness(.75) contrast(1.1) saturate(.85); }
 
-  /* Numbered pin, drawn with a Bootstrap badge. */
+  /* Photo pin. */
   .pin { display: grid; place-items: center; width: 2rem; height: 2rem;
          border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
          border: 2px solid var(--bs-body-bg); box-shadow: var(--bs-box-shadow-sm); }
-  .pin > span { transform: rotate(45deg); font-size: .75rem; font-weight: 600; line-height: 1; }
-  .pin.is-active { outline: 3px solid var(--bs-primary-border-subtle); }
+  .pin > span { transform: rotate(45deg); font-size: .8rem; line-height: 1; }
 
-  /* Nearby OSM entities: small amber dots, clearly not photo pins.
-     The one under inspection grows into a green pin. */
+  /* Nearby OSM entities: small amber dots, clearly not the photo pin.
+     The one under inspection grows into a green marker. */
   .dot { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%;
          border: 2px solid var(--bs-body-bg); box-shadow: var(--bs-box-shadow-sm);
          font-size: .7rem; transition: width .12s ease, height .12s ease; }
@@ -50,29 +49,33 @@
   .dropzone { border: 2px dashed var(--bs-border-color); border-radius: var(--bs-border-radius-lg);
               transition: border-color .15s ease-in-out, background-color .15s ease-in-out; cursor: pointer; }
   .dropzone:hover, .dropzone.is-dragging { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle); }
-  /* Once there are photos, the sidebar needs its vertical space for the lists. */
-  .dropzone.is-compact { padding: .5rem !important; }
-  .dropzone.is-compact .bi, .dropzone.is-compact .dz-hint { display: none; }
-  .dropzone.is-compact .dz-title { font-size: .875rem; margin: 0; }
 
-  .thumb { width: 3.5rem; height: 3.5rem; object-fit: cover; border-radius: var(--bs-border-radius);
+  .thumb { width: 4rem; height: 4rem; object-fit: cover; border-radius: var(--bs-border-radius);
            background: var(--bs-secondary-bg); flex: 0 0 auto; }
   .thumb-lg { width: 100%; max-height: 9rem; object-fit: cover; border-radius: var(--bs-border-radius); }
 
   .scroll-y { overflow-y: auto; overscroll-behavior: contain; }
   .coords { font-variant-numeric: tabular-nums; }
 
-  #nearbyList { max-height: 24rem; overflow-y: auto; overscroll-behavior: contain; }
-
-  /* text-success on a selected (blue) row is close to unreadable. */
-  .list-group-item.active [data-place] { color: var(--bs-list-group-active-color) !important; }
-
-  /* Keep the filters reachable once the results list scrolls. */
-  .nearby-head { position: sticky; top: 0; z-index: 2; background: var(--bs-body-bg); }
-
   /* Bootstrap ships no min-width utility, and a flex child defaults to
      min-width:auto — which stops .text-truncate from ever kicking in. */
   .min-w-0 { min-width: 0; }
+
+  /* Phase accordion */
+  .accordion-button { font-weight: 500; }
+  .accordion-button:not(.collapsed) { box-shadow: none; }
+  .accordion-button:disabled { opacity: .55; }
+  .accordion-button::after { margin-left: .75rem; }
+  .phase-num { display: grid; place-items: center; flex: 0 0 auto;
+               width: 1.5rem; height: 1.5rem; border-radius: 50%; font-size: .8rem;
+               background: var(--bs-secondary-bg); color: var(--bs-secondary-color); }
+  .accordion-button:not(.collapsed) .phase-num { background: var(--bs-primary); color: #fff; }
+  .phase-num.is-done { background: var(--bs-success); color: #fff; }
+  .phase-num.is-error { background: var(--bs-warning); color: #000; }
+
+  /* Keep the filters reachable once the results list scrolls. */
+  .nearby-head { position: sticky; top: 0; z-index: 2; background: var(--bs-body-bg); }
+  #nearbyList { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
 
   @media (max-width: 991.98px) {
     body { overflow: auto; }
@@ -88,18 +91,17 @@
 
   <nav class="navbar navbar-expand bg-body border-bottom flex-shrink-0">
     <div class="container-fluid">
-      <span class="navbar-brand d-flex align-items-center gap-2 mb-0">
+      <span class="navbar-brand d-flex align-items-center gap-2 mb-0 min-w-0">
         <i class="bi bi-pin-map-fill text-primary"></i>
         <span class="fw-semibold">Photo Map</span>
-        <span class="badge rounded-pill text-bg-secondary d-none d-sm-inline" id="badgeCount">0 photos</span>
       </span>
       <div class="ms-auto d-flex align-items-center gap-2">
         <button class="btn btn-sm btn-outline-secondary" type="button" id="btnFit" disabled
-                data-bs-toggle="tooltip" data-bs-title="Zoom to fit all photos">
+                data-bs-toggle="tooltip" data-bs-title="Zoom to fit the photo and everything found near it">
           <i class="bi bi-arrows-fullscreen"></i><span class="d-none d-md-inline ms-1">Fit</span>
         </button>
         <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport" disabled
-                data-bs-toggle="tooltip" data-bs-title="Download locations as GeoJSON">
+                data-bs-toggle="tooltip" data-bs-title="Download this location as GeoJSON">
           <i class="bi bi-download"></i><span class="d-none d-md-inline ms-1">GeoJSON</span>
         </button>
         <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme"
@@ -113,124 +115,146 @@
   <div class="container-fluid app-body">
     <div class="row g-0 h-100">
 
-      <!-- Sidebar -->
+      <!-- Sidebar: one phase at a time -->
       <aside class="col-lg-4 col-xl-3 border-end bg-body app-pane">
-        <div class="p-3 border-bottom flex-shrink-0">
-          <div class="dropzone text-center p-4" id="dropzone" role="button" tabindex="0"
-               aria-label="Add photos: click to choose files, or drop them here">
-            <i class="bi bi-images fs-2 text-primary d-block mb-2"></i>
-            <p class="fw-semibold mb-1 dz-title">Add photos</p>
-            <p class="text-body-secondary small mb-0 dz-hint">Tap to choose from your library, or drop files here</p>
-          </div>
-          <input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif" multiple>
+        <div class="scroll-y flex-grow-1">
+          <div class="accordion accordion-flush" id="phases">
 
-          <div class="d-grid gap-2 d-sm-flex mt-3">
-            <button class="btn btn-primary flex-fill" type="button" id="btnChoose">
-              <i class="bi bi-plus-lg me-1"></i>Choose photos
-            </button>
-            <button class="btn btn-outline-danger" type="button" id="btnClear" disabled>
-              <i class="bi bi-trash3"></i><span class="d-sm-none ms-1">Clear</span>
-            </button>
-          </div>
-
-          <div class="progress mt-3 d-none" id="progressWrap" style="height:.375rem" role="progressbar"
-               aria-label="Reading photo metadata">
-            <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" style="width:0%"></div>
-          </div>
-
-          <div class="d-flex gap-2 mt-3 text-center small">
-            <div class="flex-fill border rounded p-2">
-              <div class="fw-semibold fs-5 lh-1" id="statTotal">0</div>
-              <div class="text-body-secondary">photos</div>
-            </div>
-            <div class="flex-fill border rounded p-2">
-              <div class="fw-semibold fs-5 lh-1 text-success" id="statGeo">0</div>
-              <div class="text-body-secondary">located</div>
-            </div>
-            <div class="flex-fill border rounded p-2">
-              <div class="fw-semibold fs-5 lh-1 text-warning" id="statNoGeo">0</div>
-              <div class="text-body-secondary">no GPS</div>
-            </div>
-          </div>
-        </div>
-
-        <ul class="nav nav-tabs nav-fill flex-shrink-0" role="tablist">
-          <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="tabPhotosBtn" data-bs-toggle="tab" data-bs-target="#panePhotos"
-                    type="button" role="tab" aria-controls="panePhotos" aria-selected="true">
-              <i class="bi bi-images me-1"></i>Photos
-            </button>
-          </li>
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tabNearbyBtn" data-bs-toggle="tab" data-bs-target="#paneNearby"
-                    type="button" role="tab" aria-controls="paneNearby" aria-selected="false" disabled>
-              <i class="bi bi-pin-map me-1"></i>Nearby
-              <span class="badge rounded-pill text-bg-secondary ms-1 d-none" id="nearbyCount">0</span>
-            </button>
-          </li>
-        </ul>
-
-        <div class="tab-content scroll-y flex-grow-1">
-          <div class="tab-pane fade show active" id="panePhotos" role="tabpanel" aria-labelledby="tabPhotosBtn">
-            <div class="p-4 text-center text-body-secondary" id="emptyState">
-              <i class="bi bi-geo-alt fs-1 d-block mb-2 opacity-50"></i>
-              <p class="mb-3">No photos yet. Add a few and they will appear on the map.</p>
-              <div class="alert alert-info text-start small mb-0" role="alert">
-                <i class="bi bi-info-circle me-1"></i>
-                <strong>On iPhone:</strong> pick <em>Photo Library</em>, then tap <em>Options</em> at the
-                bottom-left of the picker and turn <em>Location</em> on. It applies to this upload only.
-                Photos taken with <em>Take Photo</em> never carry GPS.
-              </div>
-            </div>
-            <div class="list-group list-group-flush" id="photoList"></div>
-          </div>
-
-          <div class="tab-pane fade" id="paneNearby" role="tabpanel" aria-labelledby="tabNearbyBtn">
-            <div class="p-3 border-bottom nearby-head">
-              <div class="d-flex align-items-center gap-2 mb-2">
-                <i class="bi bi-crosshair text-primary"></i>
-                <span class="small text-body-secondary text-truncate">Around <span class="fw-medium" id="nearbyPhotoName"></span></span>
-              </div>
-              <div class="btn-group btn-group-sm w-100" role="group" aria-label="Filter nearby results">
-                <input type="radio" class="btn-check" name="nearbyFilter" id="filterAll" value="all" checked>
-                <label class="btn btn-outline-secondary" for="filterAll">All</label>
-                <input type="radio" class="btn-check" name="nearbyFilter" id="filterPlaces" value="place">
-                <label class="btn btn-outline-secondary" for="filterPlaces">Businesses</label>
-                <input type="radio" class="btn-check" name="nearbyFilter" id="filterObjects" value="object">
-                <label class="btn btn-outline-secondary" for="filterObjects">Objects</label>
-              </div>
-              <div class="d-flex align-items-center gap-2 mt-2">
-                <span class="text-body-secondary small" id="nearbyRadius"></span>
-                <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" id="btnWider">
-                  <i class="bi bi-arrows-angle-expand me-1"></i>Wider
+            <!-- Phase 1 — the photo -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phasePhoto"
+                        aria-expanded="true" aria-controls="phasePhoto" id="phasePhotoBtn">
+                  <span class="phase-num" id="phasePhotoNum">1</span>
+                  <span>Photo</span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phasePhotoSummary"></span>
                 </button>
+              </h2>
+              <div id="phasePhoto" class="accordion-collapse collapse show" data-bs-parent="#phases">
+                <div class="accordion-body">
+
+                  <div id="uploadPane">
+                    <div class="dropzone text-center p-4" id="dropzone" role="button" tabindex="0"
+                         aria-label="Add a photo: click to choose a file, or drop one here">
+                      <i class="bi bi-image fs-2 text-primary d-block mb-2"></i>
+                      <p class="fw-semibold mb-1">Add a photo</p>
+                      <p class="text-body-secondary small mb-0">Tap to choose one from your library, or drop it here</p>
+                    </div>
+                    <div class="d-grid mt-3">
+                      <button class="btn btn-primary" type="button" id="btnChoose">
+                        <i class="bi bi-plus-lg me-1"></i>Choose a photo
+                      </button>
+                    </div>
+                    <div class="progress mt-3 d-none" id="progressWrap" style="height:.375rem" role="progressbar"
+                         aria-label="Reading photo metadata">
+                      <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar"
+                           style="width:100%"></div>
+                    </div>
+                    <div class="alert alert-info small mt-3 mb-0" role="alert">
+                      <i class="bi bi-info-circle me-1"></i>
+                      <strong>On iPhone:</strong> pick <em>Photo Library</em>, then tap <em>Options</em> at the
+                      bottom-left of the picker and turn <em>Location</em> on. It applies to this upload only.
+                      A photo taken with <em>Take Photo</em> never carries GPS.
+                    </div>
+                  </div>
+
+                  <div id="photoPane" class="d-none">
+                    <div class="d-flex gap-3 align-items-center">
+                      <img class="thumb" id="photoThumb" alt="">
+                      <div class="min-w-0">
+                        <div class="fw-medium text-truncate" id="photoName"></div>
+                        <div class="small text-body-secondary" id="photoMeta"></div>
+                      </div>
+                    </div>
+                    <div class="d-grid gap-2 mt-3">
+                      <button class="btn btn-outline-secondary btn-sm" type="button" id="btnReplace">
+                        <i class="bi bi-arrow-repeat me-1"></i>Use a different photo
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
               </div>
             </div>
 
-            <div class="px-3 pt-3" id="nearbyStatus"></div>
-            <div class="list-group list-group-flush" id="nearbyList"></div>
+            <!-- Phase 2 — where it was taken -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phaseGps" disabled
+                        aria-expanded="false" aria-controls="phaseGps" id="phaseGpsBtn">
+                  <span class="phase-num" id="phaseGpsNum">2</span>
+                  <span>GPS location</span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phaseGpsSummary"></span>
+                </button>
+              </h2>
+              <div id="phaseGps" class="accordion-collapse collapse" data-bs-parent="#phases">
+                <div class="accordion-body" id="gpsBody"></div>
+              </div>
+            </div>
 
-            <!-- Details of whichever entity is selected, in the list or on the map -->
-            <div class="p-3 border-top d-none" id="featureDetail"></div>
+            <!-- Phase 3 — what OpenStreetMap has around it -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phaseNearby" disabled
+                        aria-expanded="false" aria-controls="phaseNearby" id="phaseNearbyBtn">
+                  <span class="phase-num" id="phaseNearbyNum">3</span>
+                  <span>Nearby entities</span>
+                  <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseNearbySpinner"
+                        role="status" aria-label="Loading OpenStreetMap data"></span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phaseNearbySummary"></span>
+                </button>
+              </h2>
+              <div id="phaseNearby" class="accordion-collapse collapse" data-bs-parent="#phases">
+                <div class="accordion-body p-0">
 
-            <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
+                  <div class="p-3 border-bottom nearby-head">
+                    <div class="btn-group btn-group-sm w-100" role="group" aria-label="Filter nearby results">
+                      <input type="radio" class="btn-check" name="nearbyFilter" id="filterAll" value="all" checked>
+                      <label class="btn btn-outline-secondary" for="filterAll">All</label>
+                      <input type="radio" class="btn-check" name="nearbyFilter" id="filterPlaces" value="place">
+                      <label class="btn btn-outline-secondary" for="filterPlaces">Businesses</label>
+                      <input type="radio" class="btn-check" name="nearbyFilter" id="filterObjects" value="object">
+                      <label class="btn btn-outline-secondary" for="filterObjects">Objects</label>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                      <span class="text-body-secondary small" id="nearbyRadius"></span>
+                      <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" id="btnWider">
+                        <i class="bi bi-arrows-angle-expand me-1"></i>Wider
+                      </button>
+                    </div>
+                  </div>
 
-            <p class="text-body-secondary small px-3 py-2 mb-0">
-              <i class="bi bi-globe2 me-1"></i>Data from the
-              <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank" rel="noopener">Overpass API</a>
-              &middot; &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
-            </p>
+                  <div class="px-3 pt-3" id="nearbyStatus"></div>
+                  <div class="list-group list-group-flush" id="nearbyList"></div>
+
+                  <!-- Details of whichever entity is selected, in the list or on the map -->
+                  <div class="p-3 border-top d-none" id="featureDetail"></div>
+
+                  <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
+                  <p class="text-body-secondary small px-3 py-2 mb-0">
+                    <i class="bi bi-globe2 me-1"></i>Data from the
+                    <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank" rel="noopener">Overpass API</a>
+                    &middot; &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
+                  </p>
+
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
         <div class="border-top px-3 py-2 text-body-secondary small flex-shrink-0">
-          <i class="bi bi-shield-lock me-1"></i>Photos stay on your device — nothing is uploaded.
+          <i class="bi bi-shield-lock me-1"></i>The photo stays on your device — nothing is uploaded.
         </div>
       </aside>
 
       <!-- Map -->
       <main class="col-lg-8 col-xl-9 app-pane position-relative">
-        <div id="map" aria-label="Map of photo locations"></div>
+        <div id="map" aria-label="Map of the photo location"></div>
 
         <div class="position-absolute top-0 start-50 translate-middle-x mt-3 px-3 w-100"
              style="z-index:500; max-width:36rem; pointer-events:none">
@@ -242,36 +266,8 @@
   </div>
 </div>
 
-<!-- Photo detail modal -->
-<div class="modal fade" id="photoModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title text-truncate" id="photoModalTitle">Photo</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <div class="row g-3">
-          <div class="col-md-6">
-            <img id="photoModalImg" class="img-fluid rounded w-100" alt="">
-          </div>
-          <div class="col-md-6">
-            <table class="table table-sm table-borderless align-middle mb-0" id="photoModalMeta"></table>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <a class="btn btn-outline-secondary" id="photoModalOsm" target="_blank" rel="noopener">
-          <i class="bi bi-box-arrow-up-right me-1"></i>View on OpenStreetMap
-        </a>
-        <button type="button" class="btn btn-outline-primary d-none" id="photoModalNearby">
-          <i class="bi bi-pin-map me-1"></i>What's nearby?
-        </button>
-        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- Kept outside the accordion so it stays reachable while the upload pane is hidden. -->
+<input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif">
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
@@ -282,6 +278,8 @@
 <script>
 (() => {
   'use strict';
+
+  const $ = id => document.getElementById(id);
 
   /* ---------- theme ---------- */
   const THEME_KEY = 'photomap-theme';
@@ -308,7 +306,7 @@
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
   ];
-  const RADII = [150, 400, 1000, 2500];   // metres, stepped through by "Search wider"
+  const RADII = [150, 400, 1000, 2500];   // metres, stepped through by "Wider"
   const WANTED = 10;
 
   // Keys that mark an element as something worth listing at all.
@@ -367,6 +365,8 @@
     'tourism=artwork': 'palette', 'tourism=information': 'info-circle', 'tourism=viewpoint': 'binoculars',
     'tourism=attraction': 'star', 'leisure=park': 'tree', 'leisure=garden': 'flower1',
     'leisure=playground': 'person-standing', 'leisure=fitness_centre': 'person-standing',
+    'leisure=swimming_pool': 'water', 'leisure=sports_centre': 'trophy', 'leisure=pitch': 'trophy',
+    'leisure=track': 'trophy', 'leisure=golf_course': 'trophy', 'leisure=nature_reserve': 'tree',
     'historic=monument': 'bank', 'historic=memorial': 'bank', 'historic=building': 'building',
   };
   const FALLBACK_ICON = { shop: 'shop', office: 'briefcase', craft: 'hammer', tourism: 'camera',
@@ -453,37 +453,25 @@ out center tags 250;`;
     throw lastErr || new Error('Overpass unreachable');
   }
 
-  /* ---------- state ---------- */
-  // photo: {id, name, size, lat, lon, alt, taken, make, model, thumb, marker, el,
-  //         nearby?: {radius, features}, place?: feature}
-  const photos = [];
-  let selectedId = null;
-  let nearbyPhotoId = null;              // photo whose results are in the Nearby tab
+  /* ---------- state: exactly one photo ---------- */
+  let photo = null;                      // {name, size, lat, lon, alt, taken, make, model, thumb,
+                                         //  marker, nearby?: {...}, place?: feature}
   const nearbyMarkers = new Map();       // feature id -> Leaflet marker
   let placeLine = null;                  // connector from photo to selected entity
-
-  const $ = id => document.getElementById(id);
-  const els = {
-    list: $('photoList'), empty: $('emptyState'), alerts: $('alertHost'),
-    total: $('statTotal'), geo: $('statGeo'), noGeo: $('statNoGeo'), badge: $('badgeCount'),
-    progressWrap: $('progressWrap'), progressBar: $('progressBar'),
-    btnFit: $('btnFit'), btnClear: $('btnClear'), btnExport: $('btnExport'),
-    fileInput: $('fileInput'), dropzone: $('dropzone')
-  };
-  const photoModal = new bootstrap.Modal($('photoModal'));
 
   /* ---------- helpers ---------- */
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  const fmtCoord = (v, [pos, neg]) =>
-    `${Math.abs(v).toFixed(5)}° ${v >= 0 ? pos : neg}`;
+  const fmtCoord = (v, [pos, neg]) => `${Math.abs(v).toFixed(5)}° ${v >= 0 ? pos : neg}`;
 
   const fmtSize = b =>
     b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 
   const fmtDate = d => d instanceof Date && !isNaN(d)
     ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null;
+
+  const fmtDistance = m => m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
 
   function flashAlert(message, variant = 'warning', icon = 'exclamation-triangle') {
     const el = document.createElement('div');
@@ -493,7 +481,7 @@ out center tags 250;`;
     el.innerHTML =
       `<i class="bi bi-${icon} me-1"></i>${message}` +
       '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
-    els.alerts.appendChild(el);
+    $('alertHost').appendChild(el);
     setTimeout(() => bootstrap.Alert.getOrCreateInstance(el)?.close(), 8000);
   }
 
@@ -505,155 +493,189 @@ out center tags 250;`;
     return file.type && file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
   }
 
-  function pinIcon(n, active) {
-    const cls = active ? 'text-bg-danger is-active' : 'text-bg-primary';
-    return L.divIcon({
-      className: '',
-      html: `<div class="pin ${cls}"><span>${n}</span></div>`,
-      iconSize: [32, 32], iconAnchor: [16, 30], popupAnchor: [0, -28]
-    });
-  }
+  /* ---------- phases ---------- */
 
-  /* ---------- rendering ---------- */
-  function refreshStats() {
-    const geo = photos.filter(p => p.lat != null).length;
-    els.total.textContent = photos.length;
-    els.geo.textContent = geo;
-    els.noGeo.textContent = photos.length - geo;
-    els.badge.textContent = `${photos.length} photo${photos.length === 1 ? '' : 's'}`;
-    els.empty.classList.toggle('d-none', photos.length > 0);
-    for (const b of [els.btnFit, els.btnExport]) b.disabled = geo === 0;
-    els.btnClear.disabled = photos.length === 0;
-  }
-
-  function addRow(p) {
-    const el = document.createElement('button');
-    el.type = 'button';
-    el.className = 'list-group-item list-group-item-action d-flex gap-3 align-items-center py-3';
-    el.dataset.id = p.id;
-
-    const located = p.lat != null;
-    el.innerHTML = `
-      <img class="thumb" src="${esc(p.thumb || '')}" alt="" ${p.thumb ? '' : 'hidden'}>
-      ${p.thumb ? '' : '<div class="thumb d-grid"><i class="bi bi-image text-body-secondary m-auto"></i></div>'}
-      <div class="flex-grow-1 min-w-0">
-        <div class="d-flex align-items-center gap-2">
-          <span class="badge rounded-pill ${located ? 'text-bg-primary' : 'text-bg-secondary'}">${p.index}</span>
-          <span class="fw-medium text-truncate">${esc(p.name)}</span>
-        </div>
-        <div class="small text-body-secondary text-truncate coords mt-1">
-          ${located
-            ? `<i class="bi bi-geo-alt-fill text-success me-1"></i>${fmtCoord(p.lat, ['N', 'S'])}, ${fmtCoord(p.lon, ['E', 'W'])}`
-            : '<i class="bi bi-geo-alt text-warning me-1"></i>No GPS data'}
-        </div>
-        <div class="small text-body-secondary text-truncate">
-          ${esc([fmtDate(p.taken), p.model, fmtSize(p.size)].filter(Boolean).join(' · '))}
-        </div>
-        <div class="small text-success text-truncate d-none mt-1" data-place></div>
-      </div>
-      <i class="bi bi-chevron-right text-body-secondary"></i>`;
-
-    el.addEventListener('click', () => select(p.id, true));
-    els.list.appendChild(el);
-    p.el = el;
-  }
-
-  function select(id, pan) {
-    const prev = photos.find(p => p.id === selectedId);
-    if (prev) {
-      prev.el.classList.remove('active');
-      if (prev.marker) prev.marker.setIcon(pinIcon(prev.index, false));
-    }
-    selectedId = id;
-    const p = photos.find(x => x.id === id);
-    if (!p) return;
-    p.el.classList.add('active');
-    p.el.scrollIntoView({ block: 'nearest' });
-    armNearby(p);
-    if (p.marker) {
-      p.marker.setIcon(pinIcon(p.index, true));
-      if (pan) map.flyTo(p.marker.getLatLng(), Math.max(map.getZoom(), 15), { duration: .6 });
-      p.marker.openPopup();
-    } else if (pan) {
-      openDetail(p);
+  /** state: 'todo' | 'busy' | 'done' | 'warn'; summary is the muted text in the header. */
+  function setPhase(name, { state, summary, enabled } = {}) {
+    const num = $(`phase${name}Num`), btn = $(`phase${name}Btn`), sum = $(`phase${name}Summary`);
+    if (enabled !== undefined) btn.disabled = !enabled;
+    if (summary !== undefined) sum.textContent = summary;
+    if (state !== undefined) {
+      num.classList.toggle('is-done', state === 'done');
+      num.classList.toggle('is-error', state === 'warn');
+      num.innerHTML = state === 'done' ? '<i class="bi bi-check-lg"></i>'
+                    : state === 'warn' ? '<i class="bi bi-exclamation-lg"></i>'
+                    : { Photo: '1', Gps: '2', Nearby: '3' }[name];
     }
   }
 
-  function openDetail(p) {
-    $('photoModalTitle').textContent = p.name;
-    const img = $('photoModalImg');
-    img.src = p.thumb || '';
-    img.classList.toggle('d-none', !p.thumb);
+  const openPhase = name => bootstrap.Collapse.getOrCreateInstance($(`phase${name}`)).show();
 
+  /* ---------- phase 1: the photo ---------- */
+
+  async function loadPhoto(file) {
+    $('progressWrap').classList.remove('d-none');
+    setPhase('Photo', { state: 'busy', summary: 'Reading…' });
+
+    let gps = null, meta = {};
+    try { gps = await exifr.gps(file); } catch { /* unreadable EXIF */ }
+    try {
+      meta = await exifr.parse(file, {
+        pick: ['Make', 'Model', 'DateTimeOriginal', 'CreateDate', 'GPSAltitude']
+      }) || {};
+    } catch { /* ignore */ }
+
+    resetMapLayers();
+    photo = {
+      name: file.name || 'photo',
+      size: file.size,
+      lat: gps && Number.isFinite(gps.latitude) ? gps.latitude : null,
+      lon: gps && Number.isFinite(gps.longitude) ? gps.longitude : null,
+      alt: Number.isFinite(meta.GPSAltitude) ? meta.GPSAltitude : null,
+      taken: meta.DateTimeOriginal || meta.CreateDate || (file.lastModified ? new Date(file.lastModified) : null),
+      make: meta.Make || null,
+      model: meta.Model || null,
+      thumb: await thumbFor(file),
+    };
+
+    $('progressWrap').classList.add('d-none');
+
+    // The upload pane has done its job — swap it for a summary of what was loaded.
+    $('uploadPane').classList.add('d-none');
+    $('photoPane').classList.remove('d-none');
+    $('photoThumb').src = photo.thumb || '';
+    $('photoThumb').classList.toggle('d-none', !photo.thumb);
+    $('photoName').textContent = photo.name;
+    $('photoMeta').textContent = [fmtDate(photo.taken), photo.model, fmtSize(photo.size)]
+      .filter(Boolean).join(' · ');
+    setPhase('Photo', { state: 'done', summary: photo.name });
+
+    renderGps();
+    if (photo.lat != null) {
+      plotPhoto();
+      $('btnFit').disabled = false;
+      $('btnExport').disabled = false;
+    }
+    openPhase('Gps');
+  }
+
+  /* ---------- phase 2: where it was taken ---------- */
+
+  function renderGps() {
+    const body = $('gpsBody');
+
+    if (photo.lat == null) {
+      setPhase('Gps', { state: 'warn', summary: 'No GPS data', enabled: true });
+      setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
+      body.innerHTML = `
+        <div class="alert alert-warning mb-0" role="alert">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          <strong>This photo carries no GPS coordinates</strong>, so it cannot be placed on the map.
+          <hr>
+          <p class="small mb-1">On iPhone, location is attached per upload:</p>
+          <ol class="small mb-0 ps-3">
+            <li>Tap <em>Use a different photo</em> and pick <em>Photo Library</em>.</li>
+            <li>Tap <em>Options</em> at the bottom-left of the picker.</li>
+            <li>Turn <em>Location</em> on, then choose the photo.</li>
+          </ol>
+        </div>`;
+      return;
+    }
+
+    const [la, lo] = [photo.lat.toFixed(6), photo.lon.toFixed(6)];
     const rows = [
-      ['Latitude', p.lat != null ? fmtCoord(p.lat, ['N', 'S']) : null],
-      ['Longitude', p.lon != null ? fmtCoord(p.lon, ['E', 'W']) : null],
-      ['Altitude', p.alt != null ? `${p.alt.toFixed(1)} m` : null],
-      ['Taken', fmtDate(p.taken)],
-      ['Camera', [p.make, p.model].filter(Boolean).join(' ') || null],
-      ['File size', fmtSize(p.size)]
+      ['Latitude', fmtCoord(photo.lat, ['N', 'S'])],
+      ['Longitude', fmtCoord(photo.lon, ['E', 'W'])],
+      ['Altitude', photo.alt != null ? `${photo.alt.toFixed(1)} m` : null],
+      ['Taken', fmtDate(photo.taken)],
+      ['Camera', [photo.make, photo.model].filter(Boolean).join(' ') || null],
     ].filter(([, v]) => v);
 
-    $('photoModalMeta').innerHTML = rows.map(([k, v]) =>
-      `<tr><th scope="row" class="text-body-secondary fw-normal pe-3">${esc(k)}</th>
-           <td class="coords">${esc(v)}</td></tr>`).join('') ||
-      '<tr><td class="text-body-secondary">No metadata found.</td></tr>';
+    body.innerHTML = `
+      <table class="table table-sm table-borderless align-middle mb-3">
+        ${rows.map(([k, v]) => `
+          <tr><th scope="row" class="text-body-secondary fw-normal pe-3 small" style="width:6.5rem">${esc(k)}</th>
+              <td class="coords small">${esc(v)}</td></tr>`).join('')}
+      </table>
+      <div class="d-grid gap-2">
+        <a class="btn btn-sm btn-outline-secondary"
+           href="https://www.openstreetmap.org/?mlat=${la}&mlon=${lo}#map=17/${la}/${lo}"
+           target="_blank" rel="noopener" id="gpsOsmLink">
+          <i class="bi bi-box-arrow-up-right me-1"></i>View this spot on OpenStreetMap
+        </a>
+        <button class="btn btn-sm btn-primary" type="button" id="btnGoNearby">
+          <i class="bi bi-pin-map me-1"></i>Find what's nearby
+        </button>
+      </div>`;
 
-    const osm = $('photoModalOsm');
-    if (p.lat != null) {
-      const [la, lo] = [p.lat.toFixed(6), p.lon.toFixed(6)];   // ~11 cm is plenty for a map link
-      osm.href = `https://www.openstreetmap.org/?mlat=${la}&mlon=${lo}#map=17/${la}/${lo}`;
-      osm.classList.remove('d-none');
-    } else {
-      osm.classList.add('d-none');
-    }
-
-    $('photoModalNearby').classList.toggle('d-none', p.lat == null);
-    photoModal.show();
+    setPhase('Gps', { state: 'done', enabled: true,
+      summary: `${fmtCoord(photo.lat, ['N', 'S'])}, ${fmtCoord(photo.lon, ['E', 'W'])}` });
+    setPhase('Nearby', { state: 'todo', summary: '', enabled: true });
+    $('btnGoNearby').addEventListener('click', () => openPhase('Nearby'));
   }
 
-  /* Point the Nearby tab at a photo. Does not fetch — that happens when the tab opens. */
-  function armNearby(p) {
-    if (nearbyPhotoId === p.id) return;
-    nearbyPhotoId = p.id;
-    clearNearbyLayers();
-    $('nearbyPhotoName').textContent = p.name;
-    $('tabNearbyBtn').disabled = p.lat == null;
-    $('nearbyList').replaceChildren();
-    $('nearbyCount').classList.add('d-none');
-    $('nearbyRadius').textContent = '';
-    $('featureDetail').classList.add('d-none');
-    nearbyStatus('');
+  function plotPhoto() {
+    photo.marker = L.marker([photo.lat, photo.lon], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="pin text-bg-danger"><span><i class="bi bi-camera-fill"></i></span></div>',
+        iconSize: [32, 32], iconAnchor: [16, 30], popupAnchor: [0, -28],
+      }),
+      title: photo.name, zIndexOffset: 1000,
+    }).addTo(map).bindPopup(`
+      <div class="text-center">
+        ${photo.thumb ? `<img class="thumb-lg mb-2" src="${esc(photo.thumb)}" alt="">` : ''}
+        <div class="fw-semibold text-truncate">${esc(photo.name)}</div>
+        <div class="small text-body-secondary coords">
+          ${fmtCoord(photo.lat, ['N', 'S'])}, ${fmtCoord(photo.lon, ['E', 'W'])}
+        </div>
+      </div>`);
+    map.setView([photo.lat, photo.lon], 17);
   }
 
-  /* ---------- nearby: fetch, render, select ---------- */
-
-  const fmtDistance = m => m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+  /* ---------- phase 3: nearby entities ---------- */
 
   function nearbyStatus(html) { $('nearbyStatus').innerHTML = html; }
 
-  async function loadNearby(p, radius) {
+  async function loadNearby(radius) {
     $('nearbyList').replaceChildren();
-    $('nearbyCount').classList.add('d-none');
     $('btnWider').disabled = true;
     $('nearbyRadius').textContent = '';
+    $('featureDetail').classList.add('d-none');
+    $('nearbySource').textContent = '';
+    $('phaseNearbySpinner').classList.remove('d-none');
+    $('phaseNearbySummary').classList.add('d-none');
+    setPhase('Nearby', { state: 'busy' });
+
     nearbyStatus(`
       <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
         <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
         Searching OpenStreetMap within ${radius} m&hellip;
       </div>`);
 
+    const done = () => {
+      $('phaseNearbySpinner').classList.add('d-none');
+      $('phaseNearbySummary').classList.remove('d-none');
+    };
+
     try {
-      let res = await queryOverpass(p.lat, p.lon, radius);
+      let res = await queryOverpass(photo.lat, photo.lon, radius);
       let used = radius;
       // Sparse area: widen automatically until we have enough to show.
       for (const wider of RADII.filter(r => r > radius)) {
         if (res.features.length >= WANTED) break;
-        res = await queryOverpass(p.lat, p.lon, wider);
+        nearbyStatus(`
+          <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
+            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+            Only ${res.features.length} found — widening to ${wider} m&hellip;
+          </div>`);
+        res = await queryOverpass(photo.lat, photo.lon, wider);
         used = wider;
       }
-      p.nearby = { radius: used, ...res };
+      photo.nearby = { radius: used, ...res };
     } catch (e) {
+      done();
+      setPhase('Nearby', { state: 'warn', summary: 'Unavailable' });
       nearbyStatus(`
         <div class="alert alert-warning" role="alert">
           <i class="bi bi-exclamation-triangle me-1"></i>
@@ -663,10 +685,11 @@ out center tags 250;`;
             <i class="bi bi-arrow-clockwise me-1"></i>Try again
           </button>
         </div>`);
-      $('btnRetryNearby')?.addEventListener('click', () => loadNearby(p, radius));
+      $('btnRetryNearby')?.addEventListener('click', () => loadNearby(radius));
       $('btnWider').disabled = false;
       return;
     }
+    done();
     renderNearby();
   }
 
@@ -686,53 +709,51 @@ out center tags 250;`;
   }
 
   /* Every entity in the current list also exists as a point on the map. */
-  function plotNearby(p, shown) {
+  function plotNearby(shown) {
     clearNearbyLayers();
     for (const f of shown) {
       const marker = L.marker([f.lat, f.lon], {
-        icon: dotIcon(f, p.place?.id === f.id),
+        icon: dotIcon(f, photo.place?.id === f.id),
         title: f.name || f.category,
         riseOnHover: true,
       }).addTo(map).bindPopup(`
         <div class="text-center">
           <div class="fw-semibold">${esc(f.name || f.category)}</div>
-          <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} from ${esc(p.name)}</div>
+          <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} from the photo</div>
           <a class="btn btn-sm btn-outline-secondary mt-2 w-100"
              href="https://www.openstreetmap.org/${f.id}" target="_blank" rel="noopener">
             <i class="bi bi-box-arrow-up-right me-1"></i>Open in OSM
           </a>
         </div>`);
       // Picking a point on the map drives the list, same as picking a row drives the map.
-      marker.on('click', () => choosePlace(p, f, 'map'));
+      marker.on('click', () => choosePlace(f, 'map'));
       nearbyMarkers.set(f.id, marker);
     }
   }
 
   function renderNearby() {
-    const p = photos.find(x => x.id === nearbyPhotoId);
-    if (!p || p.lat == null || !p.nearby) return;
+    if (!photo?.nearby) return;
 
     const filter = document.querySelector('input[name="nearbyFilter"]:checked').value;
-    const all = p.nearby.features;
+    const all = photo.nearby.features;
     const shown = (filter === 'all' ? all : all.filter(f => f.kind === filter)).slice(0, WANTED);
 
     // A selection filtered out of view should not stay highlighted.
-    if (p.place && !shown.some(f => f.id === p.place.id)) p.place = null;
+    if (photo.place && !shown.some(f => f.id === photo.place.id)) photo.place = null;
 
-    $('nearbyRadius').textContent = `${all.length} found within ${p.nearby.radius} m`;
-    $('nearbyCount').textContent = shown.length;
-    $('nearbyCount').classList.toggle('d-none', shown.length === 0);
-    $('btnWider').disabled = p.nearby.radius >= RADII[RADII.length - 1];
+    $('nearbyRadius').textContent = `${all.length} found within ${photo.nearby.radius} m`;
+    $('btnWider').disabled = photo.nearby.radius >= RADII[RADII.length - 1];
+    setPhase('Nearby', { state: 'done', summary: `${shown.length} shown` });
 
     nearbyStatus(shown.length ? '' : `
       <div class="alert alert-info mb-0" role="alert">
-        <i class="bi bi-info-circle me-1"></i>Nothing of this kind mapped within ${p.nearby.radius} m.
+        <i class="bi bi-info-circle me-1"></i>Nothing of this kind mapped within ${photo.nearby.radius} m.
       </div>`);
 
     const list = $('nearbyList');
     list.replaceChildren();
     for (const f of shown) {
-      const chosen = p.place?.id === f.id;
+      const chosen = photo.place?.id === f.id;
       const el = document.createElement('button');
       el.type = 'button';
       el.dataset.feature = f.id;
@@ -752,14 +773,13 @@ out center tags 250;`;
           </div>
         </div>
         <i class="bi bi-${chosen ? 'check-circle-fill' : 'circle'} flex-shrink-0"></i>`;
-      el.addEventListener('click', () => choosePlace(p, chosen ? null : f, 'list'));
+      el.addEventListener('click', () => choosePlace(chosen ? null : f, 'list'));
       list.appendChild(el);
     }
 
-    renderSource(p.nearby);
-    plotNearby(p, shown);
-    renderFeatureDetail(p);
-    refreshRow(p);
+    renderSource(photo.nearby);
+    plotNearby(shown);
+    renderFeatureDetail();
   }
 
   /* Which mirror answered, and how old its data is. A busy primary sends us to a
@@ -781,12 +801,12 @@ out center tags 250;`;
    * Select an entity. `source` says which side the click came from, so the other
    * side is the one that gets moved/scrolled rather than fighting the user.
    */
-  function choosePlace(p, feature, source = 'list') {
-    p.place = feature || null;
+  function choosePlace(feature, source = 'list') {
+    photo.place = feature || null;
 
     // Re-icon every marker so exactly one is green.
     for (const [id, marker] of nearbyMarkers) {
-      const f = p.nearby?.features.find(x => x.id === id);
+      const f = photo.nearby?.features.find(x => x.id === id);
       if (f) marker.setIcon(dotIcon(f, feature?.id === id));
     }
 
@@ -796,14 +816,17 @@ out center tags 250;`;
       // Leaflet writes stroke as an SVG attribute, which will not resolve a CSS variable.
       const success = getComputedStyle(document.documentElement)
         .getPropertyValue('--bs-success').trim() || '#198754';
-      placeLine = L.polyline([[p.lat, p.lon], [feature.lat, feature.lon]],
+      placeLine = L.polyline([[photo.lat, photo.lon], [feature.lat, feature.lon]],
         { color: success, weight: 2, dashArray: '4 4', opacity: .85 }).addTo(map);
 
-      const marker = nearbyMarkers.get(feature.id);
       if (source === 'list') {
         // Came from the list: show it on the map.
         map.fitBounds(placeLine.getBounds(), { padding: [90, 90], maxZoom: 19 });
-        marker?.openPopup();
+        nearbyMarkers.get(feature.id)?.openPopup();
+        // On phones the map sits below the whole accordion, so bring it into view.
+        if (matchMedia('(max-width: 991.98px)').matches) {
+          $('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
       } else {
         // Came from the map: show it in the list.
         document.querySelector(`#nearbyList [data-feature="${CSS.escape(feature.id)}"]`)
@@ -815,13 +838,11 @@ out center tags 250;`;
     for (const row of document.querySelectorAll('#nearbyList .list-group-item')) {
       const on = row.dataset.feature === feature?.id;
       row.classList.toggle('active', on);
-      const tick = row.lastElementChild;
-      tick.className = `bi bi-${on ? 'check-circle-fill' : 'circle'} flex-shrink-0`;
+      row.lastElementChild.className = `bi bi-${on ? 'check-circle-fill' : 'circle'} flex-shrink-0`;
       row.querySelector('.small')?.classList.toggle('text-body-secondary', !on);
     }
 
-    renderFeatureDetail(p);
-    refreshRow(p);
+    renderFeatureDetail();
   }
 
   /* Details of the selected entity, below the list, so results can be browsed. */
@@ -829,16 +850,16 @@ out center tags 250;`;
                        'sport', 'description', 'wheelchair', 'addr:housenumber', 'addr:street',
                        'addr:city', 'addr:postcode'];
 
-  function renderFeatureDetail(p) {
+  function renderFeatureDetail() {
     const host = $('featureDetail');
-    const f = p.place;
+    const f = photo?.place;
     if (!f) { host.classList.add('d-none'); host.replaceChildren(); return; }
 
     const rows = [
       ['Category', f.category],
       ['OSM tag', f.pair],
       ['Kind', f.kind === 'place' ? 'Business / destination' : 'Object / street furniture'],
-      ['Distance', `${fmtDistance(f.distance)} from ${p.name}`],
+      ['Distance', `${fmtDistance(f.distance)} from the photo`],
       ['Coordinates', `${fmtCoord(f.lat, ['N', 'S'])}, ${fmtCoord(f.lon, ['E', 'W'])}`],
       ...DETAIL_TAGS.filter(k => f.tags[k]).map(k => [titleCase(k.replace('addr:', '')), f.tags[k]]),
     ];
@@ -878,206 +899,120 @@ out center tags 250;`;
         <i class="bi bi-box-arrow-up-right me-1"></i>Open ${esc(f.id)} on OpenStreetMap
       </a>`;
 
-    $('btnClearPlace').addEventListener('click', () => choosePlace(p, null, 'list'));
+    $('btnClearPlace').addEventListener('click', () => choosePlace(null, 'list'));
   }
 
-  function refreshRow(p) {
-    const slot = p.el?.querySelector('[data-place]');
-    if (!slot) return;
-    slot.innerHTML = p.place
-      ? `<i class="bi bi-${p.place.icon} me-1"></i>${esc(p.place.name || p.place.category)}`
-      : '';
-    slot.classList.toggle('d-none', !p.place);
-  }
+  /* ---------- map-wide actions ---------- */
 
-  function plot(p) {
-    p.marker = L.marker([p.lat, p.lon], { icon: pinIcon(p.index, false), title: p.name })
-      .addTo(map)
-      .bindPopup(`
-        <div class="text-center">
-          ${p.thumb ? `<img class="thumb-lg mb-2" src="${esc(p.thumb)}" alt="">` : ''}
-          <div class="fw-semibold text-truncate">${esc(p.name)}</div>
-          <div class="small text-body-secondary coords">
-            ${fmtCoord(p.lat, ['N', 'S'])}, ${fmtCoord(p.lon, ['E', 'W'])}
-          </div>
-          ${fmtDate(p.taken) ? `<div class="small text-body-secondary">${esc(fmtDate(p.taken))}</div>` : ''}
-          <button class="btn btn-sm btn-primary mt-2 w-100" data-detail="${p.id}">
-            <i class="bi bi-info-circle me-1"></i>Details
-          </button>
-        </div>`);
-    p.marker.on('click', () => select(p.id, false));
-  }
-
-  map.on('popupopen', e => {
-    const btn = e.popup.getElement()?.querySelector('[data-detail]');
-    btn?.addEventListener('click', () => {
-      const p = photos.find(x => x.id === Number(btn.dataset.detail));
-      if (p) openDetail(p);
-    });
-  });
-
-  function fitAll() {
-    const pts = photos.filter(p => p.marker).map(p => p.marker.getLatLng());
-    if (!pts.length) return;
-    if (pts.length === 1) map.setView(pts[0], 16);
-    else map.fitBounds(L.latLngBounds(pts), { padding: [56, 56], maxZoom: 17 });
-  }
-
-  /* ---------- ingest ---------- */
-  let busy = false;
-
-  async function ingest(fileList) {
-    const files = [...fileList].filter(f => /^image\//.test(f.type) || /\.(hei[cf]|jpe?g|tiff?|png|webp)$/i.test(f.name));
-    if (!files.length) { flashAlert('Those files are not images.', 'warning'); return; }
-    if (busy) return;
-    busy = true;
-
-    els.progressWrap.classList.remove('d-none');
-    els.progressBar.style.width = '0%';
-
-    let missing = 0;
-    const firstNew = photos.length;
-
-    for (const [i, file] of files.entries()) {
-      let gps = null, meta = {};
-      try { gps = await exifr.gps(file); } catch { /* unreadable EXIF */ }
-      try {
-        meta = await exifr.parse(file, {
-          pick: ['Make', 'Model', 'DateTimeOriginal', 'CreateDate', 'GPSAltitude']
-        }) || {};
-      } catch { /* ignore */ }
-
-      const p = {
-        id: firstNew + i,
-        index: photos.length + 1,
-        name: file.name || `photo-${photos.length + 1}`,
-        size: file.size,
-        lat: gps && Number.isFinite(gps.latitude) ? gps.latitude : null,
-        lon: gps && Number.isFinite(gps.longitude) ? gps.longitude : null,
-        alt: Number.isFinite(meta.GPSAltitude) ? meta.GPSAltitude : null,
-        taken: meta.DateTimeOriginal || meta.CreateDate || (file.lastModified ? new Date(file.lastModified) : null),
-        make: meta.Make || null,
-        model: meta.Model || null,
-        thumb: await thumbFor(file)
-      };
-
-      photos.push(p);
-      addRow(p);
-      if (p.lat != null) plot(p); else missing++;
-
-      els.progressBar.style.width = `${Math.round(((i + 1) / files.length) * 100)}%`;
-      els.dropzone.classList.add('is-compact');
-      refreshStats();
-      await new Promise(r => setTimeout(r));   // let the UI paint between photos
-    }
-
-    els.progressWrap.classList.add('d-none');
-    busy = false;
-
-    fitAll();
-    // On phones the sidebar stacks above the map, so bring the result into view.
-    if (missing < files.length && matchMedia('(max-width: 991.98px)').matches) {
-      $('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-    if (missing === files.length) {
-      flashAlert(`No GPS data in ${missing === 1 ? 'that photo' : `those ${missing} photos`}. ` +
-        'On iPhone, re-pick from <em>Photo Library</em> with <em>Options → Location</em> turned on.', 'warning');
-    } else if (missing > 0) {
-      flashAlert(`${missing} photo${missing === 1 ? '' : 's'} had no GPS data and could not be mapped.`, 'warning');
-    } else {
-      flashAlert(`Mapped ${files.length} photo${files.length === 1 ? '' : 's'}.`, 'success', 'check-circle');
-    }
-  }
-
-  function clearAll() {
-    for (const p of photos) {
-      if (p.marker) map.removeLayer(p.marker);
-      if (p.thumb?.startsWith('blob:')) URL.revokeObjectURL(p.thumb);
-    }
-    photos.length = 0;
-    selectedId = null;
-    nearbyPhotoId = null;
+  function resetMapLayers() {
     clearNearbyLayers();
-    $('tabNearbyBtn').disabled = true;
+    if (photo?.marker) map.removeLayer(photo.marker);
+    if (photo?.thumb?.startsWith('blob:')) URL.revokeObjectURL(photo.thumb);
+  }
+
+  function fitEverything() {
+    const pts = [];
+    if (photo?.marker) pts.push(photo.marker.getLatLng());
+    for (const m of nearbyMarkers.values()) pts.push(m.getLatLng());
+    if (!pts.length) return;
+    if (pts.length === 1) map.setView(pts[0], 17);
+    else map.fitBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 18 });
+  }
+
+  function startOver() {
+    resetMapLayers();
+    photo = null;
+    $('uploadPane').classList.remove('d-none');
+    $('photoPane').classList.add('d-none');
+    $('gpsBody').replaceChildren();
     $('nearbyList').replaceChildren();
-    $('nearbyCount').classList.add('d-none');
     $('featureDetail').classList.add('d-none');
-    bootstrap.Tab.getOrCreateInstance($('tabPhotosBtn')).show();
-    els.list.replaceChildren();
-    els.dropzone.classList.remove('is-compact');
-    refreshStats();
+    $('nearbySource').textContent = '';
+    $('nearbyRadius').textContent = '';
+    nearbyStatus('');
+    setPhase('Photo', { state: 'todo', summary: '', enabled: true });
+    setPhase('Gps', { state: 'todo', summary: '', enabled: false });
+    setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
+    $('btnFit').disabled = true;
+    $('btnExport').disabled = true;
+    openPhase('Photo');
     map.setView([20, 0], 2);
   }
 
   function exportGeoJson() {
     const fc = {
       type: 'FeatureCollection',
-      features: photos.filter(p => p.lat != null).map(p => ({
+      features: [{
         type: 'Feature',
-        geometry: { type: 'Point', coordinates: [p.lon, p.lat, ...(p.alt != null ? [p.alt] : [])] },
+        geometry: { type: 'Point', coordinates: [photo.lon, photo.lat, ...(photo.alt != null ? [photo.alt] : [])] },
         properties: {
-          name: p.name,
-          taken: p.taken instanceof Date ? p.taken.toISOString() : null,
-          camera: [p.make, p.model].filter(Boolean).join(' ') || null,
-          place: p.place ? {
-            osm_id: p.place.id,
-            name: p.place.name,
-            category: p.place.pair,
-            distance_m: Math.round(p.place.distance)
+          name: photo.name,
+          taken: photo.taken instanceof Date ? photo.taken.toISOString() : null,
+          camera: [photo.make, photo.model].filter(Boolean).join(' ') || null,
+          place: photo.place ? {
+            osm_id: photo.place.id,
+            name: photo.place.name,
+            category: photo.place.pair,
+            distance_m: Math.round(photo.place.distance)
           } : null
         }
-      }))
+      }]
     };
     const url = URL.createObjectURL(new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' }));
-    Object.assign(document.createElement('a'), { href: url, download: 'photo-locations.geojson' }).click();
+    Object.assign(document.createElement('a'), { href: url, download: 'photo-location.geojson' }).click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   /* ---------- wiring ---------- */
-  els.fileInput.addEventListener('change', e => { ingest(e.target.files); e.target.value = ''; });
-  $('btnChoose').addEventListener('click', () => els.fileInput.click());
-  els.dropzone.addEventListener('click', () => els.fileInput.click());
-  els.dropzone.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); els.fileInput.click(); }
+
+  function ingest(fileList) {
+    const file = [...fileList].find(f => /^image\//.test(f.type) || /\.(hei[cf]|jpe?g|tiff?|png|webp)$/i.test(f.name));
+    if (!file) { flashAlert('That file is not an image.', 'warning'); return; }
+    loadPhoto(file).then(() => {
+      if (photo.lat == null) {
+        flashAlert('That photo carries no GPS data, so it cannot be placed on the map.', 'warning');
+      } else if (matchMedia('(max-width: 991.98px)').matches) {
+        $('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+  }
+
+  const fileInput = $('fileInput');
+  fileInput.addEventListener('change', e => { ingest(e.target.files); e.target.value = ''; });
+
+  $('btnChoose').addEventListener('click', () => fileInput.click());
+  $('btnReplace').addEventListener('click', () => { startOver(); fileInput.click(); });
+  $('dropzone').addEventListener('click', () => fileInput.click());
+  $('dropzone').addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
   });
 
   for (const type of ['dragenter', 'dragover']) {
-    els.dropzone.addEventListener(type, e => { e.preventDefault(); els.dropzone.classList.add('is-dragging'); });
+    $('dropzone').addEventListener(type, e => { e.preventDefault(); $('dropzone').classList.add('is-dragging'); });
   }
   for (const type of ['dragleave', 'drop']) {
-    els.dropzone.addEventListener(type, e => { e.preventDefault(); els.dropzone.classList.remove('is-dragging'); });
+    $('dropzone').addEventListener(type, e => { e.preventDefault(); $('dropzone').classList.remove('is-dragging'); });
   }
-  els.dropzone.addEventListener('drop', e => ingest(e.dataTransfer.files));
+  $('dropzone').addEventListener('drop', e => ingest(e.dataTransfer.files));
   for (const type of ['dragover', 'drop']) document.addEventListener(type, e => e.preventDefault());
 
-  // Overpass is a shared public service — only query when the tab is actually opened,
-  // and reuse whatever we already fetched for this photo.
-  $('tabNearbyBtn').addEventListener('shown.bs.tab', () => {
-    const p = photos.find(x => x.id === nearbyPhotoId);
-    if (p && p.lat != null && !p.nearby) loadNearby(p, RADII[0]);
+  // Overpass is a shared public service — only query when the phase is actually
+  // opened, and reuse whatever was already fetched for this photo.
+  $('phaseNearby').addEventListener('shown.bs.collapse', () => {
+    if (photo && photo.lat != null && !photo.nearby) loadNearby(RADII[0]);
   });
 
   $('btnWider').addEventListener('click', () => {
-    const p = photos.find(x => x.id === nearbyPhotoId);
-    if (!p) return;
-    const next = RADII.find(r => r > (p.nearby?.radius ?? 0));
-    if (next) loadNearby(p, next);
+    const next = RADII.find(r => r > (photo?.nearby?.radius ?? 0));
+    if (next) loadNearby(next);
   });
 
   for (const el of document.querySelectorAll('input[name="nearbyFilter"]')) {
     el.addEventListener('change', renderNearby);
   }
 
-  // "What's nearby?" in the photo modal hands off to the sidebar, where the
-  // list and the map are visible at the same time.
-  $('photoModalNearby').addEventListener('click', () => {
-    photoModal.hide();
-    bootstrap.Tab.getOrCreateInstance($('tabNearbyBtn')).show();
-  });
-
-  els.btnFit.addEventListener('click', fitAll);
-  els.btnClear.addEventListener('click', clearAll);
-  els.btnExport.addEventListener('click', exportGeoJson);
+  $('btnFit').addEventListener('click', fitEverything);
+  $('btnExport').addEventListener('click', exportGeoJson);
   $('btnTheme').addEventListener('click', () =>
     setTheme(document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark'));
 
@@ -1085,11 +1020,11 @@ out center tags 250;`;
   // they linger over the controls they describe. aria-label covers the rest.
   for (const el of document.querySelectorAll('[data-bs-toggle="tooltip"]')) {
     el.setAttribute('aria-label', el.getAttribute('data-bs-title'));
-    if (matchMedia('(hover: hover)').matches) new bootstrap.Tooltip(el);
+    // hover only: with the default hover+focus, clicking a button leaves its
+    // tooltip parked over the toolbar until you click elsewhere.
+    if (matchMedia('(hover: hover)').matches) new bootstrap.Tooltip(el, { trigger: 'hover' });
   }
   addEventListener('resize', () => map.invalidateSize());
-
-  refreshStats();
 })();
 </script>
 </body>
