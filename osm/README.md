@@ -40,9 +40,10 @@ what it does:
 The row wraps, so more buttons can be added.
 
 Within step 3 the order is list, then map, then the details of whatever is selected —
-**the detail pane always sits directly under that step's map**, so picking an entity
-scrolls the map to the top of the viewport and leaves the map and the start of its details
-on screen together.
+**the detail pane always sits directly under that step's map**. Selecting an entity does
+not scroll the page: the map re-frames itself and the details fill in, but the view stays
+where the reader put it, so browsing down a list of candidates is not interrupted by the
+page jumping. Scroll to the map when you want to look at it.
 
 Other phone-specific handling: `viewport-fit=cover` plus `env(safe-area-inset-*)` so the
 Dynamic Island and home indicator do not overlap content; ~44 px minimum tap targets; no
@@ -91,10 +92,9 @@ things:
   **Use this entity** button in the detail pane; once committed that button becomes
   *Stop using this entity*, which is the only way back.
 
-Selection is never delayed waiting to see whether a second tap arrives: the first tap
-acts immediately and the second one escalates. The map scroll that follows a selection on
-mobile *is* deferred past the double-tap window, though — scrolling the list out from
-under a finger would make the second tap impossible to land.
+Selection is never delayed waiting to see whether a second tap arrives: the first tap acts
+immediately and the second one escalates. Nothing moves under the finger between the two,
+because selecting does not scroll the page.
 
 A committed entity keeps a green ring on the map and a green tick in the list, even while
 you select other entities to compare against it.

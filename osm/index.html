@@ -1329,7 +1329,7 @@ out center tags 250;`;
    */
   function choosePlace(feature, source = 'list') {
     photo.place = feature || null;
-    let scrollToMap = false;
+    const onPhone = matchMedia('(max-width: 991.98px)').matches;
 
     // Re-icon every marker so exactly one is green.
     for (const [id, marker] of nearbyMarkers) {
@@ -1349,11 +1349,13 @@ out center tags 250;`;
 
       if (source === 'list') {
         // Came from the list: show it on the map.
+        // The map re-frames itself, but the page stays where it is: yanking the
+        // view around mid-browse is worse than letting the reader scroll down
+        // when they actually want to look.
         near.fitBounds(placeLine.getBounds(), { padding: [70, 70], maxZoom: 19 });
-        scrollToMap = matchMedia('(max-width: 991.98px)').matches;
         // On a phone the map is short; the green marker plus the detail pane
         // below already identify the pick, so don't cover the map with a popup.
-        if (!scrollToMap) nearbyMarkers.get(feature.id)?.openPopup();
+        if (!onPhone) nearbyMarkers.get(feature.id)?.openPopup();
       } else {
         // Came from the map: show it in the list.
         document.querySelector(`#nearbyList [data-feature="${CSS.escape(feature.id)}"]`)
@@ -1371,16 +1373,6 @@ out center tags 250;`;
 
     renderFeatureDetail();
     renderNearbyCta();
-
-    // Scroll last: the detail pane has just been un-hidden below the map, and
-    // until it exists the page cannot scroll far enough to bring the map up.
-    // Deferred past the double-tap window, because scrolling the list out from
-    // under a finger makes the second tap of a double-tap impossible to land.
-    clearTimeout(pendingScroll);
-    if (scrollToMap) {
-      pendingScroll = setTimeout(() =>
-        $('mapNear').scrollIntoView({ behavior: 'smooth', block: 'start' }), 470);
-    }
   }
 
   /* Details of the selected entity, below the list, so results can be browsed. */
@@ -1467,7 +1459,6 @@ out center tags 250;`;
   // First tap selects, a quick second tap on the same thing commits. Selection is
   // never delayed waiting to see whether a second tap arrives.
   let lastTap = { id: null, at: 0 };
-  let pendingScroll = null;
   function countTap(id) {
     const now = Date.now();
     const isDouble = lastTap.id === id && now - lastTap.at < 450;
@@ -1488,10 +1479,8 @@ out center tags 250;`;
   }
 
   function lockEntity(f) {
-    clearTimeout(pendingScroll);       // committing supersedes the pending map scroll
     photo.entity = f;
     if (photo.place?.id !== f.id) choosePlace(f, 'map');   // 'map': don't yank the page around
-    clearTimeout(pendingScroll);
     refreshLockIndicators();
     renderFeatureDetail();
     setPhase('Schema', { state: 'todo', summary: '', enabled: true });
