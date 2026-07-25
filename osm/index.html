@@ -103,6 +103,15 @@
 
   .nearby-head { background: var(--bs-body-bg); }
 
+  /* Streaming panes: wrap hard so a long token run cannot widen the page. */
+  .stream-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .875rem;
+                max-height: 24rem; overflow-y: auto; overscroll-behavior: contain;
+                margin: 0; font-family: inherit; }
+  #visPromptText { font-family: var(--bs-font-monospace); font-size: .8rem;
+                   background: var(--bs-tertiary-bg); }
+  .cursor-blink::after { content: '▍'; animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+
   /* On a narrow map the scale bar lands on top of the attribution. */
   .leaflet-control-scale { display: none; }
 
@@ -153,6 +162,10 @@
       <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme"
               title="Switch between the light and dark colour scheme">
         <i class="bi bi-circle-half me-1"></i>Theme
+      </button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnSettings"
+              title="Set the OpenRouter API key and the vision model used to describe the photo">
+        <i class="bi bi-gear me-1"></i>Settings
       </button>
     </div>
   </div>
@@ -307,6 +320,63 @@
               </div>
             </div>
 
+            <!-- Phase 5 — what a vision model sees in the photo -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phaseVision" disabled
+                        aria-expanded="false" aria-controls="phaseVision" id="phaseVisionBtn">
+                  <span class="phase-num" id="phaseVisionNum">5</span>
+                  <span>AI description</span>
+                  <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseVisionSpinner"
+                        role="status" aria-label="Waiting for the model"></span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phaseVisionSummary"></span>
+                </button>
+              </h2>
+              <div id="phaseVision" class="accordion-collapse collapse" data-bs-parent="#phases">
+                <div class="accordion-body p-0">
+
+                  <div class="p-3 border-bottom" id="visionControls"></div>
+
+                  <ul class="nav nav-tabs px-2 pt-2 flex-nowrap" role="tablist">
+                    <li class="nav-item" role="presentation">
+                      <button class="nav-link active" id="visPromptTab" data-bs-toggle="tab"
+                              data-bs-target="#visPrompt" type="button" role="tab" aria-controls="visPrompt"
+                              aria-selected="true"><i class="bi bi-body-text me-1"></i>Prompt</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                      <button class="nav-link" id="visThinkTab" data-bs-toggle="tab"
+                              data-bs-target="#visThink" type="button" role="tab" aria-controls="visThink"
+                              aria-selected="false" disabled><i class="bi bi-lightbulb me-1"></i>Thinking</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                      <button class="nav-link" id="visOutTab" data-bs-toggle="tab"
+                              data-bs-target="#visOut" type="button" role="tab" aria-controls="visOut"
+                              aria-selected="false"><i class="bi bi-card-text me-1"></i>Description</button>
+                    </li>
+                  </ul>
+
+                  <div class="tab-content p-3">
+                    <div class="tab-pane fade show active" id="visPrompt" role="tabpanel"
+                         aria-labelledby="visPromptTab">
+                      <p class="small text-body-secondary">
+                        Exactly what is sent, alongside the photo itself.
+                      </p>
+                      <pre class="stream-pre border rounded p-2 mb-2" id="visPromptText"></pre>
+                      <p class="small text-body-secondary mb-0" id="visImageNote"></p>
+                    </div>
+                    <div class="tab-pane fade" id="visThink" role="tabpanel" aria-labelledby="visThinkTab">
+                      <pre class="stream-pre text-body-secondary mb-0" id="visThinkText"></pre>
+                    </div>
+                    <div class="tab-pane fade" id="visOut" role="tabpanel" aria-labelledby="visOutTab">
+                      <div class="stream-pre mb-0" id="visOutText"></div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -333,6 +403,46 @@
 
 <!-- Kept outside the accordion so it stays reachable while the upload pane is hidden. -->
 <input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif">
+
+<div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="settingsTitle"><i class="bi bi-gear me-2"></i>Settings</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+
+        <label for="setApiKey" class="form-label fw-medium">OpenRouter API key</label>
+        <div class="input-group">
+          <input type="password" class="form-control" id="setApiKey" autocomplete="off"
+                 spellcheck="false" placeholder="sk-or-v1-…">
+          <button class="btn btn-outline-secondary" type="button" id="btnRevealKey"
+                  aria-label="Show or hide the key"><i class="bi bi-eye"></i></button>
+        </div>
+        <p class="form-text">
+          Create one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>.
+          It is kept in this browser's local storage in plain text and is sent only to
+          openrouter.ai. Anything with access to this device can read it.
+        </p>
+
+        <label for="setModel" class="form-label fw-medium mt-2">Vision model</label>
+        <input type="search" class="form-control form-control-sm mb-2" id="modelFilter"
+               placeholder="Filter models…" autocomplete="off" spellcheck="false">
+        <select class="form-select" id="setModel"></select>
+        <p class="form-text mb-0" id="modelsNote"></p>
+        <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnReloadModels">
+          <i class="bi bi-arrow-clockwise me-1"></i>Reload model list
+        </button>
+
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btnSaveSettings">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
@@ -715,6 +825,103 @@ out center tags 250;`;
     return res;
   }
 
+  /* ---------- settings: OpenRouter key and vision model ---------- */
+
+  const OPENROUTER = 'https://openrouter.ai/api/v1';
+  const SETTINGS_KEY = APP_PREFIX + 'settings:1';
+  const MODELS_PREFIX = APP_PREFIX + 'models:1:';
+  const MODELS_TTL_MS = 24 * 3600 * 1000;
+
+  const loadSettings = () => {
+    try { return { apiKey: '', model: '', ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+    catch { return { apiKey: '', model: '' }; }
+  };
+  let settings = loadSettings();
+  const saveSettings = () => {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* private mode */ }
+  };
+
+  /** Vision-capable models only — anything else cannot answer this question. */
+  async function fetchModels(force) {
+    if (!force) {
+      const hit = readCache(MODELS_PREFIX, 'openrouter', MODELS_TTL_MS);
+      if (hit) return hit;
+    }
+    const res = await fetch(`${OPENROUTER}/models`);
+    if (!res.ok) throw new Error(`OpenRouter model list: HTTP ${res.status}`);
+    const json = await res.json();
+    const models = (json.data || [])
+      .filter(m => (m.architecture?.input_modalities || []).includes('image'))
+      .map(m => ({
+        id: m.id,
+        name: m.name || m.id,
+        ctx: m.context_length || null,
+        prompt: m.pricing?.prompt ?? null,
+        completion: m.pricing?.completion ?? null,
+        // Only ask for a reasoning trace from models that advertise it.
+        reasoning: (m.supported_parameters || []).some(p => p === 'reasoning' || p === 'include_reasoning'),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    writeCache(MODELS_PREFIX, 'openrouter', { models });
+    return { models, fetchedAt: Date.now() };
+  }
+
+  const perMillion = v => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    if (n < 0) return 'variable';
+    return `$${(n * 1e6).toFixed(2)}/M`;
+  };
+
+  const modelLabel = m => {
+    const price = perMillion(m.prompt);
+    return `${m.name}${price ? ` — ${price} in` : ''}${m.reasoning ? ' · reasoning' : ''}`;
+  };
+
+  let modelCache = null;   // {models, fetchedAt}
+
+  async function populateModels(force) {
+    const note = $('modelsNote'), sel = $('setModel');
+    note.textContent = 'Loading models…';
+    try {
+      modelCache = await fetchModels(force);
+    } catch (e) {
+      note.innerHTML = `<span class="text-warning-emphasis">${esc(e.message)}</span>`;
+      sel.innerHTML = settings.model
+        ? `<option value="${esc(settings.model)}" selected>${esc(settings.model)}</option>`
+        : '<option value="">— model list unavailable —</option>';
+      return;
+    }
+    const age = Math.round((Date.now() - modelCache.fetchedAt) / 3600000);
+    note.textContent = `${modelCache.models.length} vision-capable models · list cached for 24 h` +
+      (age >= 1 ? ` · ${age} h old` : ' · just fetched');
+    renderModelOptions();
+  }
+
+  function renderModelOptions() {
+    const sel = $('setModel');
+    const q = $('modelFilter').value.trim().toLowerCase();
+    const list = (modelCache?.models || [])
+      .filter(m => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+    sel.innerHTML = list.length
+      ? list.map(m => `<option value="${esc(m.id)}"${m.id === settings.model ? ' selected' : ''}>${esc(modelLabel(m))}</option>`).join('')
+      : '<option value="">— nothing matches —</option>';
+    // Keep a saved model selectable even when the filter hides it.
+    if (settings.model && !list.some(m => m.id === settings.model)) {
+      sel.insertAdjacentHTML('afterbegin',
+        `<option value="${esc(settings.model)}" selected>${esc(settings.model)} (current)</option>`);
+    }
+  }
+
+  const settingsModal = new bootstrap.Modal($('settingsModal'));
+
+  function openSettings() {
+    $('setApiKey').value = settings.apiKey || '';
+    $('modelFilter').value = '';
+    settingsModal.show();
+    populateModels(false);
+  }
+
   /* ---------- state: exactly one photo ---------- */
   let photo = null;                      // {name, size, lat, lon, alt, taken, make, model, thumb,
                                          //  marker, nearby?: {...},
@@ -770,7 +977,7 @@ out center tags 250;`;
       num.classList.toggle('is-error', state === 'warn');
       num.innerHTML = state === 'done' ? '<i class="bi bi-check-lg"></i>'
                     : state === 'warn' ? '<i class="bi bi-exclamation-lg"></i>'
-                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4' }[name];
+                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4', Vision: '5' }[name];
     }
   }
 
@@ -792,6 +999,7 @@ out center tags 250;`;
 
     resetMapLayers();
     photo = {
+      file,
       name: file.name || 'photo',
       size: file.size,
       lat: gps && Number.isFinite(gps.latitude) ? gps.latitude : null,
@@ -1266,7 +1474,9 @@ out center tags 250;`;
     renderFeatureDetail();
     $('schemaBody').replaceChildren();
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
+    setPhase('Vision', { state: 'todo', summary: '', enabled: false });
     bootstrap.Collapse.getOrCreateInstance($('phaseSchema')).hide();
+    bootstrap.Collapse.getOrCreateInstance($('phaseVision')).hide();
   }
 
   /* ---------- phase 4: the tag schema for that entity type ---------- */
@@ -1436,11 +1646,254 @@ out center tags 250;`;
       s.tag?.inPractice?.length ? `${s.tag.inPractice.length} common keys` : null,
     ].filter(Boolean).join(' · ');
     setPhase('Schema', { state: 'done', summary: counts || s.pair });
+    setPhase('Vision', { state: 'todo', summary: '', enabled: true });
+    prepareVision();
 
     $('btnRefreshSchema').addEventListener('click', () => {
       dropCache(CACHE_PREFIX, s.pair);
       loadSchema(f);
     });
+  }
+
+  /* ---------- phase 5: what a vision model sees ---------- */
+
+  const IMAGE_MAX_EDGE = 2048;   // small print on signs is the whole point; do not skimp
+
+  async function photoDataUrl() {
+    if (photo.dataUrl) return photo.dataUrl;
+    let bmp;
+    try { bmp = await createImageBitmap(photo.file, { imageOrientation: 'from-image' }); }
+    catch { bmp = await createImageBitmap(photo.file); }   // older engines ignore the option
+    const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h });
+    canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    photo.dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    photo.dataUrlSize = [w, h];
+    return photo.dataUrl;
+  }
+
+  /**
+   * The schema contributes *topics worth looking at*, in plain words. It deliberately
+   * does not contribute tag syntax or any instruction to produce tags: the answer
+   * wanted here is descriptive prose, and handing over the tagging documentation
+   * would turn it into a tagging exercise.
+   */
+  // External registry ids and editing metadata are part of the schema but can never
+  // be read off a photograph, and listing them only dilutes the focus list.
+  const UNPHOTOGRAPHABLE = /(^ref($|:)|gnis|siret|^vat|wikidata|wikipedia|^not:|fixme|^note$|^source($|:)|^level$|^fax$|_id$|^check_date)/i;
+  const FOCUS_LIMIT = 18;
+
+  function buildPrompt() {
+    const f = photo.entity, s = photo.schema;
+    const seen = new Set();
+    const focus = [...(s?.id?.recommended || []), ...(s?.id?.optional || [])]
+      .filter(x => x.label && !x.keys.some(k => UNPHOTOGRAPHABLE.test(k)))
+      .map(x => x.label)
+      .filter(t => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()))
+      .slice(0, FOCUS_LIMIT);
+
+    const kind = s?.id?.name || f.category;
+    const named = f.name ? `"${f.name}"` : `an unnamed ${kind.toLowerCase()}`;
+
+    return [
+      'You are looking at a single photograph.',
+      '',
+      'CONTEXT (for interpretation only — it is not something you observed, and none of it',
+      'is necessarily visible in the photograph):',
+      `- The photograph's GPS position is ${fmtCoord(photo.lat, ['N', 'S'])}, ${fmtCoord(photo.lon, ['E', 'W'])}.`,
+      `- ${fmtDistance(f.distance)} from that position, OpenStreetMap records ${named}, a ${kind.toLowerCase()}.`,
+      '',
+      'TASK',
+      '1. Say what the photograph is primarily of, and whether it appears to show that',
+      '   feature, a part of it, something belonging to it, or something unrelated.',
+      '2. Then describe the photograph exhaustively. Transcribe every piece of legible text',
+      '   word for word, including headings, small print, opening times, prices, phone',
+      '   numbers, web addresses and logos. Describe objects, materials, colours, signage,',
+      '   fixtures, condition, surroundings, lighting and anything else present.',
+      '',
+      'These subjects are often relevant to this kind of feature, so look for them',
+      'specifically and say so plainly when the photograph does not show them:',
+      focus.length ? focus.map(t => `- ${t}`).join('\n') : '- (no particular subjects)',
+      '',
+      'RULES',
+      '- Report only what is visible in the photograph. Do not infer, guess or embellish.',
+      '- Do not repeat the context above as though you saw it.',
+      '- If something is unreadable or cut off, say so rather than completing it.',
+      '- Write flowing prose in paragraphs. Do not produce tags, key/value pairs, JSON,',
+      '  bullet lists or headings.',
+    ].join('\n');
+  }
+
+  let visionAbort = null;
+
+  function renderVisionControls() {
+    const host = $('visionControls');
+    const model = modelCache?.models.find(m => m.id === settings.model);
+    const ready = !!settings.apiKey && !!settings.model;
+    const running = !!visionAbort;
+
+    host.innerHTML = ready ? `
+      <div class="small text-body-secondary text-truncate mb-2">
+        <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.model)}
+      </div>
+      <div class="d-grid gap-2">
+        <button class="btn btn-sm ${running ? 'btn-outline-danger' : 'btn-primary'}" type="button" id="btnRunVision">
+          <i class="bi bi-${running ? 'stop-circle' : 'stars'} me-1"></i>${running ? 'Stop' : 'Describe this photo'}
+        </button>
+      </div>
+      <p class="small text-body-secondary mt-2 mb-0" id="visionStatus"></p>` : `
+      <div class="alert alert-info mb-0" role="alert">
+        <i class="bi bi-info-circle me-1"></i>
+        ${settings.apiKey ? 'Choose a vision model' : 'Add an OpenRouter API key'} to describe the photo.
+        <button class="btn btn-sm btn-outline-secondary mt-2 w-100" type="button" id="btnOpenSettings">
+          <i class="bi bi-gear me-1"></i>Open settings
+        </button>
+      </div>`;
+
+    $('btnOpenSettings')?.addEventListener('click', openSettings);
+    $('btnRunVision')?.addEventListener('click', () => running ? visionAbort.abort() : runVision());
+  }
+
+  function prepareVision() {
+    $('visPromptText').textContent = buildPrompt();
+    $('visImageNote').textContent = 'Plus the photograph itself, re-encoded as JPEG at up to '
+      + `${IMAGE_MAX_EDGE} px on its long edge.`;
+    $('visThinkText').textContent = '';
+    $('visOutText').textContent = '';
+    $('visThinkTab').disabled = true;
+    renderVisionControls();
+    bootstrap.Tab.getOrCreateInstance($('visPromptTab')).show();
+  }
+
+  const visStatus = html => { const el = $('visionStatus'); if (el) el.innerHTML = html; };
+
+  async function runVision() {
+    const model = modelCache?.models.find(m => m.id === settings.model);
+    visionAbort = new AbortController();
+    renderVisionControls();
+    $('phaseVisionSpinner').classList.remove('d-none');
+    $('phaseVisionSummary').classList.add('d-none');
+    setPhase('Vision', { state: 'busy' });
+    $('visThinkText').textContent = '';
+    $('visOutText').textContent = '';
+    $('visThinkTab').disabled = true;
+    visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Encoding the photo…');
+
+    // Status is written last: renderVisionControls rebuilds the block that holds it.
+    const finish = (state, summary, status) => {
+      visionAbort = null;
+      $('phaseVisionSpinner').classList.add('d-none');
+      $('phaseVisionSummary').classList.remove('d-none');
+      setPhase('Vision', { state, summary });
+      $('visOutText').classList.remove('cursor-blink');
+      $('visThinkText').classList.remove('cursor-blink');
+      renderVisionControls();
+      visStatus(status);
+    };
+
+    try {
+      const dataUrl = await photoDataUrl();
+      visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Waiting for the model…');
+
+      const body = {
+        model: settings.model,
+        stream: true,
+        usage: { include: true },
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: buildPrompt() },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        }],
+      };
+      if (model?.reasoning) body.reasoning = { enabled: true };
+
+      const res = await fetch(`${OPENROUTER}/chat/completions`, {
+        method: 'POST',
+        signal: visionAbort.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${settings.apiKey}`,
+          'HTTP-Referer': location.origin,
+          'X-Title': 'Photo Map',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        let detail = text.slice(0, 300);
+        try { detail = JSON.parse(text).error?.message || detail; } catch { /* keep raw */ }
+        throw new Error(`HTTP ${res.status} — ${detail}`);
+      }
+
+      let think = '', out = '', usage = null, stopped = false;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      $('visOutText').classList.add('cursor-blink');
+
+      while (!stopped) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();                       // keep the partial line
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;   // ": OPENROUTER PROCESSING" keep-alives
+          const payload = trimmed.slice(5).trim();
+          if (payload === '[DONE]') { stopped = true; break; }
+          let chunk;
+          try { chunk = JSON.parse(payload); } catch { continue; }
+          if (chunk.error) throw new Error(chunk.error.message || 'stream error');
+          if (chunk.usage) usage = chunk.usage;
+
+          const delta = chunk.choices?.[0]?.delta || {};
+          const reasoning = delta.reasoning ?? delta.reasoning_content;
+          if (reasoning) {
+            if (!think) {
+              $('visThinkTab').disabled = false;
+              $('visThinkText').classList.add('cursor-blink');
+              bootstrap.Tab.getOrCreateInstance($('visThinkTab')).show();
+              visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
+            }
+            think += reasoning;
+            $('visThinkText').textContent = think;
+            $('visThinkText').scrollTop = $('visThinkText').scrollHeight;
+          }
+          if (delta.content) {
+            if (!out) {
+              $('visThinkText').classList.remove('cursor-blink');
+              bootstrap.Tab.getOrCreateInstance($('visOutTab')).show();
+              visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Writing…');
+            }
+            out += delta.content;
+            $('visOutText').textContent = out;
+            $('visOutText').scrollTop = $('visOutText').scrollHeight;
+          }
+        }
+      }
+
+      if (!out && !think) throw new Error('the model returned nothing');
+
+      const words = out.trim() ? out.trim().split(/\s+/).length : 0;
+      const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
+      const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
+      finish('done', `${words} words`,
+        `<i class="bi bi-check-circle text-success me-1"></i>${words} words${tokens}${cost}`);
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        finish('todo', 'Stopped', '<i class="bi bi-slash-circle me-1"></i>Stopped.');
+        return;
+      }
+      finish('warn', 'Failed',
+        `<span class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}</span>`);
+    }
   }
 
   /* ---------- map-wide actions ---------- */
@@ -1471,11 +1924,16 @@ out center tags 250;`;
     $('nearbySource').textContent = '';
     $('nearbyRadius').textContent = '';
     $('schemaBody').replaceChildren();
+    $('visPromptText').textContent = '';
+    $('visThinkText').textContent = '';
+    $('visOutText').textContent = '';
+    $('visionControls').replaceChildren();
     nearbyStatus('');
     setPhase('Photo', { state: 'todo', summary: '', enabled: true });
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
+    setPhase('Vision', { state: 'todo', summary: '', enabled: false });
     $('btnFit').disabled = true;
     $('btnExport').disabled = true;
     openPhase('Photo');
@@ -1553,6 +2011,23 @@ out center tags 250;`;
   for (const el of document.querySelectorAll('input[name="nearbyFilter"]')) {
     el.addEventListener('change', renderNearby);
   }
+
+  $('btnSettings').addEventListener('click', openSettings);
+  $('modelFilter').addEventListener('input', renderModelOptions);
+  $('btnReloadModels').addEventListener('click', () => populateModels(true));
+  $('btnRevealKey').addEventListener('click', () => {
+    const el = $('setApiKey');
+    el.type = el.type === 'password' ? 'text' : 'password';
+    $('btnRevealKey').innerHTML = `<i class="bi bi-eye${el.type === 'text' ? '-slash' : ''}"></i>`;
+  });
+  $('btnSaveSettings').addEventListener('click', () => {
+    settings.apiKey = $('setApiKey').value.trim();
+    const chosen = $('setModel').value;
+    if (chosen) settings.model = chosen;
+    saveSettings();
+    settingsModal.hide();
+    if (photo?.entity) renderVisionControls();
+  });
 
   $('btnFit').addEventListener('click', fitEverything);
   $('btnExport').addEventListener('click', exportGeoJson);

@@ -25,6 +25,7 @@ what it does:
 | **Fit map** | Zooms the map out until the photo pin and every nearby entity dot fit on screen at once. Disabled until a photo with coordinates is loaded. |
 | **GeoJSON** | Downloads `photo-location.geojson` — one Point feature at the photo's coordinates, with its filename, capture time, camera, and the entity you committed to (its OSM id, name, tag and distance). Disabled until a photo with coordinates is loaded. |
 | **Theme** | Switches between the light and dark colour scheme. The page already follows the device setting, so this is only an override, and the choice is remembered. |
+| **Settings** | OpenRouter API key and the vision model used in step 5. See below. |
 
 The row wraps, so more buttons can be added. On a 402 px screen the three above use 287 px
 of 386 px; a fourth (a Settings button, say) needs about 93 px and so will fall to a second
@@ -64,6 +65,9 @@ street furniture alike. See below.
 
 **4 · Tag schema.** Once one of those entities is committed to, how that *kind* of thing
 is described in OpenStreetMap. See below.
+
+**5 · AI description.** Sends the photo to a vision model with the committed entity and
+its schema as context, and streams back an exhaustive description. See below.
 
 More phases will be added after these.
 
@@ -174,6 +178,63 @@ bundles, which would not fit. So a repeat visit for a tag already seen renders s
 no network at all. Quota errors are handled by evicting this app's own cached schemas and
 retrying once; if that still fails the schema is simply not cached. A **refresh** link
 under the results drops the entry and refetches.
+
+## AI description
+
+Step 5 sends the photograph to a vision model through
+[OpenRouter](https://openrouter.ai/) and streams the answer back. It never runs on its
+own — describing a photo costs money, so it waits for the button.
+
+Three horizontal tabs, deliberately not another accordion, because these are three views
+of one operation rather than three steps:
+
+- **Prompt** — exactly the text that will be sent, shown before you run anything, plus a
+  note about the attached image. Nothing is hidden.
+- **Thinking** — the reasoning trace, streamed live, for models that emit one. The tab
+  stays disabled until a trace actually arrives, and reasoning is only requested from
+  models whose `supported_parameters` advertise it.
+- **Description** — the answer, streamed. The view moves here by itself when the model
+  stops thinking and starts writing. Word count, token counts and cost land underneath
+  when it finishes.
+
+There is a Stop button while a request is in flight.
+
+### What the prompt contains
+
+The committed entity supplies context — the photo's coordinates, and what OpenStreetMap
+records nearby — explicitly framed as *interpretation only, not something you observed*,
+so the model does not parrot it back as though it were visible.
+
+The schema supplies **subjects worth looking at**, as plain English labels drawn from the
+preset's fields: Name, Operator, Sports, Hours, Address, Fee, Website, Wheelchair Access
+and so on. It deliberately does **not** supply tag syntax or any instruction to emit tags —
+the answer wanted here is prose. Fields that can never be read off a photograph (external
+registry identifiers such as GNIS, SIRET and VAT numbers, plus editing metadata like
+`source` and `fixme`) are filtered out, and the list is capped at 18 subjects, so the
+focus list stays photographable.
+
+The rules then ask for exhaustive description, verbatim transcription of every piece of
+legible text, an explicit "not shown" rather than a guess, and prose rather than
+key/value output.
+
+### Settings
+
+The **Settings** button holds the OpenRouter API key and the model. Both live in
+`localStorage` under `photomap:settings:1`.
+
+The key is stored **in plain text** and is sent only to openrouter.ai — anything with
+access to the device or to another script on this origin can read it. The settings dialog
+says so. Use a key scoped and budgeted for this.
+
+The model picker lists only vision-capable models — those whose
+`architecture.input_modalities` include `image`, 183 of OpenRouter's 345 at the time of
+writing — with their input price per million tokens and whether they support reasoning.
+A filter box narrows the list. The catalogue is cached under `photomap:models:1:openrouter`
+for **24 hours**, with a *Reload model list* button to force a refresh.
+
+The photo is re-encoded as JPEG at up to 2048 px on its long edge before sending: small
+print on signs is the whole point of this step, so it is not downscaled aggressively. The
+Harrogate example goes over as about 385 kB rather than the original 4 MB.
 
 ## Getting GPS data off an iPhone
 
