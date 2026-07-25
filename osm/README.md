@@ -92,9 +92,27 @@ them without losing sight of the map.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
   surveillance cameras, survey points, antennas, utility poles, manholes, street cabinets
   and street lamps. See `EXCLUDED` in `index.html` to change that.
-- Overpass is queried once, when the phase is first opened, and the result is cached.
-  A spinner runs in the phase header, and the body reports the radius being searched and
-  says so when it widens.
+- Overpass is queried once, when the phase is first opened, and the result is cached both
+  in memory and in `localStorage` — see below. A spinner runs in the phase header, and the
+  body reports the radius being searched and says so when it widens.
+
+### Caching the Overpass answer
+
+Picking the same photo again asks the same question of the same coordinates, so the answer
+is kept in `localStorage` for 24 hours under
+`photomap:nearby:1:<lat>,<lon>@<radius>`, coordinates rounded to 6 decimal places
+(~11 cm — far finer than any phone's GPS, and stable across re-picks of one photo). Each
+radius is cached separately, so **Wider** benefits too, and re-narrowing costs nothing.
+
+Distances are deliberately *not* stored. They are recomputed against whichever position is
+asking, so a second photo taken a few metres away reuses the same cached features and
+still gets its own correct distances and ordering.
+
+Measured on the Harrogate example: **16.5 s cold, 0.4 s from cache**, no Overpass traffic
+at all on the second run, for 9 kB of stored data covering all 36 features found. The
+source line under the results says when the data came from cache and how old it is, and
+offers a **refresh** that drops the entries for every radius at that position and refetches.
+Entries past the 24-hour TTL are evicted on read rather than left to accumulate.
 
 ### Which server answered, and how old its data is
 

@@ -532,7 +532,8 @@ out center tags 250;`;
 
   const ID_SCHEMA_BASE = 'https://cdn.jsdelivr.net/npm/@openstreetmap/id-tagging-schema/dist';
   const TAGINFO = 'https://taginfo.openstreetmap.org/api/4';
-  const CACHE_PREFIX = 'photomap:schema:1:';
+  const APP_PREFIX = 'photomap:';
+  const CACHE_PREFIX = APP_PREFIX + 'schema:1:';
   const CACHE_TTL_MS = 30 * 24 * 3600 * 1000;
 
   let idSchemaPromise = null;
@@ -550,27 +551,35 @@ out center tags 250;`;
     return idSchemaPromise;
   }
 
-  const cacheGet = key => {
+  const readCache = (prefix, key, ttl) => {
     try {
-      const raw = localStorage.getItem(CACHE_PREFIX + key);
+      const raw = localStorage.getItem(prefix + key);
       if (!raw) return null;
       const v = JSON.parse(raw);
-      if (Date.now() - v.fetchedAt > CACHE_TTL_MS) return null;
+      if (Date.now() - v.fetchedAt > ttl) { localStorage.removeItem(prefix + key); return null; }
       return v;
     } catch { return null; }
   };
 
-  const cacheSet = (key, value) => {
-    try { localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value)); }
+  const writeCache = (prefix, key, value) => {
+    const payload = JSON.stringify({ ...value, fetchedAt: Date.now() });
+    try { localStorage.setItem(prefix + key, payload); }
     catch {
-      // Quota reached — drop our own cached schemas and try once more.
+      // Quota reached — drop everything this app cached and try once more.
       try {
         for (const k of Object.keys(localStorage))
-          if (k.startsWith(CACHE_PREFIX)) localStorage.removeItem(k);
-        localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value));
-      } catch { /* give up; the schema still works, it just is not cached */ }
+          if (k.startsWith(APP_PREFIX)) localStorage.removeItem(k);
+        localStorage.setItem(prefix + key, payload);
+      } catch { /* give up; it still works, it just is not cached */ }
     }
   };
+
+  const dropCache = (prefix, key) => {
+    try { localStorage.removeItem(prefix + key); } catch { /* nothing to do */ }
+  };
+
+  const cacheGet = key => readCache(CACHE_PREFIX, key, CACHE_TTL_MS);
+  const cacheSet = (key, value) => writeCache(CACHE_PREFIX, key, value);
 
   /** Field ids resolve to one or more real OSM keys; both shapes occur. */
   const fieldKeys = def => def?.key ? [def.key] : (def?.keys || []);
@@ -666,6 +675,44 @@ out center tags 250;`;
     const schema = { pair, key, value, fetchedAt: Date.now(), id: idPart, tag: tagPart };
     if (!idPart?.error || !tagPart?.error) cacheSet(pair, schema);   // don't cache a total failure
     return schema;
+  }
+
+  /* ---------- caching the Overpass answer per position ----------
+     Re-picking the same photo asks the same question of the same coordinates,
+     so the answer is worth keeping for a day. Distances are deliberately not
+     stored: they are recomputed against whatever position is asking, so a
+     second photo taken a few metres away can still use the same cached
+     features and get its own correct distances. */
+
+  const NEARBY_PREFIX = APP_PREFIX + 'nearby:1:';
+  const NEARBY_TTL_MS = 24 * 3600 * 1000;
+
+  // 6 dp is ~11 cm — far finer than any phone's GPS, and stable for one photo.
+  const nearbyKey = (lat, lon, r) => `${lat.toFixed(6)},${lon.toFixed(6)}@${r}`;
+
+  const withDistances = (features, lat, lon) => features
+    .map(f => ({ ...f, distance: haversine(lat, lon, f.lat, f.lon) }))
+    .sort((a, b) => a.distance - b.distance);
+
+  async function queryOverpassCached(lat, lon, radius) {
+    const key = nearbyKey(lat, lon, radius);
+    const hit = readCache(NEARBY_PREFIX, key, NEARBY_TTL_MS);
+    if (hit) {
+      return {
+        host: hit.host,
+        asOf: hit.asOf ? new Date(hit.asOf) : null,
+        cachedAt: hit.fetchedAt,
+        features: withDistances(hit.features, lat, lon),
+      };
+    }
+
+    const res = await queryOverpass(lat, lon, radius);
+    writeCache(NEARBY_PREFIX, key, {
+      host: res.host,
+      asOf: res.asOf ? res.asOf.toISOString() : null,
+      features: res.features.map(({ distance, ...rest }) => rest),
+    });
+    return res;
   }
 
   /* ---------- state: exactly one photo ---------- */
@@ -877,7 +924,7 @@ out center tags 250;`;
     };
 
     try {
-      let res = await queryOverpass(photo.lat, photo.lon, radius);
+      let res = await queryOverpassCached(photo.lat, photo.lon, radius);
       let used = radius;
       // Sparse area: widen automatically until we have enough to show.
       for (const wider of RADII.filter(r => r > radius)) {
@@ -887,7 +934,7 @@ out center tags 250;`;
             <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
             Only ${res.features.length} found — widening to ${wider} m&hellip;
           </div>`);
-        res = await queryOverpass(photo.lat, photo.lon, wider);
+        res = await queryOverpassCached(photo.lat, photo.lon, wider);
         used = wider;
       }
       photo.nearby = { radius: used, ...res };
@@ -1011,7 +1058,7 @@ out center tags 250;`;
 
   /* Which mirror answered, and how old its data is. A busy primary sends us to a
      fallback that can be weeks behind, which quietly changes what you see. */
-  function renderSource({ host, asOf }) {
+  function renderSource({ host, asOf, cachedAt }) {
     const el = $('nearbySource');
     if (!host) { el.textContent = ''; return; }
     const days = asOf ? Math.floor((Date.now() - asOf) / 86400000) : null;
@@ -1021,7 +1068,22 @@ out center tags 250;`;
       `<i class="bi bi-${stale ? 'exclamation-triangle' : 'database'} me-1"></i>` +
       `via ${esc(host)}` +
       (asOf ? ` &middot; data as of ${asOf.toLocaleDateString(undefined, { dateStyle: 'medium' })}` +
-              (stale ? ` (${days} days old)` : '') : '');
+              (stale ? ` (${days} days old)` : '') : '') +
+      (cachedAt ? ` &middot; <span id="nearbyCached">from this browser's cache, ` +
+                  `${describeAge(Date.now() - cachedAt)} old</span>` : '') +
+      ` <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button" id="btnRefreshNearby">refresh</button>`;
+
+    $('btnRefreshNearby').addEventListener('click', () => {
+      for (const r of RADII) dropCache(NEARBY_PREFIX, nearbyKey(photo.lat, photo.lon, r));
+      loadNearby(photo.nearby?.radius ?? RADII[0]);
+    });
+  }
+
+  function describeAge(ms) {
+    const mins = Math.round(ms / 60000);
+    if (mins < 1) return 'seconds';
+    if (mins < 60) return `${mins} min`;
+    return `${Math.round(mins / 60)} h`;
   }
 
   /**
@@ -1376,7 +1438,7 @@ out center tags 250;`;
     setPhase('Schema', { state: 'done', summary: counts || s.pair });
 
     $('btnRefreshSchema').addEventListener('click', () => {
-      try { localStorage.removeItem(CACHE_PREFIX + s.pair); } catch { /* nothing to do */ }
+      dropCache(CACHE_PREFIX, s.pair);
       loadSchema(f);
     });
   }
