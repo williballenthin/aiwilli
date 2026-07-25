@@ -45,8 +45,21 @@
   .toolbar { flex-shrink: 0; }
   .toolbar .btn { min-height: 2.5rem; }
 
-  #map { height: 45dvh; background: var(--bs-tertiary-bg); }
-  .map-wrap { scroll-margin-top: .5rem; }
+  /* One centred column of phases at every width. Each map belongs to the phase
+     that needs it; there is no page-level map any more. */
+  .app-body { flex: 1 1 auto; }
+  .phase-column { max-width: 46rem; margin-inline: auto; }
+
+  /* Maps are locked: no drag, no zoom, no wheel. They frame themselves, so there
+     is nothing for a stray swipe to break, and the page scrolls over them freely. */
+  .phase-map { height: 15rem; background: var(--bs-tertiary-bg); scroll-margin-top: .5rem; }
+  #mapNear { height: 18rem; }
+  .phase-map .leaflet-container { cursor: default; }
+
+  .toast-host { position: fixed; left: 0; right: 0; z-index: 1080;
+                bottom: calc(1rem + env(safe-area-inset-bottom));
+                max-width: 36rem; margin-inline: auto; pointer-events: none; }
+  .toast-host .alert { pointer-events: auto; }
 
   /* Comfortable touch targets: iOS wants ~44px. */
   .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; }
@@ -120,23 +133,8 @@
      Sidebar scrolls on its own; the map column holds map over details.
      --------------------------------------------------------------- */
   @media (min-width: 992px) {
-    html, body { height: 100%; }
-    body { overflow: hidden; }
-
-    .app-shell { height: 100dvh; }
-    .app-body { flex: 1 1 auto; min-height: 0; }
-    .app-pane { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-
-    .map-wrap { flex: 1 1 auto; min-height: 0; display: flex; }
-    #map { flex: 1 1 auto; height: auto; min-height: 0; }
-
-    /* Details never take more than a third of the column, and scroll inside it. */
-    .detail-pane { flex: 0 0 auto; max-height: 34%; overflow-y: auto; overscroll-behavior: contain; }
-
-    /* Keep the filters reachable once the results list scrolls. */
-    .nearby-head { position: sticky; top: 0; z-index: 2; }
-    #nearbyList { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
-
+    .phase-map { height: 18rem; }
+    #mapNear { height: 22rem; }
     .leaflet-control-scale { display: block; }
     .btn-group-sm > .btn { padding: .25rem .5rem; font-size: .875rem; }
     .accordion-button { padding-top: .75rem; padding-bottom: .75rem; }
@@ -151,10 +149,6 @@
        costs nothing while you work. Room here for a Settings button next. -->
   <div class="toolbar bg-body border-bottom" id="topBar">
     <div class="d-flex flex-wrap align-items-center gap-2 p-2">
-      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnFit" disabled
-              title="Zoom the map out until the photo and every nearby entity fit on screen">
-        <i class="bi bi-arrows-fullscreen me-1"></i>Fit map
-      </button>
       <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport" disabled
               title="Download the photo's position, and the entity you chose, as a .geojson file">
         <i class="bi bi-download me-1"></i>GeoJSON
@@ -170,12 +164,8 @@
     </div>
   </div>
 
-  <div class="container-fluid app-body">
-    <div class="row g-0 h-100">
-
-      <!-- Sidebar: one phase at a time -->
-      <aside class="col-lg-4 col-xl-3 border-end bg-body app-pane">
-        <div class="scroll-y flex-grow-1">
+  <div class="app-body bg-body">
+    <div class="phase-column">
           <div class="accordion accordion-flush" id="phases">
 
             <!-- Phase 1 — the photo -->
@@ -232,6 +222,9 @@
                       <button class="btn btn-outline-secondary btn-sm" type="button" id="btnReplace">
                         <i class="bi bi-arrow-repeat me-1"></i>Use a different photo
                       </button>
+                      <button class="btn btn-primary" type="button" id="btnGoGps">
+                        Where was it taken?<i class="bi bi-arrow-right ms-1"></i>
+                      </button>
                     </div>
                   </div>
 
@@ -251,7 +244,10 @@
                 </button>
               </h2>
               <div id="phaseGps" class="accordion-collapse collapse" data-bs-parent="#phases">
-                <div class="accordion-body" id="gpsBody"></div>
+                <div class="accordion-body p-0">
+                  <div class="phase-map" id="mapGps" aria-label="Map of where the photo was taken"></div>
+                  <div class="p-3" id="gpsBody"></div>
+                </div>
               </div>
             </div>
 
@@ -290,6 +286,14 @@
 
                   <div class="px-3 pt-3" id="nearbyStatus"></div>
                   <div class="list-group list-group-flush" id="nearbyList"></div>
+
+                  <div class="phase-map border-top" id="mapNear"
+                       aria-label="Map of the photo and the entities near it"></div>
+
+                  <!-- Details of whichever entity is selected, in the list or on the map -->
+                  <div class="border-top p-3 d-none" id="featureDetail"></div>
+
+                  <div class="p-3 d-grid" id="nearbyCta"></div>
 
                   <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
                   <p class="text-body-secondary small px-3 py-2 mb-0">
@@ -382,24 +386,12 @@
 
       </aside>
 
-      <!-- Map, with the selected entity's details directly beneath it -->
-      <main class="col-lg-8 col-xl-9 app-pane">
-        <div class="map-wrap position-relative">
-          <div id="map" aria-label="Map of the photo location"></div>
-
-          <div class="position-absolute top-0 start-50 translate-middle-x mt-3 px-3 w-100"
-               style="z-index:500; max-width:36rem; pointer-events:none">
-            <div id="alertHost"></div>
-          </div>
-        </div>
-
-        <!-- Details of whichever entity is selected, in the list or on the map -->
-        <div class="detail-pane bg-body border-top p-3 safe-bottom d-none" id="featureDetail"></div>
-      </main>
-
     </div>
   </div>
 </div>
+
+<!-- Transient notices, anchored to the viewport rather than to any one section. -->
+<div class="toast-host px-3" id="alertHost"></div>
 
 <!-- Kept outside the accordion so it stays reachable while the upload pane is hidden. -->
 <input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif">
@@ -466,14 +458,28 @@
     (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
 
   /* ---------- map ---------- */
-  const map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
+  /* Two maps, each owned by the phase that needs it, and both locked: the user
+     never pans or zooms, so a swipe over a map scrolls the page as it should and
+     the view is always the one the step means to show. Markers stay clickable. */
+  const LOCKED = {
+    zoomControl: false, attributionControl: true,
+    dragging: false, touchZoom: false, scrollWheelZoom: false,
+    doubleClickZoom: false, boxZoom: false, keyboard: false,
+  };
 
-  L.control.zoom({ position: 'bottomright' }).addTo(map);
-  L.control.scale({ imperial: true, position: 'bottomleft' }).addTo(map);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
+  const maps = {};
+  function getMap(id) {
+    if (maps[id]) return maps[id];
+    const m = L.map(id, LOCKED).setView([20, 0], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(m);
+    maps[id] = m;
+    return m;
+  }
+  // A map built inside a collapsed panel measures zero; re-measure on reveal.
+  const remeasure = id => { const m = maps[id]; if (m) setTimeout(() => m.invalidateSize(), 60); };
 
   /* ---------- nearby features (Overpass) ---------- */
 
@@ -981,7 +987,12 @@ out center tags 250;`;
     }
   }
 
-  const openPhase = name => bootstrap.Collapse.getOrCreateInstance($(`phase${name}`)).show();
+  /* Bootstrap's Collapse constructor honours config.toggle, which defaults to
+     true — so merely *creating* an instance flips the panel, and with
+     data-bs-parent that cascades into collapsing its siblings. Always pass
+     toggle:false and drive it explicitly. */
+  const collapse = el => bootstrap.Collapse.getOrCreateInstance(el, { toggle: false });
+  const openPhase = name => collapse($(`phase${name}`)).show();
 
   /* ---------- phase 1: the photo ---------- */
 
@@ -1026,7 +1037,6 @@ out center tags 250;`;
     renderGps();
     if (photo.lat != null) {
       plotPhoto();
-      $('btnFit').disabled = false;
       $('btnExport').disabled = false;
     }
     openPhase('Gps');
@@ -1087,23 +1097,23 @@ out center tags 250;`;
     $('btnGoNearby').addEventListener('click', () => openPhase('Nearby'));
   }
 
+  const photoIcon = () => L.divIcon({
+    className: '',
+    html: '<div class="pin text-bg-danger"><span><i class="bi bi-camera-fill"></i></span></div>',
+    iconSize: [32, 32], iconAnchor: [16, 30], popupAnchor: [0, -28],
+  });
+
+  /** The photo appears on both maps; each one owns its own marker instance. */
   function plotPhoto() {
-    photo.marker = L.marker([photo.lat, photo.lon], {
-      icon: L.divIcon({
-        className: '',
-        html: '<div class="pin text-bg-danger"><span><i class="bi bi-camera-fill"></i></span></div>',
-        iconSize: [32, 32], iconAnchor: [16, 30], popupAnchor: [0, -28],
-      }),
-      title: photo.name, zIndexOffset: 1000,
-    }).addTo(map).bindPopup(`
-      <div class="text-center">
-        ${photo.thumb ? `<img class="thumb-lg mb-2" src="${esc(photo.thumb)}" alt="">` : ''}
-        <div class="fw-semibold text-truncate">${esc(photo.name)}</div>
-        <div class="small text-body-secondary coords">
-          ${fmtCoord(photo.lat, ['N', 'S'])}, ${fmtCoord(photo.lon, ['E', 'W'])}
-        </div>
-      </div>`);
-    map.setView([photo.lat, photo.lon], 17);
+    photo.markers = {};
+    for (const id of ['mapGps', 'mapNear']) {
+      const m = getMap(id);
+      photo.markers[id] = L.marker([photo.lat, photo.lon], {
+        icon: photoIcon(), title: photo.name, zIndexOffset: 1000,
+      }).addTo(m);
+      m.setView([photo.lat, photo.lon], 17);
+      m.invalidateSize();
+    }
   }
 
   /* ---------- phase 3: nearby entities ---------- */
@@ -1179,9 +1189,13 @@ out center tags 250;`;
   };
 
   function clearNearbyLayers() {
-    for (const m of nearbyMarkers.values()) map.removeLayer(m);
+    const near = maps.mapNear;
+    if (near) {
+      for (const m of nearbyMarkers.values()) near.removeLayer(m);
+      if (placeLine) near.removeLayer(placeLine);
+    }
     nearbyMarkers.clear();
-    if (placeLine) { map.removeLayer(placeLine); placeLine = null; }
+    placeLine = null;
   }
 
   /* Every entity in the current list also exists as a point on the map. */
@@ -1194,7 +1208,7 @@ out center tags 250;`;
         riseOnHover: true,
       // Deliberately terse: the detail pane sits directly under the map and
       // carries the full record, so a tall popup would only hide the map.
-      }).addTo(map).bindPopup(`
+      }).addTo(getMap('mapNear')).bindPopup(`
         <div class="text-center">
           <div class="fw-semibold">${esc(f.name || f.category)}</div>
           <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} away</div>
@@ -1232,23 +1246,19 @@ out center tags 250;`;
       const el = document.createElement('button');
       el.type = 'button';
       el.dataset.feature = f.id;
-      el.className = `list-group-item list-group-item-action d-flex align-items-center gap-3${chosen ? ' active' : ''}`;
+      el.dataset.kind = f.kind;
+      // One line per entity: icon, name, category, distance. The Business/Object
+      // split lives in the filter above, so repeating it on every row was noise.
+      el.className = `list-group-item list-group-item-action d-flex align-items-center gap-2 py-2${chosen ? ' active' : ''}`;
       el.innerHTML = `
-        <i class="bi bi-${f.icon} fs-5 flex-shrink-0"></i>
-        <div class="flex-grow-1 min-w-0 text-start">
-          <div class="text-truncate">
-            <span class="fw-medium">${esc(f.name || f.category)}</span>
-            ${f.name ? `<span class="text-body-secondary small ms-1">${esc(f.category)}</span>` : ''}
-            <span class="badge text-bg-success ms-1 ${photo.entity?.id === f.id ? '' : 'd-none'}"
-                  data-locked><i class="bi bi-check2-circle me-1"></i>Using</span>
-          </div>
-          <div class="small ${chosen ? '' : 'text-body-secondary'}">
-            <span class="badge rounded-pill ${f.kind === 'place' ? 'text-bg-primary' : 'text-bg-secondary'} me-1">
-              ${f.kind === 'place' ? 'Business' : 'Object'}
-            </span>
-            <span class="coords">${fmtDistance(f.distance)} away</span>
-          </div>
-        </div>
+        <i class="bi bi-${f.icon} flex-shrink-0"></i>
+        <span class="text-truncate flex-grow-1 text-start">
+          <span class="fw-medium">${esc(f.name || f.category)}</span>
+          ${f.name ? `<span class="${chosen ? '' : 'text-body-secondary'} small ms-1">${esc(f.category)}</span>` : ''}
+        </span>
+        <i class="bi bi-check2-circle text-success flex-shrink-0 ${photo.entity?.id === f.id ? '' : 'd-none'}"
+           data-locked title="Using this entity"></i>
+        <span class="small coords flex-shrink-0 ${chosen ? '' : 'text-body-secondary'}">${fmtDistance(f.distance)}</span>
         <i class="bi bi-${chosen ? 'check-circle-fill' : 'circle'} flex-shrink-0"></i>`;
       el.addEventListener('click', () => {
         // First tap looks at it, a quick second tap commits to it. Selection happens
@@ -1262,6 +1272,25 @@ out center tags 250;`;
     renderSource(photo.nearby);
     plotNearby(shown);
     renderFeatureDetail();
+    renderNearbyCta();
+  }
+
+  /* The step's one obvious next action, always last and always primary. */
+  function renderNearbyCta() {
+    const host = $('nearbyCta');
+    const sel = photo.place, locked = photo.entity;
+    if (locked) {
+      host.innerHTML = `<button class="btn btn-primary" type="button" id="btnCtaSchema">
+        How is this described?<i class="bi bi-arrow-right ms-1"></i></button>`;
+      $('btnCtaSchema').addEventListener('click', () => openPhase('Schema'));
+    } else if (sel) {
+      host.innerHTML = `<button class="btn btn-primary" type="button" id="btnCtaUse">
+        <i class="bi bi-check2-circle me-1"></i>Use ${esc(sel.name || sel.category)}</button>`;
+      $('btnCtaUse').addEventListener('click', () => lockEntity(sel));
+    } else {
+      host.innerHTML = '<button class="btn btn-primary" type="button" disabled>'
+        + 'Pick something from the list</button>';
+    }
   }
 
   /* Which mirror answered, and how old its data is. A busy primary sends us to a
@@ -1308,18 +1337,19 @@ out center tags 250;`;
       if (f) marker.setIcon(dotIcon(f, feature?.id === id));
     }
 
-    if (placeLine) { map.removeLayer(placeLine); placeLine = null; }
+    const near = getMap('mapNear');
+    if (placeLine) { near.removeLayer(placeLine); placeLine = null; }
 
     if (feature) {
       // Leaflet writes stroke as an SVG attribute, which will not resolve a CSS variable.
       const success = getComputedStyle(document.documentElement)
         .getPropertyValue('--bs-success').trim() || '#198754';
       placeLine = L.polyline([[photo.lat, photo.lon], [feature.lat, feature.lon]],
-        { color: success, weight: 2, dashArray: '4 4', opacity: .85 }).addTo(map);
+        { color: success, weight: 2, dashArray: '4 4', opacity: .85 }).addTo(near);
 
       if (source === 'list') {
         // Came from the list: show it on the map.
-        map.fitBounds(placeLine.getBounds(), { padding: [90, 90], maxZoom: 19 });
+        near.fitBounds(placeLine.getBounds(), { padding: [70, 70], maxZoom: 19 });
         scrollToMap = matchMedia('(max-width: 991.98px)').matches;
         // On a phone the map is short; the green marker plus the detail pane
         // below already identify the pick, so don't cover the map with a popup.
@@ -1336,10 +1366,11 @@ out center tags 250;`;
       const on = row.dataset.feature === feature?.id;
       row.classList.toggle('active', on);
       row.lastElementChild.className = `bi bi-${on ? 'check-circle-fill' : 'circle'} flex-shrink-0`;
-      row.querySelector('.small')?.classList.toggle('text-body-secondary', !on);
+      for (const el of row.querySelectorAll('.small')) el.classList.toggle('text-body-secondary', !on);
     }
 
     renderFeatureDetail();
+    renderNearbyCta();
 
     // Scroll last: the detail pane has just been un-hidden below the map, and
     // until it exists the page cannot scroll far enough to bring the map up.
@@ -1348,7 +1379,7 @@ out center tags 250;`;
     clearTimeout(pendingScroll);
     if (scrollToMap) {
       pendingScroll = setTimeout(() =>
-        document.querySelector('.map-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' }), 470);
+        $('mapNear').scrollIntoView({ behavior: 'smooth', block: 'start' }), 470);
     }
   }
 
@@ -1408,23 +1439,26 @@ out center tags 250;`;
 
     $('btnClearPlace').addEventListener('click', () => choosePlace(null, 'list'));
 
+    // Committing lives in the step's primary button at the end of the section.
+    // Only the reverse — releasing — needs an affordance here, next to the state
+    // it undoes; two "use this" buttons on one screen would just compete.
     const locked = photo.entity?.id === f.id;
     const use = document.createElement('button');
     use.type = 'button';
     use.id = 'btnUseEntity';
-    use.className = `btn w-100 mt-2 ${locked ? 'btn-success' : 'btn-outline-success'}`;
+    use.className = `btn btn-sm w-100 mt-2 ${locked ? 'btn-outline-secondary' : 'btn-outline-success'}`;
     use.setAttribute('aria-pressed', String(locked));
     use.innerHTML = locked
-      ? '<i class="bi bi-check2-circle me-1"></i>Using this entity'
-      : '<i class="bi bi-circle me-1"></i>Use this entity';
+      ? '<i class="bi bi-x-circle me-1"></i>Stop using this entity'
+      : '<i class="bi bi-check2-circle me-1"></i>Use this entity';
     use.addEventListener('click', () => locked ? unlockEntity() : lockEntity(f));
     host.appendChild(use);
 
     const hint = document.createElement('p');
     hint.className = 'text-body-secondary small text-center mt-2 mb-0';
     hint.textContent = locked
-      ? 'Locked in — the tag schema is in step 4.'
-      : 'Or double-tap it in the list or on the map.';
+      ? 'Committed — the tag schema is step 4.'
+      : 'Double-tapping it in the list or on the map does the same.';
     host.appendChild(hint);
   }
 
@@ -1475,8 +1509,8 @@ out center tags 250;`;
     $('schemaBody').replaceChildren();
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
-    bootstrap.Collapse.getOrCreateInstance($('phaseSchema')).hide();
-    bootstrap.Collapse.getOrCreateInstance($('phaseVision')).hide();
+    collapse($('phaseSchema')).hide();
+    collapse($('phaseVision')).hide();
   }
 
   /* ---------- phase 4: the tag schema for that entity type ---------- */
@@ -1621,6 +1655,11 @@ out center tags 250;`;
         </div></div>` : ''}
 
       <div class="p-3">
+        <div class="d-grid mb-3">
+          <button class="btn btn-primary" type="button" id="btnCtaVision">
+            Describe the photo<i class="bi bi-arrow-right ms-1"></i>
+          </button>
+        </div>
         <div class="d-grid gap-2">
           <a class="btn btn-sm btn-outline-secondary" href="${wikiUrl}" target="_blank" rel="noopener">
             <i class="bi bi-book me-1"></i>Full documentation on the OSM wiki
@@ -1649,6 +1688,7 @@ out center tags 250;`;
     setPhase('Vision', { state: 'todo', summary: '', enabled: true });
     prepareVision();
 
+    $('btnCtaVision').addEventListener('click', () => openPhase('Vision'));
     $('btnRefreshSchema').addEventListener('click', () => {
       dropCache(CACHE_PREFIX, s.pair);
       loadSchema(f);
@@ -1845,73 +1885,92 @@ out center tags 250;`;
       };
       if (model?.reasoning) body.reasoning = { enabled: true };
 
-      const res = await fetch(`${OPENROUTER}/chat/completions`, {
-        method: 'POST',
-        signal: visionAbort.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${settings.apiKey}`,
-          'HTTP-Referer': location.origin,
-          'X-Title': 'Photo Map',
-        },
-        body: JSON.stringify(body),
+      let think = '', out = '', usage = null;
+
+      // XHR rather than fetch: fetch cannot report upload progress, and the
+      // photo is the bulk of the request. xhr.upload gives real byte counts, and
+      // the growing responseText carries the SSE stream just as well.
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        visionAbort.signal.addEventListener('abort', () => xhr.abort());
+
+        xhr.open('POST', `${OPENROUTER}/chat/completions`);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', `Bearer ${settings.apiKey}`);
+        xhr.setRequestHeader('HTTP-Referer', location.origin);
+        xhr.setRequestHeader('X-Title', 'Photo Map');
+
+        xhr.upload.onprogress = e => {
+          if (!e.lengthComputable) return;
+          const pct = Math.round((e.loaded / e.total) * 100);
+          visStatus(`<span class="d-block mb-1">Uploading the photo — ${fmtSize(e.loaded)} of ${fmtSize(e.total)}</span>
+            <span class="progress" style="height:.4rem" role="progressbar" aria-label="Upload progress"
+                  aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100">
+              <span class="progress-bar" style="width:${pct}%"></span></span>`);
+        };
+        xhr.upload.onload = () => visStatus(
+          '<span class="spinner-border spinner-border-sm me-1"></span>Uploaded — waiting for the model…');
+
+        let seen = 0;
+        const consume = () => {
+          const text = xhr.responseText;
+          const chunk = text.slice(seen);
+          const cut = chunk.lastIndexOf('\n');
+          if (cut < 0) return;
+          seen += cut + 1;
+          for (const line of chunk.slice(0, cut).split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;   // ": OPENROUTER PROCESSING" keep-alives
+            const payload = trimmed.slice(5).trim();
+            if (payload === '[DONE]') return;
+            let parsed;
+            try { parsed = JSON.parse(payload); } catch { continue; }
+            if (parsed.error) { reject(new Error(parsed.error.message || 'stream error')); return; }
+            if (parsed.usage) usage = parsed.usage;
+
+            const d = parsed.choices?.[0]?.delta || {};
+            const reasoning = d.reasoning ?? d.reasoning_content;
+            if (reasoning) {
+              if (!think) {
+                $('visThinkTab').disabled = false;
+                $('visThinkText').classList.add('cursor-blink');
+                bootstrap.Tab.getOrCreateInstance($('visThinkTab')).show();
+                visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
+              }
+              think += reasoning;
+              $('visThinkText').textContent = think;
+              $('visThinkText').scrollTop = $('visThinkText').scrollHeight;
+            }
+            if (d.content) {
+              if (!out) {
+                $('visThinkText').classList.remove('cursor-blink');
+                bootstrap.Tab.getOrCreateInstance($('visOutTab')).show();
+                visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Writing…');
+              }
+              out += d.content;
+              $('visOutText').textContent = out;
+              $('visOutText').scrollTop = $('visOutText').scrollHeight;
+            }
+          }
+        };
+
+        xhr.onprogress = consume;
+        xhr.onerror = () => reject(new Error('network error reaching OpenRouter'));
+        xhr.onabort = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        xhr.onload = () => {
+          if (xhr.status < 200 || xhr.status >= 300) {
+            let detail = (xhr.responseText || '').slice(0, 300);
+            try { detail = JSON.parse(xhr.responseText).error?.message || detail; } catch { /* raw */ }
+            reject(new Error(`HTTP ${xhr.status} — ${detail}`));
+            return;
+          }
+          consume();
+          resolve();
+        };
+
+        $('visOutText').classList.add('cursor-blink');
+        xhr.send(JSON.stringify(body));
       });
-
-      if (!res.ok) {
-        const text = await res.text();
-        let detail = text.slice(0, 300);
-        try { detail = JSON.parse(text).error?.message || detail; } catch { /* keep raw */ }
-        throw new Error(`HTTP ${res.status} — ${detail}`);
-      }
-
-      let think = '', out = '', usage = null, stopped = false;
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      $('visOutText').classList.add('cursor-blink');
-
-      while (!stopped) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();                       // keep the partial line
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;   // ": OPENROUTER PROCESSING" keep-alives
-          const payload = trimmed.slice(5).trim();
-          if (payload === '[DONE]') { stopped = true; break; }
-          let chunk;
-          try { chunk = JSON.parse(payload); } catch { continue; }
-          if (chunk.error) throw new Error(chunk.error.message || 'stream error');
-          if (chunk.usage) usage = chunk.usage;
-
-          const delta = chunk.choices?.[0]?.delta || {};
-          const reasoning = delta.reasoning ?? delta.reasoning_content;
-          if (reasoning) {
-            if (!think) {
-              $('visThinkTab').disabled = false;
-              $('visThinkText').classList.add('cursor-blink');
-              bootstrap.Tab.getOrCreateInstance($('visThinkTab')).show();
-              visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Thinking…');
-            }
-            think += reasoning;
-            $('visThinkText').textContent = think;
-            $('visThinkText').scrollTop = $('visThinkText').scrollHeight;
-          }
-          if (delta.content) {
-            if (!out) {
-              $('visThinkText').classList.remove('cursor-blink');
-              bootstrap.Tab.getOrCreateInstance($('visOutTab')).show();
-              visStatus('<span class="spinner-border spinner-border-sm me-1"></span>Writing…');
-            }
-            out += delta.content;
-            $('visOutText').textContent = out;
-            $('visOutText').scrollTop = $('visOutText').scrollHeight;
-          }
-        }
-      }
 
       if (!out && !think) throw new Error('the model returned nothing');
 
@@ -1934,17 +1993,8 @@ out center tags 250;`;
 
   function resetMapLayers() {
     clearNearbyLayers();
-    if (photo?.marker) map.removeLayer(photo.marker);
+    for (const [id, mk] of Object.entries(photo?.markers || {})) maps[id]?.removeLayer(mk);
     if (photo?.thumb?.startsWith('blob:')) URL.revokeObjectURL(photo.thumb);
-  }
-
-  function fitEverything() {
-    const pts = [];
-    if (photo?.marker) pts.push(photo.marker.getLatLng());
-    for (const m of nearbyMarkers.values()) pts.push(m.getLatLng());
-    if (!pts.length) return;
-    if (pts.length === 1) map.setView(pts[0], 17);
-    else map.fitBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: 18 });
   }
 
   function startOver() {
@@ -1968,10 +2018,9 @@ out center tags 250;`;
     setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
-    $('btnFit').disabled = true;
     $('btnExport').disabled = true;
     openPhase('Photo');
-    map.setView([20, 0], 2);
+    for (const m of Object.values(maps)) m.setView([20, 0], 2);
   }
 
   function exportGeoJson() {
@@ -2007,7 +2056,7 @@ out center tags 250;`;
       if (photo.lat == null) {
         flashAlert('That photo carries no GPS data, so it cannot be placed on the map.', 'warning');
       } else if (matchMedia('(max-width: 991.98px)').matches) {
-        document.querySelector('.map-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        $('mapGps').scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
   }
@@ -2017,6 +2066,7 @@ out center tags 250;`;
 
   $('btnChoose').addEventListener('click', () => fileInput.click());
   $('btnReplace').addEventListener('click', () => { startOver(); fileInput.click(); });
+  $('btnGoGps').addEventListener('click', () => openPhase('Gps'));
   $('dropzone').addEventListener('click', () => fileInput.click());
   $('dropzone').addEventListener('keydown', e => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
@@ -2063,12 +2113,13 @@ out center tags 250;`;
     if (photo?.entity) renderVisionControls();
   });
 
-  $('btnFit').addEventListener('click', fitEverything);
   $('btnExport').addEventListener('click', exportGeoJson);
   $('btnTheme').addEventListener('click', () =>
     setTheme(document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark'));
 
-  addEventListener('resize', () => map.invalidateSize());
+  addEventListener('resize', () => { for (const m of Object.values(maps)) m.invalidateSize(); });
+  $('phaseGps').addEventListener('shown.bs.collapse', () => remeasure('mapGps'));
+  $('phaseNearby').addEventListener('shown.bs.collapse', () => remeasure('mapNear'));
 })();
 </script>
 </body>

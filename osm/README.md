@@ -10,43 +10,50 @@ plain static file and makes no network calls beyond map tiles and the Overpass A
 ## Layout
 
 The page is built mobile first, targeting an iPhone held portrait — an iPhone 17 is
-402 × 874 CSS px. The base stylesheet is the phone layout and the desktop split-pane is
-the `min-width: 992px` override, not the other way round.
+402 × 874 CSS px. The base stylesheet is the phone layout; the `min-width: 992px` override
+only widens the maps and tightens the padding.
 
-There is no app title and no persistent chrome. A small toolbar sits at the top, but it is
-**ordinary content, not sticky** — it scrolls away as soon as you move down the page, so it
-costs nothing while you work, and it is there again when you scroll back to the top.
+One centred column of phases at every width — there is no page-level map and no split
+pane. A small toolbar sits at the top, but it is **ordinary content, not sticky** — it
+scrolls away as soon as you move down the page.
+
+**Each map belongs to the phase that needs it**: step 2 has a map of where the photo was
+taken, step 3 has a map of the photo and the entities around it. Both are **locked** — no
+dragging, no zooming, no wheel, no zoom control — so a swipe over a map scrolls the page
+as it should, and the view is always the one the step means to show. They frame themselves
+and re-frame when you pick an entity, which is why there is no longer a Fit button.
+
+**Every phase ends with one primary blue button** — the obvious thing to press to make
+progress: *Where was it taken?* → *Find what's nearby* → *Use &lt;entity&gt;* → *How is this
+described?* → *Describe the photo*. Secondary actions stay outlined so they never compete
+with it.
 
 Every button carries a visible text label, not just an icon, and a `title` that spells out
 what it does:
 
 | Button | What it does |
 | --- | --- |
-| **Fit map** | Zooms the map out until the photo pin and every nearby entity dot fit on screen at once. Disabled until a photo with coordinates is loaded. |
 | **GeoJSON** | Downloads `photo-location.geojson` — one Point feature at the photo's coordinates, with its filename, capture time, camera, and the entity you committed to (its OSM id, name, tag and distance). Disabled until a photo with coordinates is loaded. |
 | **Theme** | Switches between the light and dark colour scheme. The page already follows the device setting, so this is only an override, and the choice is remembered. |
 | **Settings** | OpenRouter API key and the vision model used in step 5. See below. |
 
-The row wraps, so more buttons can be added. On a 402 px screen the three above use 287 px
-of 386 px; a fourth (a Settings button, say) needs about 93 px and so will fall to a second
-row — harmless for a bar that scrolls away, and avoidable by shortening a label.
+The row wraps, so more buttons can be added.
 
-On a phone the page scrolls: phases, then the map, then the details of whatever is
-selected. **The detail pane always sits directly under the map**, so picking an entity
-from the list scrolls the map to the top of the viewport and leaves the map and the start
-of its details on screen together. On desktop the same relationship holds vertically
-inside the right-hand column — map above, details below, sidebar to the left.
+Within step 3 the order is list, then map, then the details of whatever is selected —
+**the detail pane always sits directly under that step's map**, so picking an entity
+scrolls the map to the top of the viewport and leaves the map and the start of its details
+on screen together.
 
 Other phone-specific handling: `viewport-fit=cover` plus `env(safe-area-inset-*)` so the
-Dynamic Island and home indicator do not overlap content; ~44 px minimum tap targets;
-no nested scroll regions (the list scrolls inside itself only on desktop); the scale bar
-is hidden where it would collide with the attribution; and marker popups are deliberately
-terse, because a tall popup covers most of a 45 dvh map when the full record is already
-in the pane below it.
+Dynamic Island and home indicator do not overlap content; ~44 px minimum tap targets; no
+nested scroll regions; the scale bar is hidden where it would collide with the
+attribution; and marker popups are deliberately terse and skipped entirely on phone list
+selections, because a tall popup covers most of a short map when the full record is
+already in the pane below it.
 
 ## Phases
 
-The sidebar is a vertical accordion, one phase at a time. Each header carries a status
+The page is a vertical accordion, one phase at a time. Each header carries a status
 dot — grey for pending, green tick for done, amber for a problem — and a one-line
 summary, so the collapsed phases still tell you where things stand. Later phases stay
 locked until the earlier ones can supply what they need.
@@ -79,24 +86,26 @@ things:
 - **A single click or tap selects** — highlights the point green, draws the connector,
   fills the detail pane. Cheap and reversible; browse as many as you like.
 - **A double click or double tap commits** — on the row or on the map point. That locks
-  the entity in, fetches its tag schema, and unlocks step 4. The **Use this entity**
-  toggle under the details does the same thing, and pressing it again releases it.
+  the entity in, fetches its tag schema, and unlocks step 4. The step's primary button at
+  the end of the section (*Use &lt;entity&gt;*) does the same thing, as does the smaller
+  **Use this entity** button in the detail pane; once committed that button becomes
+  *Stop using this entity*, which is the only way back.
 
 Selection is never delayed waiting to see whether a second tap arrives: the first tap
 acts immediately and the second one escalates. The map scroll that follows a selection on
 mobile *is* deferred past the double-tap window, though — scrolling the list out from
 under a finger would make the second tap impossible to land.
 
-A committed entity keeps a green ring on the map and a **Using** badge in the list, even
-while you select other entities to compare against it.
+A committed entity keeps a green ring on the map and a green tick in the list, even while
+you select other entities to compare against it.
 
 ## Nearby entities
 
 Every entity in the list is also drawn on the map as an **amber dot**, distinct from the
 photo's red pin. Selection is two-way:
 
-- click a **row** and its point turns green, grows, opens its popup, and the map pans to
-  fit it together with the photo;
+- click a **row** and its point turns green and grows, and the map re-frames to fit it
+  together with the photo;
 - click a **point** and the matching row goes active and scrolls into view.
 
 Either way a dashed connector is drawn back to the photo and the full details appear in
@@ -107,7 +116,9 @@ them without losing sight of the map.
 
 - **Businesses / Objects** filters split shops, restaurants, hotels and offices from
   street furniture such as waste baskets, post boxes, benches, hydrants and bus stops.
-  Filtering re-plots the map so it always matches the list.
+  Filtering re-plots the map so it always matches the list. Rows are one line each —
+  icon, name, category, distance — 41 px rather than the 86 px a two-line row took; the
+  Business/Object label lives in the filter above, so repeating it per row was noise.
 - The search starts at 150 m and widens automatically (400 m, 1 km, 2.5 km) when an area
   is too sparse to fill the list; **Wider** steps it out manually.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
@@ -197,7 +208,10 @@ of one operation rather than three steps:
   stops thinking and starts writing. Word count, token counts and cost land underneath
   when it finishes.
 
-There is a Stop button while a request is in flight.
+A **progress bar reports the upload** byte by byte while the photo goes up — `fetch` cannot
+report upload progress, so this step uses `XMLHttpRequest`, whose `upload` events give real
+byte counts and whose growing `responseText` carries the SSE stream just as well. There is a
+Stop button while a request is in flight.
 
 ### What the prompt contains
 
