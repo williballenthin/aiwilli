@@ -27,26 +27,30 @@
 
   /* viewport-fit=cover means the Dynamic Island and the home indicator
      overlap the page unless we inset it ourselves. */
+  /* No chrome at all: the phases start at the top of the viewport, so the shell
+     itself carries the insets that a header would otherwise have absorbed. */
   .app-shell {
     min-height: 100dvh;
     display: flex;
     flex-direction: column;
+    padding-top: env(safe-area-inset-top);
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
     padding-bottom: env(safe-area-inset-bottom);
   }
-  .navbar { padding-top: calc(.5rem + env(safe-area-inset-top)); position: sticky; top: 0; z-index: 1030; }
   .safe-bottom { padding-bottom: calc(.5rem + env(safe-area-inset-bottom)); }
 
-  /* Map sits between the phases and the details, and is scrolled to on
-     selection — so it needs to clear the sticky navbar when it lands. */
   #map { height: 45dvh; background: var(--bs-tertiary-bg); }
-  .map-wrap { scroll-margin-top: 3.25rem; }
+  .map-wrap { scroll-margin-top: .5rem; }
+
+  /* Map-corner buttons, sized to match Leaflet's own zoom control. */
+  .leaflet-bar a.map-btn { display: grid; place-items: center; font-size: 1rem; }
+  .leaflet-bar a.map-btn.is-disabled { opacity: .4; pointer-events: none; }
 
   /* Comfortable touch targets: iOS wants ~44px. */
-  .navbar .btn { min-width: 2.75rem; min-height: 2.75rem; }
   .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; }
   .accordion-button { padding-top: 1rem; padding-bottom: 1rem; }
+  .leaflet-touch .leaflet-bar a { width: 2.25rem; height: 2.25rem; line-height: 2.25rem; }
   .leaflet-container { font: inherit; }
   .leaflet-popup-content { margin: .75rem; min-width: 12rem; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
@@ -102,7 +106,7 @@
   .leaflet-control-scale { display: none; }
 
   /* ---------------------------------------------------------------
-     Desktop: navbar plus one non-scrolling row that owns the viewport.
+     Desktop: one non-scrolling row that owns the whole viewport.
      Sidebar scrolls on its own; the map column holds map over details.
      --------------------------------------------------------------- */
   @media (min-width: 992px) {
@@ -110,7 +114,6 @@
     body { overflow: hidden; }
 
     .app-shell { height: 100dvh; }
-    .navbar { position: static; }
     .app-body { flex: 1 1 auto; min-height: 0; }
     .app-pane { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 
@@ -125,7 +128,6 @@
     #nearbyList { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
 
     .leaflet-control-scale { display: block; }
-    .navbar .btn { min-width: 0; min-height: 0; }
     .btn-group-sm > .btn { padding: .25rem .5rem; font-size: .875rem; }
     .accordion-button { padding-top: .75rem; padding-bottom: .75rem; }
   }
@@ -134,29 +136,6 @@
 
 <body class="bg-body-tertiary">
 <div class="app-shell">
-
-  <nav class="navbar navbar-expand bg-body border-bottom flex-shrink-0">
-    <div class="container-fluid">
-      <span class="navbar-brand d-flex align-items-center gap-2 mb-0 min-w-0">
-        <i class="bi bi-pin-map-fill text-primary"></i>
-        <span class="fw-semibold">Photo Map</span>
-      </span>
-      <div class="ms-auto d-flex align-items-center gap-2">
-        <button class="btn btn-sm btn-outline-secondary" type="button" id="btnFit" disabled
-                data-bs-toggle="tooltip" data-bs-title="Zoom to fit the photo and everything found near it">
-          <i class="bi bi-arrows-fullscreen"></i><span class="d-none d-md-inline ms-1">Fit</span>
-        </button>
-        <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport" disabled
-                data-bs-toggle="tooltip" data-bs-title="Download this location as GeoJSON">
-          <i class="bi bi-download"></i><span class="d-none d-md-inline ms-1">GeoJSON</span>
-        </button>
-        <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme"
-                data-bs-toggle="tooltip" data-bs-title="Toggle light / dark">
-          <i class="bi bi-circle-half"></i>
-        </button>
-      </div>
-    </div>
-  </nav>
 
   <div class="container-fluid app-body">
     <div class="row g-0 h-100">
@@ -309,6 +288,15 @@
             </div>
 
           </div>
+
+          <!-- Appearance follows the system; this is only an override, so it sits
+               past every phase rather than taking space at the top. -->
+          <div class="p-3 d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme">
+              <i class="bi bi-circle-half me-1"></i>Light / dark
+            </button>
+            <span class="small text-body-secondary">Follows your device by default.</span>
+          </div>
         </div>
 
       </aside>
@@ -358,6 +346,20 @@
 
   /* ---------- map ---------- */
   const map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
+
+  // "Fit" is a map action, so it lives on the map rather than costing page height.
+  const fitControl = L.control({ position: 'bottomright' });
+  fitControl.onAdd = () => {
+    const bar = L.DomUtil.create('div', 'leaflet-bar');
+    bar.innerHTML = '<a href="#" class="map-btn is-disabled" id="btnFit" role="button" ' +
+      'title="Fit the photo and everything near it" ' +
+      'aria-label="Fit the photo and everything near it"><i class="bi bi-arrows-fullscreen"></i></a>';
+    L.DomEvent.disableClickPropagation(bar);
+    L.DomEvent.on(bar, 'click', e => { L.DomEvent.preventDefault(e); fitEverything(); });
+    return bar;
+  };
+  fitControl.addTo(map);
+
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.control.scale({ imperial: true, position: 'bottomleft' }).addTo(map);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -818,8 +820,7 @@ out center tags 250;`;
     renderGps();
     if (photo.lat != null) {
       plotPhoto();
-      $('btnFit').disabled = false;
-      $('btnExport').disabled = false;
+      $('btnFit').classList.remove('is-disabled');
     }
     openPhase('Gps');
   }
@@ -868,6 +869,9 @@ out center tags 250;`;
            target="_blank" rel="noopener" id="gpsOsmLink">
           <i class="bi bi-box-arrow-up-right me-1"></i>View this spot on OpenStreetMap
         </a>
+        <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport">
+          <i class="bi bi-download me-1"></i>Download as GeoJSON
+        </button>
         <button class="btn btn-sm btn-primary" type="button" id="btnGoNearby">
           <i class="bi bi-pin-map me-1"></i>Find what's nearby
         </button>
@@ -877,6 +881,7 @@ out center tags 250;`;
       summary: `${fmtCoord(photo.lat, ['N', 'S'])}, ${fmtCoord(photo.lon, ['E', 'W'])}` });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: true });
     $('btnGoNearby').addEventListener('click', () => openPhase('Nearby'));
+    $('btnExport').addEventListener('click', exportGeoJson);
   }
 
   function plotPhoto() {
@@ -1476,8 +1481,7 @@ out center tags 250;`;
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
     setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
-    $('btnFit').disabled = true;
-    $('btnExport').disabled = true;
+    $('btnFit').classList.add('is-disabled');
     openPhase('Photo');
     map.setView([20, 0], 2);
   }
@@ -1554,19 +1558,9 @@ out center tags 250;`;
     el.addEventListener('change', renderNearby);
   }
 
-  $('btnFit').addEventListener('click', fitEverything);
-  $('btnExport').addEventListener('click', exportGeoJson);
   $('btnTheme').addEventListener('click', () =>
     setTheme(document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark'));
 
-  // Tooltips only where there's a real pointer: on touch, a tap opens them and
-  // they linger over the controls they describe. aria-label covers the rest.
-  for (const el of document.querySelectorAll('[data-bs-toggle="tooltip"]')) {
-    el.setAttribute('aria-label', el.getAttribute('data-bs-title'));
-    // hover only: with the default hover+focus, clicking a button leaves its
-    // tooltip parked over the toolbar until you click elsewhere.
-    if (matchMedia('(hover: hover)').matches) new bootstrap.Tooltip(el, { trigger: 'hover' });
-  }
   addEventListener('resize', () => map.invalidateSize());
 })();
 </script>

@@ -13,9 +13,21 @@ The page is built mobile first, targeting an iPhone held portrait — an iPhone 
 402 × 874 CSS px. The base stylesheet is the phone layout and the desktop split-pane is
 the `min-width: 992px` override, not the other way round.
 
+There is **no header, title bar or toolbar**. On a phone every row of chrome is a row of
+content lost, so the phases start at the very top of the viewport and the shell itself
+carries the safe-area insets a header would otherwise have absorbed.
+
+The three actions that used to live in a top bar moved to where they belong:
+
+| Action | Now lives |
+| --- | --- |
+| Fit the map | a control on the map, beside the zoom buttons — costs no page height |
+| Download GeoJSON | step 2, next to the location it exports |
+| Light / dark | past every phase at the foot of the sidebar; appearance follows the device by default, so this is only an override |
+
 On a phone the page scrolls: phases, then the map, then the details of whatever is
 selected. **The detail pane always sits directly under the map**, so picking an entity
-from the list scrolls the map up under the sticky navbar and leaves the map and the top
+from the list scrolls the map to the top of the viewport and leaves the map and the start
 of its details on screen together. On desktop the same relationship holds vertically
 inside the right-hand column — map above, details below, sidebar to the left.
 
