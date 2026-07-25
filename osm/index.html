@@ -40,9 +40,20 @@
   .pin > span { transform: rotate(45deg); font-size: .75rem; font-weight: 600; line-height: 1; }
   .pin.is-active { outline: 3px solid var(--bs-primary-border-subtle); }
 
+  /* Nearby OSM entities: small amber dots, clearly not photo pins.
+     The one under inspection grows into a green pin. */
+  .dot { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%;
+         border: 2px solid var(--bs-body-bg); box-shadow: var(--bs-box-shadow-sm);
+         font-size: .7rem; transition: width .12s ease, height .12s ease; }
+  .dot.is-selected { width: 2.2rem; height: 2.2rem; font-size: .95rem; z-index: 1000; }
+
   .dropzone { border: 2px dashed var(--bs-border-color); border-radius: var(--bs-border-radius-lg);
               transition: border-color .15s ease-in-out, background-color .15s ease-in-out; cursor: pointer; }
   .dropzone:hover, .dropzone.is-dragging { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle); }
+  /* Once there are photos, the sidebar needs its vertical space for the lists. */
+  .dropzone.is-compact { padding: .5rem !important; }
+  .dropzone.is-compact .bi, .dropzone.is-compact .dz-hint { display: none; }
+  .dropzone.is-compact .dz-title { font-size: .875rem; margin: 0; }
 
   .thumb { width: 3.5rem; height: 3.5rem; object-fit: cover; border-radius: var(--bs-border-radius);
            background: var(--bs-secondary-bg); flex: 0 0 auto; }
@@ -55,6 +66,9 @@
 
   /* text-success on a selected (blue) row is close to unreadable. */
   .list-group-item.active [data-place] { color: var(--bs-list-group-active-color) !important; }
+
+  /* Keep the filters reachable once the results list scrolls. */
+  .nearby-head { position: sticky; top: 0; z-index: 2; background: var(--bs-body-bg); }
 
   /* Bootstrap ships no min-width utility, and a flex child defaults to
      min-width:auto — which stops .text-truncate from ever kicking in. */
@@ -105,8 +119,8 @@
           <div class="dropzone text-center p-4" id="dropzone" role="button" tabindex="0"
                aria-label="Add photos: click to choose files, or drop them here">
             <i class="bi bi-images fs-2 text-primary d-block mb-2"></i>
-            <p class="fw-semibold mb-1">Add photos</p>
-            <p class="text-body-secondary small mb-0">Tap to choose from your library, or drop files here</p>
+            <p class="fw-semibold mb-1 dz-title">Add photos</p>
+            <p class="text-body-secondary small mb-0 dz-hint">Tap to choose from your library, or drop files here</p>
           </div>
           <input class="visually-hidden" type="file" id="fileInput" accept="image/*,.heic,.heif" multiple>
 
@@ -140,18 +154,73 @@
           </div>
         </div>
 
-        <div class="scroll-y flex-grow-1" id="listPane">
-          <div class="p-4 text-center text-body-secondary" id="emptyState">
-            <i class="bi bi-geo-alt fs-1 d-block mb-2 opacity-50"></i>
-            <p class="mb-3">No photos yet. Add a few and they will appear on the map.</p>
-            <div class="alert alert-info text-start small mb-0" role="alert">
-              <i class="bi bi-info-circle me-1"></i>
-              <strong>On iPhone:</strong> pick <em>Photo Library</em>, then tap <em>Options</em> at the
-              bottom-left of the picker and turn <em>Location</em> on. It applies to this upload only.
-              Photos taken with <em>Take Photo</em> never carry GPS.
+        <ul class="nav nav-tabs nav-fill flex-shrink-0" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="tabPhotosBtn" data-bs-toggle="tab" data-bs-target="#panePhotos"
+                    type="button" role="tab" aria-controls="panePhotos" aria-selected="true">
+              <i class="bi bi-images me-1"></i>Photos
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tabNearbyBtn" data-bs-toggle="tab" data-bs-target="#paneNearby"
+                    type="button" role="tab" aria-controls="paneNearby" aria-selected="false" disabled>
+              <i class="bi bi-pin-map me-1"></i>Nearby
+              <span class="badge rounded-pill text-bg-secondary ms-1 d-none" id="nearbyCount">0</span>
+            </button>
+          </li>
+        </ul>
+
+        <div class="tab-content scroll-y flex-grow-1">
+          <div class="tab-pane fade show active" id="panePhotos" role="tabpanel" aria-labelledby="tabPhotosBtn">
+            <div class="p-4 text-center text-body-secondary" id="emptyState">
+              <i class="bi bi-geo-alt fs-1 d-block mb-2 opacity-50"></i>
+              <p class="mb-3">No photos yet. Add a few and they will appear on the map.</p>
+              <div class="alert alert-info text-start small mb-0" role="alert">
+                <i class="bi bi-info-circle me-1"></i>
+                <strong>On iPhone:</strong> pick <em>Photo Library</em>, then tap <em>Options</em> at the
+                bottom-left of the picker and turn <em>Location</em> on. It applies to this upload only.
+                Photos taken with <em>Take Photo</em> never carry GPS.
+              </div>
             </div>
+            <div class="list-group list-group-flush" id="photoList"></div>
           </div>
-          <div class="list-group list-group-flush" id="photoList"></div>
+
+          <div class="tab-pane fade" id="paneNearby" role="tabpanel" aria-labelledby="tabNearbyBtn">
+            <div class="p-3 border-bottom nearby-head">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <i class="bi bi-crosshair text-primary"></i>
+                <span class="small text-body-secondary text-truncate">Around <span class="fw-medium" id="nearbyPhotoName"></span></span>
+              </div>
+              <div class="btn-group btn-group-sm w-100" role="group" aria-label="Filter nearby results">
+                <input type="radio" class="btn-check" name="nearbyFilter" id="filterAll" value="all" checked>
+                <label class="btn btn-outline-secondary" for="filterAll">All</label>
+                <input type="radio" class="btn-check" name="nearbyFilter" id="filterPlaces" value="place">
+                <label class="btn btn-outline-secondary" for="filterPlaces">Businesses</label>
+                <input type="radio" class="btn-check" name="nearbyFilter" id="filterObjects" value="object">
+                <label class="btn btn-outline-secondary" for="filterObjects">Objects</label>
+              </div>
+              <div class="d-flex align-items-center gap-2 mt-2">
+                <span class="text-body-secondary small" id="nearbyRadius"></span>
+                <button class="btn btn-sm btn-outline-secondary ms-auto" type="button" id="btnWider">
+                  <i class="bi bi-arrows-angle-expand me-1"></i>Wider
+                </button>
+              </div>
+            </div>
+
+            <div class="px-3 pt-3" id="nearbyStatus"></div>
+            <div class="list-group list-group-flush" id="nearbyList"></div>
+
+            <!-- Details of whichever entity is selected, in the list or on the map -->
+            <div class="p-3 border-top d-none" id="featureDetail"></div>
+
+            <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
+
+            <p class="text-body-secondary small px-3 py-2 mb-0">
+              <i class="bi bi-globe2 me-1"></i>Data from the
+              <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank" rel="noopener">Overpass API</a>
+              &middot; &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
+            </p>
+          </div>
         </div>
 
         <div class="border-top px-3 py-2 text-body-secondary small flex-shrink-0">
@@ -181,64 +250,23 @@
         <h5 class="modal-title text-truncate" id="photoModalTitle">Photo</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-      <ul class="nav nav-tabs px-3 pt-2 flex-shrink-0" role="tablist">
-        <li class="nav-item" role="presentation">
-          <button class="nav-link active" id="tabDetailsBtn" data-bs-toggle="tab" data-bs-target="#tabDetails"
-                  type="button" role="tab" aria-controls="tabDetails" aria-selected="true">
-            <i class="bi bi-card-text me-1"></i>Details
-          </button>
-        </li>
-        <li class="nav-item" role="presentation">
-          <button class="nav-link" id="tabNearbyBtn" data-bs-toggle="tab" data-bs-target="#tabNearby"
-                  type="button" role="tab" aria-controls="tabNearby" aria-selected="false">
-            <i class="bi bi-pin-map me-1"></i>Nearby
-            <span class="badge rounded-pill text-bg-secondary ms-1 d-none" id="nearbyCount">0</span>
-          </button>
-        </li>
-      </ul>
-
-      <div class="modal-body tab-content">
-        <div class="tab-pane fade show active" id="tabDetails" role="tabpanel" aria-labelledby="tabDetailsBtn">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <img id="photoModalImg" class="img-fluid rounded w-100" alt="">
-            </div>
-            <div class="col-md-6">
-              <table class="table table-sm table-borderless align-middle mb-0" id="photoModalMeta"></table>
-            </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <img id="photoModalImg" class="img-fluid rounded w-100" alt="">
           </div>
-        </div>
-
-        <div class="tab-pane fade" id="tabNearby" role="tabpanel" aria-labelledby="tabNearbyBtn">
-          <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-            <div class="btn-group btn-group-sm" role="group" aria-label="Filter nearby results">
-              <input type="radio" class="btn-check" name="nearbyFilter" id="filterAll" value="all" checked>
-              <label class="btn btn-outline-secondary" for="filterAll">All</label>
-              <input type="radio" class="btn-check" name="nearbyFilter" id="filterPlaces" value="place">
-              <label class="btn btn-outline-secondary" for="filterPlaces">Businesses</label>
-              <input type="radio" class="btn-check" name="nearbyFilter" id="filterObjects" value="object">
-              <label class="btn btn-outline-secondary" for="filterObjects">Objects</label>
-            </div>
-            <span class="text-body-secondary small ms-auto" id="nearbyRadius"></span>
-            <button class="btn btn-sm btn-outline-secondary" type="button" id="btnWider">
-              <i class="bi bi-arrows-angle-expand me-1"></i>Search wider
-            </button>
+          <div class="col-md-6">
+            <table class="table table-sm table-borderless align-middle mb-0" id="photoModalMeta"></table>
           </div>
-
-          <div id="nearbyStatus"></div>
-          <div class="list-group list-group-flush" id="nearbyList"></div>
-
-          <p class="text-body-secondary small mt-3 mb-0">
-            <i class="bi bi-database me-1"></i>Live data from the
-            <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank" rel="noopener">Overpass API</a>
-            &middot; &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
-          </p>
         </div>
       </div>
       <div class="modal-footer">
         <a class="btn btn-outline-secondary" id="photoModalOsm" target="_blank" rel="noopener">
           <i class="bi bi-box-arrow-up-right me-1"></i>View on OpenStreetMap
         </a>
+        <button type="button" class="btn btn-outline-primary d-none" id="photoModalNearby">
+          <i class="bi bi-pin-map me-1"></i>What's nearby?
+        </button>
         <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
@@ -386,6 +414,7 @@ out center tags 250;`;
       kind: OBJECT_VALUES.has(d.pair) || d.key === 'emergency' || d.key === 'man_made' ? 'object' : 'place',
       icon: ICONS[d.pair] || FALLBACK_ICON[d.key] || 'geo-alt',
       distance: haversine(lat, lon, pos.lat, pos.lon),
+      tags,
     };
   }
 
@@ -412,8 +441,13 @@ out center tags 250;`;
         }
         if (json.remark) { lastErr = new Error(`${host}: ${json.remark}`); continue; }
 
-        return (json.elements || []).map(el => toFeature(el, lat, lon)).filter(Boolean)
-          .sort((a, b) => a.distance - b.distance);
+        return {
+          host,
+          // Mirrors can lag the live database by weeks; surface it rather than hide it.
+          asOf: json.osm3s?.timestamp_osm_base ? new Date(json.osm3s.timestamp_osm_base) : null,
+          features: (json.elements || []).map(el => toFeature(el, lat, lon)).filter(Boolean)
+            .sort((a, b) => a.distance - b.distance),
+        };
       } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('Overpass unreachable');
@@ -424,8 +458,9 @@ out center tags 250;`;
   //         nearby?: {radius, features}, place?: feature}
   const photos = [];
   let selectedId = null;
-  let nearbyPhotoId = null;   // photo whose results are currently in the Nearby tab
-  let placeMarker = null, placeLine = null;
+  let nearbyPhotoId = null;              // photo whose results are in the Nearby tab
+  const nearbyMarkers = new Map();       // feature id -> Leaflet marker
+  let placeLine = null;                  // connector from photo to selected entity
 
   const $ = id => document.getElementById(id);
   const els = {
@@ -534,6 +569,7 @@ out center tags 250;`;
     if (!p) return;
     p.el.classList.add('active');
     p.el.scrollIntoView({ block: 'nearest' });
+    armNearby(p);
     if (p.marker) {
       p.marker.setIcon(pinIcon(p.index, true));
       if (pan) map.flyTo(p.marker.getLatLng(), Math.max(map.getZoom(), 15), { duration: .6 });
@@ -572,17 +608,22 @@ out center tags 250;`;
       osm.classList.add('d-none');
     }
 
-    // The Nearby tab only makes sense for a photo we can locate.
+    $('photoModalNearby').classList.toggle('d-none', p.lat == null);
+    photoModal.show();
+  }
+
+  /* Point the Nearby tab at a photo. Does not fetch — that happens when the tab opens. */
+  function armNearby(p) {
+    if (nearbyPhotoId === p.id) return;
     nearbyPhotoId = p.id;
+    clearNearbyLayers();
+    $('nearbyPhotoName').textContent = p.name;
     $('tabNearbyBtn').disabled = p.lat == null;
-    bootstrap.Tab.getOrCreateInstance($('tabDetailsBtn')).show();
     $('nearbyList').replaceChildren();
     $('nearbyCount').classList.add('d-none');
     $('nearbyRadius').textContent = '';
+    $('featureDetail').classList.add('d-none');
     nearbyStatus('');
-    renderNearby();   // repopulates instantly if this photo was searched before
-
-    photoModal.show();
   }
 
   /* ---------- nearby: fetch, render, select ---------- */
@@ -603,15 +644,15 @@ out center tags 250;`;
       </div>`);
 
     try {
-      let features = await queryOverpass(p.lat, p.lon, radius);
+      let res = await queryOverpass(p.lat, p.lon, radius);
       let used = radius;
       // Sparse area: widen automatically until we have enough to show.
       for (const wider of RADII.filter(r => r > radius)) {
-        if (features.length >= WANTED) break;
-        features = await queryOverpass(p.lat, p.lon, wider);
+        if (res.features.length >= WANTED) break;
+        res = await queryOverpass(p.lat, p.lon, wider);
         used = wider;
       }
-      p.nearby = { radius: used, features };
+      p.nearby = { radius: used, ...res };
     } catch (e) {
       nearbyStatus(`
         <div class="alert alert-warning" role="alert">
@@ -629,14 +670,54 @@ out center tags 250;`;
     renderNearby();
   }
 
+  const dotIcon = (f, selected) => L.divIcon({
+    className: '',
+    html: `<div class="dot ${selected ? 'text-bg-success is-selected' : 'text-bg-warning'}"
+                data-feature="${esc(f.id)}"><i class="bi bi-${f.icon}"></i></div>`,
+    iconSize: selected ? [35, 35] : [26, 26],
+    iconAnchor: selected ? [18, 18] : [13, 13],
+    popupAnchor: [0, selected ? -18 : -13],
+  });
+
+  function clearNearbyLayers() {
+    for (const m of nearbyMarkers.values()) map.removeLayer(m);
+    nearbyMarkers.clear();
+    if (placeLine) { map.removeLayer(placeLine); placeLine = null; }
+  }
+
+  /* Every entity in the current list also exists as a point on the map. */
+  function plotNearby(p, shown) {
+    clearNearbyLayers();
+    for (const f of shown) {
+      const marker = L.marker([f.lat, f.lon], {
+        icon: dotIcon(f, p.place?.id === f.id),
+        title: f.name || f.category,
+        riseOnHover: true,
+      }).addTo(map).bindPopup(`
+        <div class="text-center">
+          <div class="fw-semibold">${esc(f.name || f.category)}</div>
+          <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} from ${esc(p.name)}</div>
+          <a class="btn btn-sm btn-outline-secondary mt-2 w-100"
+             href="https://www.openstreetmap.org/${f.id}" target="_blank" rel="noopener">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Open in OSM
+          </a>
+        </div>`);
+      // Picking a point on the map drives the list, same as picking a row drives the map.
+      marker.on('click', () => choosePlace(p, f, 'map'));
+      nearbyMarkers.set(f.id, marker);
+    }
+  }
+
   function renderNearby() {
     const p = photos.find(x => x.id === nearbyPhotoId);
-    if (!p || p.lat == null) return;
-    if (!p.nearby) return;
+    if (!p || p.lat == null || !p.nearby) return;
 
     const filter = document.querySelector('input[name="nearbyFilter"]:checked').value;
     const all = p.nearby.features;
     const shown = (filter === 'all' ? all : all.filter(f => f.kind === filter)).slice(0, WANTED);
+
+    // A selection filtered out of view should not stay highlighted.
+    if (p.place && !shown.some(f => f.id === p.place.id)) p.place = null;
 
     $('nearbyRadius').textContent = `${all.length} found within ${p.nearby.radius} m`;
     $('nearbyCount').textContent = shown.length;
@@ -654,6 +735,7 @@ out center tags 250;`;
       const chosen = p.place?.id === f.id;
       const el = document.createElement('button');
       el.type = 'button';
+      el.dataset.feature = f.id;
       el.className = `list-group-item list-group-item-action d-flex align-items-center gap-3${chosen ? ' active' : ''}`;
       el.innerHTML = `
         <i class="bi bi-${f.icon} fs-5 flex-shrink-0"></i>
@@ -670,44 +752,133 @@ out center tags 250;`;
           </div>
         </div>
         <i class="bi bi-${chosen ? 'check-circle-fill' : 'circle'} flex-shrink-0"></i>`;
-      el.addEventListener('click', () => choosePlace(p, chosen ? null : f));
+      el.addEventListener('click', () => choosePlace(p, chosen ? null : f, 'list'));
       list.appendChild(el);
     }
+
+    renderSource(p.nearby);
+    plotNearby(p, shown);
+    renderFeatureDetail(p);
+    refreshRow(p);
   }
 
-  function choosePlace(p, feature) {
+  /* Which mirror answered, and how old its data is. A busy primary sends us to a
+     fallback that can be weeks behind, which quietly changes what you see. */
+  function renderSource({ host, asOf }) {
+    const el = $('nearbySource');
+    if (!host) { el.textContent = ''; return; }
+    const days = asOf ? Math.floor((Date.now() - asOf) / 86400000) : null;
+    const stale = days != null && days > 7;
+    el.className = `small ${stale ? 'text-warning-emphasis' : 'text-body-secondary'}`;
+    el.innerHTML =
+      `<i class="bi bi-${stale ? 'exclamation-triangle' : 'database'} me-1"></i>` +
+      `via ${esc(host)}` +
+      (asOf ? ` &middot; data as of ${asOf.toLocaleDateString(undefined, { dateStyle: 'medium' })}` +
+              (stale ? ` (${days} days old)` : '') : '');
+  }
+
+  /**
+   * Select an entity. `source` says which side the click came from, so the other
+   * side is the one that gets moved/scrolled rather than fighting the user.
+   */
+  function choosePlace(p, feature, source = 'list') {
     p.place = feature || null;
 
-    for (const layer of [placeMarker, placeLine]) if (layer) map.removeLayer(layer);
-    placeMarker = placeLine = null;
+    // Re-icon every marker so exactly one is green.
+    for (const [id, marker] of nearbyMarkers) {
+      const f = p.nearby?.features.find(x => x.id === id);
+      if (f) marker.setIcon(dotIcon(f, feature?.id === id));
+    }
+
+    if (placeLine) { map.removeLayer(placeLine); placeLine = null; }
 
     if (feature) {
-      placeMarker = L.marker([feature.lat, feature.lon], {
-        icon: L.divIcon({
-          className: '',
-          html: `<div class="pin text-bg-success"><span><i class="bi bi-${feature.icon}"></i></span></div>`,
-          iconSize: [32, 32], iconAnchor: [16, 30], popupAnchor: [0, -28],
-        }),
-        title: feature.name || feature.category,
-      }).addTo(map).bindPopup(`
-        <div class="text-center">
-          <div class="fw-semibold">${esc(feature.name || feature.category)}</div>
-          <div class="small text-body-secondary">${esc(feature.category)} &middot; ${fmtDistance(feature.distance)} from ${esc(p.name)}</div>
-          <a class="btn btn-sm btn-outline-secondary mt-2 w-100"
-             href="https://www.openstreetmap.org/${feature.id}" target="_blank" rel="noopener">
-            <i class="bi bi-box-arrow-up-right me-1"></i>Open in OSM
-          </a>
-        </div>`);
       // Leaflet writes stroke as an SVG attribute, which will not resolve a CSS variable.
       const success = getComputedStyle(document.documentElement)
         .getPropertyValue('--bs-success').trim() || '#198754';
       placeLine = L.polyline([[p.lat, p.lon], [feature.lat, feature.lon]],
-        { color: success, weight: 2, dashArray: '4 4', opacity: .8 }).addTo(map);
-      map.fitBounds(placeLine.getBounds(), { padding: [80, 80], maxZoom: 18 });
+        { color: success, weight: 2, dashArray: '4 4', opacity: .85 }).addTo(map);
+
+      const marker = nearbyMarkers.get(feature.id);
+      if (source === 'list') {
+        // Came from the list: show it on the map.
+        map.fitBounds(placeLine.getBounds(), { padding: [90, 90], maxZoom: 19 });
+        marker?.openPopup();
+      } else {
+        // Came from the map: show it in the list.
+        document.querySelector(`#nearbyList [data-feature="${CSS.escape(feature.id)}"]`)
+          ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
     }
 
-    renderNearby();
+    // Repaint list rows without re-plotting the markers we just re-iconed.
+    for (const row of document.querySelectorAll('#nearbyList .list-group-item')) {
+      const on = row.dataset.feature === feature?.id;
+      row.classList.toggle('active', on);
+      const tick = row.lastElementChild;
+      tick.className = `bi bi-${on ? 'check-circle-fill' : 'circle'} flex-shrink-0`;
+      row.querySelector('.small')?.classList.toggle('text-body-secondary', !on);
+    }
+
+    renderFeatureDetail(p);
     refreshRow(p);
+  }
+
+  /* Details of the selected entity, below the list, so results can be browsed. */
+  const DETAIL_TAGS = ['operator', 'brand', 'opening_hours', 'phone', 'website', 'cuisine',
+                       'sport', 'description', 'wheelchair', 'addr:housenumber', 'addr:street',
+                       'addr:city', 'addr:postcode'];
+
+  function renderFeatureDetail(p) {
+    const host = $('featureDetail');
+    const f = p.place;
+    if (!f) { host.classList.add('d-none'); host.replaceChildren(); return; }
+
+    const rows = [
+      ['Category', f.category],
+      ['OSM tag', f.pair],
+      ['Kind', f.kind === 'place' ? 'Business / destination' : 'Object / street furniture'],
+      ['Distance', `${fmtDistance(f.distance)} from ${p.name}`],
+      ['Coordinates', `${fmtCoord(f.lat, ['N', 'S'])}, ${fmtCoord(f.lon, ['E', 'W'])}`],
+      ...DETAIL_TAGS.filter(k => f.tags[k]).map(k => [titleCase(k.replace('addr:', '')), f.tags[k]]),
+    ];
+
+    const extra = Object.entries(f.tags)
+      .filter(([k]) => k !== 'name' && !DETAIL_TAGS.includes(k) && !PRIMARY_KEYS.includes(k));
+
+    host.classList.remove('d-none');
+    host.innerHTML = `
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <i class="bi bi-${f.icon} fs-5 text-success"></i>
+        <span class="fw-semibold text-truncate">${esc(f.name || f.category)}</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto flex-shrink-0" type="button" id="btnClearPlace"
+                aria-label="Clear selection"><i class="bi bi-x-lg"></i></button>
+      </div>
+      <table class="table table-sm table-borderless align-middle mb-2">
+        ${rows.map(([k, v]) => `
+          <tr>
+            <th scope="row" class="text-body-secondary fw-normal pe-3 small" style="width:8.5rem">${esc(k)}</th>
+            <td class="small text-break">${
+              /^https?:\/\//.test(v)
+                ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>`
+                : esc(v)}</td>
+          </tr>`).join('')}
+      </table>
+      ${extra.length ? `
+        <details class="small mb-2">
+          <summary class="text-body-secondary">All ${extra.length + rows.length} OSM tags</summary>
+          <table class="table table-sm table-borderless mt-2 mb-0">
+            ${extra.map(([k, v]) => `
+              <tr><th scope="row" class="text-body-secondary fw-normal pe-3 small text-break">${esc(k)}</th>
+                  <td class="small text-break">${esc(v)}</td></tr>`).join('')}
+          </table>
+        </details>` : ''}
+      <a class="btn btn-sm btn-outline-secondary w-100"
+         href="https://www.openstreetmap.org/${f.id}" target="_blank" rel="noopener">
+        <i class="bi bi-box-arrow-up-right me-1"></i>Open ${esc(f.id)} on OpenStreetMap
+      </a>`;
+
+    $('btnClearPlace').addEventListener('click', () => choosePlace(p, null, 'list'));
   }
 
   function refreshRow(p) {
@@ -795,6 +966,7 @@ out center tags 250;`;
       if (p.lat != null) plot(p); else missing++;
 
       els.progressBar.style.width = `${Math.round(((i + 1) / files.length) * 100)}%`;
+      els.dropzone.classList.add('is-compact');
       refreshStats();
       await new Promise(r => setTimeout(r));   // let the UI paint between photos
     }
@@ -825,9 +997,14 @@ out center tags 250;`;
     photos.length = 0;
     selectedId = null;
     nearbyPhotoId = null;
-    for (const layer of [placeMarker, placeLine]) if (layer) map.removeLayer(layer);
-    placeMarker = placeLine = null;
+    clearNearbyLayers();
+    $('tabNearbyBtn').disabled = true;
+    $('nearbyList').replaceChildren();
+    $('nearbyCount').classList.add('d-none');
+    $('featureDetail').classList.add('d-none');
+    bootstrap.Tab.getOrCreateInstance($('tabPhotosBtn')).show();
     els.list.replaceChildren();
+    els.dropzone.classList.remove('is-compact');
     refreshStats();
     map.setView([20, 0], 2);
   }
@@ -890,6 +1067,13 @@ out center tags 250;`;
   for (const el of document.querySelectorAll('input[name="nearbyFilter"]')) {
     el.addEventListener('change', renderNearby);
   }
+
+  // "What's nearby?" in the photo modal hands off to the sidebar, where the
+  // list and the map are visible at the same time.
+  $('photoModalNearby').addEventListener('click', () => {
+    photoModal.hide();
+    bootstrap.Tab.getOrCreateInstance($('tabNearbyBtn')).show();
+  });
 
   els.btnFit.addEventListener('click', fitAll);
   els.btnClear.addEventListener('click', clearAll);

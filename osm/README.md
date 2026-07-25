@@ -32,22 +32,45 @@ that setting.
 
 ## Nearby entities
 
-The **Nearby** tab of a photo's detail modal queries the
+Select a located photo, then open the **Nearby** tab in the sidebar. It queries the
 [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) for everything mapped
-around that photo's coordinates and lists the 10 nearest. Selecting one pins it on the
-map in green, draws a connector back to the photo, labels the photo's row in the sidebar,
-and adds the place to the GeoJSON export.
+around that photo and lists the 10 nearest. The tab lives in the sidebar rather than in a
+dialog so the list and the map are usable at the same time.
+
+Every entity in the list is also drawn on the map as an **amber dot**, distinct from the
+photo's own pin. Selection is two-way:
+
+- click a **row** and its point turns green, grows, opens its popup, and the map pans to fit
+  it together with the photo;
+- click a **point** and the matching row goes active and scrolls into view.
+
+Either way a dashed connector is drawn back to the photo, the photo's row is labelled with
+the choice, and the full details appear in a table under the list — category, OSM tag,
+kind, distance, coordinates, plus address, opening hours, phone, website and any other
+tags the element carries, with every raw tag behind a disclosure. That makes it possible
+to browse the results one by one and compare them.
 
 - **Businesses / Objects** filters split shops, restaurants, hotels and offices from
   street furniture such as waste baskets, post boxes, benches, hydrants, and bus stops.
+  Filtering re-plots the map so it always matches the list.
 - The search starts at 150 m and widens automatically (400 m, 1 km, 2.5 km) when an area
-  is too sparse to fill the list; **Search wider** steps it out manually.
+  is too sparse to fill the list; **Wider** steps it out manually.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
   surveillance cameras, survey points, antennas, utility poles, manholes, street cabinets,
   and street lamps. See `EXCLUDED` in `index.html` to change that.
 - Results are fetched once per photo and cached, and only when the tab is opened.
-  Overpass is a free shared service; public instances refuse requests when busy, so the
-  page tries a second instance and then offers a retry rather than failing silently.
+
+### Which server answered, and how old its data is
+
+Overpass is a free shared service and its public instances refuse requests when busy, so
+the page tries a second instance before giving up, and offers a retry rather than failing
+silently. That fallback matters for correctness, not just availability: mirrors run their
+own database snapshots and can lag badly. At the time of writing `overpass-api.de` was
+current to the minute while `overpass.kumi.systems` was **54 days behind** — enough that a
+recently mapped feature is missing entirely from one and first in the list on the other.
+
+The page therefore prints which host answered and that host's database timestamp beneath
+the results, and flags it in warning colours when the data is more than a week old.
 
 ## Files
 
