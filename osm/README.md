@@ -7,6 +7,25 @@ mapped around it.
 Everything runs in the browser. The photo is never uploaded — the page is served as a
 plain static file and makes no network calls beyond map tiles and the Overpass API.
 
+## Layout
+
+The page is built mobile first, targeting an iPhone held portrait — an iPhone 17 is
+402 × 874 CSS px. The base stylesheet is the phone layout and the desktop split-pane is
+the `min-width: 992px` override, not the other way round.
+
+On a phone the page scrolls: phases, then the map, then the details of whatever is
+selected. **The detail pane always sits directly under the map**, so picking an entity
+from the list scrolls the map up under the sticky navbar and leaves the map and the top
+of its details on screen together. On desktop the same relationship holds vertically
+inside the right-hand column — map above, details below, sidebar to the left.
+
+Other phone-specific handling: `viewport-fit=cover` plus `env(safe-area-inset-*)` so the
+Dynamic Island and home indicator do not overlap content; ~44 px minimum tap targets;
+no nested scroll regions (the list scrolls inside itself only on desktop); the scale bar
+is hidden where it would collide with the attribution; and marker popups are deliberately
+terse, because a tall popup covers most of a 45 dvh map when the full record is already
+in the pane below it.
+
 ## Phases
 
 The sidebar is a vertical accordion, one phase at a time. Each header carries a status
@@ -37,11 +56,11 @@ photo's red pin. Selection is two-way:
   fit it together with the photo;
 - click a **point** and the matching row goes active and scrolls into view.
 
-Either way a dashed connector is drawn back to the photo and the full details appear in a
-table under the list — category, OSM tag, kind, distance, coordinates, plus address,
+Either way a dashed connector is drawn back to the photo and the full details appear in
+the pane under the map — category, OSM tag, kind, distance, coordinates, plus address,
 opening hours, phone, website and any other tags the element carries, with every raw tag
 behind a disclosure. That makes it possible to browse the results one by one and compare
-them.
+them without losing sight of the map.
 
 - **Businesses / Objects** filters split shops, restaurants, hotels and offices from
   street furniture such as waste baskets, post boxes, benches, hydrants and bus stops.

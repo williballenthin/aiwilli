@@ -17,15 +17,36 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
 
 <style>
-  html, body { height: 100%; }
-  body { overflow: hidden; }
+  /* ---------------------------------------------------------------
+     Mobile first. Base rules target a phone held portrait — an
+     iPhone 17 is 402 x 874 CSS px — and the page scrolls normally.
+     The desktop split-pane layout is the override, from lg up.
+     --------------------------------------------------------------- */
 
-  /* App shell: navbar + a single non-scrolling row that owns the rest of the viewport. */
-  .app-shell { height: 100dvh; display: flex; flex-direction: column; }
-  .app-body  { flex: 1 1 auto; min-height: 0; }
-  .app-pane  { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+  html { -webkit-text-size-adjust: 100%; }
 
-  #map { flex: 1 1 auto; min-height: 0; background: var(--bs-tertiary-bg); }
+  /* viewport-fit=cover means the Dynamic Island and the home indicator
+     overlap the page unless we inset it ourselves. */
+  .app-shell {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .navbar { padding-top: calc(.5rem + env(safe-area-inset-top)); position: sticky; top: 0; z-index: 1030; }
+  .safe-bottom { padding-bottom: calc(.5rem + env(safe-area-inset-bottom)); }
+
+  /* Map sits between the phases and the details, and is scrolled to on
+     selection — so it needs to clear the sticky navbar when it lands. */
+  #map { height: 45dvh; background: var(--bs-tertiary-bg); }
+  .map-wrap { scroll-margin-top: 3.25rem; }
+
+  /* Comfortable touch targets: iOS wants ~44px. */
+  .navbar .btn { min-width: 2.75rem; min-height: 2.75rem; }
+  .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; }
+  .accordion-button { padding-top: 1rem; padding-bottom: 1rem; }
   .leaflet-container { font: inherit; }
   .leaflet-popup-content { margin: .75rem; min-width: 12rem; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
@@ -73,15 +94,38 @@
   .phase-num.is-done { background: var(--bs-success); color: #fff; }
   .phase-num.is-error { background: var(--bs-warning); color: #000; }
 
-  /* Keep the filters reachable once the results list scrolls. */
-  .nearby-head { position: sticky; top: 0; z-index: 2; background: var(--bs-body-bg); }
-  #nearbyList { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
+  .nearby-head { background: var(--bs-body-bg); }
 
-  @media (max-width: 991.98px) {
-    body { overflow: auto; }
-    .app-shell { height: auto; min-height: 100dvh; }
-    #map { height: 55dvh; flex: 0 0 auto; }
-    .app-pane { height: auto; }
+  /* On a narrow map the scale bar lands on top of the attribution. */
+  .leaflet-control-scale { display: none; }
+
+  /* ---------------------------------------------------------------
+     Desktop: navbar plus one non-scrolling row that owns the viewport.
+     Sidebar scrolls on its own; the map column holds map over details.
+     --------------------------------------------------------------- */
+  @media (min-width: 992px) {
+    html, body { height: 100%; }
+    body { overflow: hidden; }
+
+    .app-shell { height: 100dvh; }
+    .navbar { position: static; }
+    .app-body { flex: 1 1 auto; min-height: 0; }
+    .app-pane { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+
+    .map-wrap { flex: 1 1 auto; min-height: 0; display: flex; }
+    #map { flex: 1 1 auto; height: auto; min-height: 0; }
+
+    /* Details never take more than a third of the column, and scroll inside it. */
+    .detail-pane { flex: 0 0 auto; max-height: 34%; overflow-y: auto; overscroll-behavior: contain; }
+
+    /* Keep the filters reachable once the results list scrolls. */
+    .nearby-head { position: sticky; top: 0; z-index: 2; }
+    #nearbyList { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
+
+    .leaflet-control-scale { display: block; }
+    .navbar .btn { min-width: 0; min-height: 0; }
+    .btn-group-sm > .btn { padding: .25rem .5rem; font-size: .875rem; }
+    .accordion-button { padding-top: .75rem; padding-bottom: .75rem; }
   }
 </style>
 </head>
@@ -146,6 +190,9 @@
                         <i class="bi bi-plus-lg me-1"></i>Choose a photo
                       </button>
                     </div>
+                    <p class="text-body-secondary small text-center mt-2 mb-0">
+                      <i class="bi bi-shield-lock me-1"></i>It stays on your device — nothing is uploaded.
+                    </p>
                     <div class="progress mt-3 d-none" id="progressWrap" style="height:.375rem" role="progressbar"
                          aria-label="Reading photo metadata">
                       <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar"
@@ -230,9 +277,6 @@
                   <div class="px-3 pt-3" id="nearbyStatus"></div>
                   <div class="list-group list-group-flush" id="nearbyList"></div>
 
-                  <!-- Details of whichever entity is selected, in the list or on the map -->
-                  <div class="p-3 border-top d-none" id="featureDetail"></div>
-
                   <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
                   <p class="text-body-secondary small px-3 py-2 mb-0">
                     <i class="bi bi-globe2 me-1"></i>Data from the
@@ -247,19 +291,21 @@
           </div>
         </div>
 
-        <div class="border-top px-3 py-2 text-body-secondary small flex-shrink-0">
-          <i class="bi bi-shield-lock me-1"></i>The photo stays on your device — nothing is uploaded.
-        </div>
       </aside>
 
-      <!-- Map -->
-      <main class="col-lg-8 col-xl-9 app-pane position-relative">
-        <div id="map" aria-label="Map of the photo location"></div>
+      <!-- Map, with the selected entity's details directly beneath it -->
+      <main class="col-lg-8 col-xl-9 app-pane">
+        <div class="map-wrap position-relative">
+          <div id="map" aria-label="Map of the photo location"></div>
 
-        <div class="position-absolute top-0 start-50 translate-middle-x mt-3 px-3 w-100"
-             style="z-index:500; max-width:36rem; pointer-events:none">
-          <div id="alertHost"></div>
+          <div class="position-absolute top-0 start-50 translate-middle-x mt-3 px-3 w-100"
+               style="z-index:500; max-width:36rem; pointer-events:none">
+            <div id="alertHost"></div>
+          </div>
         </div>
+
+        <!-- Details of whichever entity is selected, in the list or on the map -->
+        <div class="detail-pane bg-body border-top p-3 safe-bottom d-none" id="featureDetail"></div>
       </main>
 
     </div>
@@ -716,15 +762,13 @@ out center tags 250;`;
         icon: dotIcon(f, photo.place?.id === f.id),
         title: f.name || f.category,
         riseOnHover: true,
+      // Deliberately terse: the detail pane sits directly under the map and
+      // carries the full record, so a tall popup would only hide the map.
       }).addTo(map).bindPopup(`
         <div class="text-center">
           <div class="fw-semibold">${esc(f.name || f.category)}</div>
-          <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} from the photo</div>
-          <a class="btn btn-sm btn-outline-secondary mt-2 w-100"
-             href="https://www.openstreetmap.org/${f.id}" target="_blank" rel="noopener">
-            <i class="bi bi-box-arrow-up-right me-1"></i>Open in OSM
-          </a>
-        </div>`);
+          <div class="small text-body-secondary">${esc(f.category)} &middot; ${fmtDistance(f.distance)} away</div>
+        </div>`, { closeButton: false });
       // Picking a point on the map drives the list, same as picking a row drives the map.
       marker.on('click', () => choosePlace(f, 'map'));
       nearbyMarkers.set(f.id, marker);
@@ -803,6 +847,7 @@ out center tags 250;`;
    */
   function choosePlace(feature, source = 'list') {
     photo.place = feature || null;
+    let scrollToMap = false;
 
     // Re-icon every marker so exactly one is green.
     for (const [id, marker] of nearbyMarkers) {
@@ -822,11 +867,10 @@ out center tags 250;`;
       if (source === 'list') {
         // Came from the list: show it on the map.
         map.fitBounds(placeLine.getBounds(), { padding: [90, 90], maxZoom: 19 });
-        nearbyMarkers.get(feature.id)?.openPopup();
-        // On phones the map sits below the whole accordion, so bring it into view.
-        if (matchMedia('(max-width: 991.98px)').matches) {
-          $('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
+        scrollToMap = matchMedia('(max-width: 991.98px)').matches;
+        // On a phone the map is short; the green marker plus the detail pane
+        // below already identify the pick, so don't cover the map with a popup.
+        if (!scrollToMap) nearbyMarkers.get(feature.id)?.openPopup();
       } else {
         // Came from the map: show it in the list.
         document.querySelector(`#nearbyList [data-feature="${CSS.escape(feature.id)}"]`)
@@ -843,6 +887,13 @@ out center tags 250;`;
     }
 
     renderFeatureDetail();
+
+    // Scroll last: the detail pane has just been un-hidden below the map, and
+    // until it exists the page cannot scroll far enough to bring the map up.
+    if (scrollToMap) {
+      requestAnimationFrame(() =>
+        document.querySelector('.map-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    }
   }
 
   /* Details of the selected entity, below the list, so results can be browsed. */
@@ -972,7 +1023,7 @@ out center tags 250;`;
       if (photo.lat == null) {
         flashAlert('That photo carries no GPS data, so it cannot be placed on the map.', 'warning');
       } else if (matchMedia('(max-width: 991.98px)').matches) {
-        $('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        document.querySelector('.map-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
   }
