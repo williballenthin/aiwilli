@@ -51,6 +51,11 @@
   .scroll-y { overflow-y: auto; overscroll-behavior: contain; }
   .coords { font-variant-numeric: tabular-nums; }
 
+  #nearbyList { max-height: 24rem; overflow-y: auto; overscroll-behavior: contain; }
+
+  /* text-success on a selected (blue) row is close to unreadable. */
+  .list-group-item.active [data-place] { color: var(--bs-list-group-active-color) !important; }
+
   /* Bootstrap ships no min-width utility, and a flex child defaults to
      min-width:auto — which stops .text-truncate from ever kicking in. */
   .min-w-0 { min-width: 0; }
@@ -176,14 +181,58 @@
         <h5 class="modal-title text-truncate" id="photoModalTitle">Photo</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-      <div class="modal-body">
-        <div class="row g-3">
-          <div class="col-md-6">
-            <img id="photoModalImg" class="img-fluid rounded w-100" alt="">
+      <ul class="nav nav-tabs px-3 pt-2 flex-shrink-0" role="tablist">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="tabDetailsBtn" data-bs-toggle="tab" data-bs-target="#tabDetails"
+                  type="button" role="tab" aria-controls="tabDetails" aria-selected="true">
+            <i class="bi bi-card-text me-1"></i>Details
+          </button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tabNearbyBtn" data-bs-toggle="tab" data-bs-target="#tabNearby"
+                  type="button" role="tab" aria-controls="tabNearby" aria-selected="false">
+            <i class="bi bi-pin-map me-1"></i>Nearby
+            <span class="badge rounded-pill text-bg-secondary ms-1 d-none" id="nearbyCount">0</span>
+          </button>
+        </li>
+      </ul>
+
+      <div class="modal-body tab-content">
+        <div class="tab-pane fade show active" id="tabDetails" role="tabpanel" aria-labelledby="tabDetailsBtn">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <img id="photoModalImg" class="img-fluid rounded w-100" alt="">
+            </div>
+            <div class="col-md-6">
+              <table class="table table-sm table-borderless align-middle mb-0" id="photoModalMeta"></table>
+            </div>
           </div>
-          <div class="col-md-6">
-            <table class="table table-sm table-borderless align-middle mb-0" id="photoModalMeta"></table>
+        </div>
+
+        <div class="tab-pane fade" id="tabNearby" role="tabpanel" aria-labelledby="tabNearbyBtn">
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <div class="btn-group btn-group-sm" role="group" aria-label="Filter nearby results">
+              <input type="radio" class="btn-check" name="nearbyFilter" id="filterAll" value="all" checked>
+              <label class="btn btn-outline-secondary" for="filterAll">All</label>
+              <input type="radio" class="btn-check" name="nearbyFilter" id="filterPlaces" value="place">
+              <label class="btn btn-outline-secondary" for="filterPlaces">Businesses</label>
+              <input type="radio" class="btn-check" name="nearbyFilter" id="filterObjects" value="object">
+              <label class="btn btn-outline-secondary" for="filterObjects">Objects</label>
+            </div>
+            <span class="text-body-secondary small ms-auto" id="nearbyRadius"></span>
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="btnWider">
+              <i class="bi bi-arrows-angle-expand me-1"></i>Search wider
+            </button>
           </div>
+
+          <div id="nearbyStatus"></div>
+          <div class="list-group list-group-flush" id="nearbyList"></div>
+
+          <p class="text-body-secondary small mt-3 mb-0">
+            <i class="bi bi-database me-1"></i>Live data from the
+            <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank" rel="noopener">Overpass API</a>
+            &middot; &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
+          </p>
         </div>
       </div>
       <div class="modal-footer">
@@ -224,9 +273,159 @@
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
 
+  /* ---------- nearby features (Overpass) ---------- */
+
+  // Public Overpass instances shed load aggressively; try them in order.
+  const OVERPASS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+  ];
+  const RADII = [150, 400, 1000, 2500];   // metres, stepped through by "Search wider"
+  const WANTED = 10;
+
+  // Keys that mark an element as something worth listing at all.
+  const PRIMARY_KEYS = ['amenity', 'shop', 'tourism', 'leisure', 'office', 'craft',
+                        'historic', 'emergency', 'man_made', 'healthcare', 'highway'];
+
+  // Street furniture and infrastructure, as opposed to a business or destination.
+  const OBJECT_VALUES = new Set([
+    'amenity=bench', 'amenity=waste_basket', 'amenity=waste_disposal', 'amenity=recycling',
+    'amenity=post_box', 'amenity=letter_box', 'amenity=drinking_water', 'amenity=fountain',
+    'amenity=bicycle_parking', 'amenity=bicycle_repair_station', 'amenity=bicycle_rental',
+    'amenity=motorcycle_parking', 'amenity=telephone', 'amenity=clock', 'amenity=vending_machine',
+    'amenity=atm', 'amenity=parking', 'amenity=parking_space', 'amenity=parking_entrance',
+    'amenity=shelter', 'amenity=bbq', 'amenity=charging_station', 'amenity=grit_bin',
+    'amenity=toilets', 'amenity=car_sharing', 'amenity=hunting_stand',
+    'highway=bus_stop', 'highway=elevator', 'highway=street_lamp',
+  ]);
+
+  // Mapping minutiae that flood a dense area without telling you anything about
+  // where you are. Near the Eiffel Tower these alone account for ~20% of hits.
+  const EXCLUDED = new Set([
+    'man_made=surveillance', 'man_made=survey_point', 'man_made=antenna',
+    'man_made=utility_pole', 'man_made=manhole', 'man_made=street_cabinet',
+    'man_made=pipeline', 'highway=street_lamp',
+  ]);
+
+  const ICONS = {
+    'amenity=cafe': 'cup-hot', 'amenity=restaurant': 'egg-fried', 'amenity=fast_food': 'egg-fried',
+    'amenity=bar': 'cup-straw', 'amenity=pub': 'cup-straw', 'amenity=biergarten': 'cup-straw',
+    'amenity=ice_cream': 'cup-hot', 'amenity=bank': 'bank', 'amenity=atm': 'cash-coin',
+    'amenity=pharmacy': 'capsule', 'amenity=hospital': 'hospital', 'amenity=clinic': 'hospital',
+    'amenity=doctors': 'hospital', 'amenity=dentist': 'hospital', 'amenity=veterinary': 'hospital',
+    'amenity=school': 'mortarboard', 'amenity=university': 'mortarboard', 'amenity=college': 'mortarboard',
+    'amenity=kindergarten': 'mortarboard', 'amenity=library': 'book', 'amenity=fuel': 'fuel-pump',
+    'amenity=charging_station': 'fuel-pump', 'amenity=parking': 'p-square',
+    'amenity=parking_space': 'p-square', 'amenity=parking_entrance': 'p-square',
+    'amenity=toilets': 'badge-wc', 'amenity=police': 'shield-check', 'amenity=fire_station': 'fire',
+    'amenity=post_office': 'envelope', 'amenity=post_box': 'mailbox', 'amenity=letter_box': 'mailbox',
+    'amenity=waste_basket': 'trash', 'amenity=waste_disposal': 'trash', 'amenity=recycling': 'trash',
+    'amenity=grit_bin': 'box-seam', 'amenity=bench': 'person-standing', 'amenity=shelter': 'house',
+    'amenity=drinking_water': 'droplet', 'amenity=fountain': 'droplet',
+    'amenity=bicycle_parking': 'bicycle', 'amenity=bicycle_rental': 'bicycle',
+    'amenity=bicycle_repair_station': 'bicycle', 'amenity=motorcycle_parking': 'bicycle',
+    'amenity=car_sharing': 'car-front', 'amenity=car_rental': 'car-front',
+    'amenity=telephone': 'telephone', 'amenity=clock': 'clock', 'amenity=vending_machine': 'box-seam',
+    'amenity=theatre': 'ticket-perforated', 'amenity=cinema': 'ticket-perforated',
+    'amenity=place_of_worship': 'building', 'amenity=townhall': 'building', 'amenity=marketplace': 'cart',
+    'emergency=fire_hydrant': 'fire', 'emergency=defibrillator': 'bandaid', 'emergency=phone': 'telephone',
+    'man_made=surveillance': 'camera-video', 'man_made=street_cabinet': 'box-seam',
+    'man_made=antenna': 'broadcast', 'man_made=tower': 'broadcast', 'man_made=flagpole': 'signpost-2',
+    'highway=bus_stop': 'bus-front', 'highway=elevator': 'arrow-down-up', 'highway=street_lamp': 'lightbulb',
+    'shop=bakery': 'basket', 'shop=supermarket': 'cart', 'shop=convenience': 'cart',
+    'shop=clothes': 'bag', 'shop=gift': 'gift', 'shop=hairdresser': 'scissors',
+    'shop=books': 'book', 'shop=florist': 'flower1', 'shop=ticket': 'ticket-perforated',
+    'tourism=hotel': 'building', 'tourism=hostel': 'building', 'tourism=museum': 'bank',
+    'tourism=artwork': 'palette', 'tourism=information': 'info-circle', 'tourism=viewpoint': 'binoculars',
+    'tourism=attraction': 'star', 'leisure=park': 'tree', 'leisure=garden': 'flower1',
+    'leisure=playground': 'person-standing', 'leisure=fitness_centre': 'person-standing',
+    'historic=monument': 'bank', 'historic=memorial': 'bank', 'historic=building': 'building',
+  };
+  const FALLBACK_ICON = { shop: 'shop', office: 'briefcase', craft: 'hammer', tourism: 'camera',
+                          leisure: 'tree', historic: 'bank', emergency: 'exclamation-triangle',
+                          man_made: 'gear', healthcare: 'hospital', highway: 'signpost-2' };
+
+  const overpassQuery = (lat, lon, r) => `[out:json][timeout:25];
+(${PRIMARY_KEYS.map(k => k === 'highway'
+    ? `nwr(around:${r},${lat},${lon})[highway~"^(bus_stop|elevator|street_lamp)$"];`
+    : `nwr(around:${r},${lat},${lon})[${k}];`).join('')}
+);
+out center tags 250;`;
+
+  function haversine(aLat, aLon, bLat, bLon) {
+    const R = 6371000, rad = d => d * Math.PI / 180;
+    const dLat = rad(bLat - aLat), dLon = rad(bLon - aLon);
+    const s = Math.sin(dLat / 2) ** 2 +
+      Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  const titleCase = v => v.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+
+  function describe(tags) {
+    for (const k of PRIMARY_KEYS) if (tags[k]) return { key: k, value: tags[k], pair: `${k}=${tags[k]}` };
+    return { key: '', value: '', pair: '' };
+  }
+
+  function toFeature(el, lat, lon) {
+    const tags = el.tags || {};
+    const pos = el.type === 'node' ? el : el.center;
+    if (!pos) return null;
+    const d = describe(tags);
+    if (!d.pair || EXCLUDED.has(d.pair)) return null;
+    // "Gift" reads badly on its own; "Gift shop" does not.
+    const category = d.key === 'shop' && d.value !== 'shop' ? `${titleCase(d.value)} shop`
+                   : d.key === 'craft' ? `${titleCase(d.value)} (craft)`
+                   : titleCase(d.value);
+    return {
+      id: `${el.type}/${el.id}`,
+      lat: pos.lat, lon: pos.lon,
+      name: tags.name || tags.brand || tags.operator || null,
+      category,
+      pair: d.pair,
+      kind: OBJECT_VALUES.has(d.pair) || d.key === 'emergency' || d.key === 'man_made' ? 'object' : 'place',
+      icon: ICONS[d.pair] || FALLBACK_ICON[d.key] || 'geo-alt',
+      distance: haversine(lat, lon, pos.lat, pos.lon),
+    };
+  }
+
+  async function queryOverpass(lat, lon, radius) {
+    let lastErr;
+    for (const endpoint of OVERPASS) {
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ data: overpassQuery(lat, lon, radius) }),
+        });
+        const host = endpoint.split('/')[2];
+        const text = await res.text();
+        if (!res.ok) { lastErr = new Error(`${host} returned HTTP ${res.status}`); continue; }
+
+        // A busy Overpass answers 200 with an XML/HTML error page rather than JSON.
+        let json;
+        try { json = JSON.parse(text); }
+        catch {
+          const m = text.match(/error[^:]*:\s*([^<\n]{0,160})/i);
+          lastErr = new Error(m ? `${host}: ${m[1].trim()}` : `${host} is too busy to answer right now`);
+          continue;
+        }
+        if (json.remark) { lastErr = new Error(`${host}: ${json.remark}`); continue; }
+
+        return (json.elements || []).map(el => toFeature(el, lat, lon)).filter(Boolean)
+          .sort((a, b) => a.distance - b.distance);
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('Overpass unreachable');
+  }
+
   /* ---------- state ---------- */
-  const photos = [];        // {id, name, size, lat, lon, alt, taken, make, model, thumb, marker, el}
+  // photo: {id, name, size, lat, lon, alt, taken, make, model, thumb, marker, el,
+  //         nearby?: {radius, features}, place?: feature}
+  const photos = [];
   let selectedId = null;
+  let nearbyPhotoId = null;   // photo whose results are currently in the Nearby tab
+  let placeMarker = null, placeLine = null;
 
   const $ = id => document.getElementById(id);
   const els = {
@@ -315,6 +514,7 @@
         <div class="small text-body-secondary text-truncate">
           ${esc([fmtDate(p.taken), p.model, fmtSize(p.size)].filter(Boolean).join(' · '))}
         </div>
+        <div class="small text-success text-truncate d-none mt-1" data-place></div>
       </div>
       <i class="bi bi-chevron-right text-body-secondary"></i>`;
 
@@ -371,7 +571,152 @@
     } else {
       osm.classList.add('d-none');
     }
+
+    // The Nearby tab only makes sense for a photo we can locate.
+    nearbyPhotoId = p.id;
+    $('tabNearbyBtn').disabled = p.lat == null;
+    bootstrap.Tab.getOrCreateInstance($('tabDetailsBtn')).show();
+    $('nearbyList').replaceChildren();
+    $('nearbyCount').classList.add('d-none');
+    $('nearbyRadius').textContent = '';
+    nearbyStatus('');
+    renderNearby();   // repopulates instantly if this photo was searched before
+
     photoModal.show();
+  }
+
+  /* ---------- nearby: fetch, render, select ---------- */
+
+  const fmtDistance = m => m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+
+  function nearbyStatus(html) { $('nearbyStatus').innerHTML = html; }
+
+  async function loadNearby(p, radius) {
+    $('nearbyList').replaceChildren();
+    $('nearbyCount').classList.add('d-none');
+    $('btnWider').disabled = true;
+    $('nearbyRadius').textContent = '';
+    nearbyStatus(`
+      <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        Searching OpenStreetMap within ${radius} m&hellip;
+      </div>`);
+
+    try {
+      let features = await queryOverpass(p.lat, p.lon, radius);
+      let used = radius;
+      // Sparse area: widen automatically until we have enough to show.
+      for (const wider of RADII.filter(r => r > radius)) {
+        if (features.length >= WANTED) break;
+        features = await queryOverpass(p.lat, p.lon, wider);
+        used = wider;
+      }
+      p.nearby = { radius: used, features };
+    } catch (e) {
+      nearbyStatus(`
+        <div class="alert alert-warning" role="alert">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          Could not reach the Overpass API — public instances often refuse requests when busy.
+          <div class="small mt-1 text-body-secondary">${esc(e.message)}</div>
+          <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnRetryNearby">
+            <i class="bi bi-arrow-clockwise me-1"></i>Try again
+          </button>
+        </div>`);
+      $('btnRetryNearby')?.addEventListener('click', () => loadNearby(p, radius));
+      $('btnWider').disabled = false;
+      return;
+    }
+    renderNearby();
+  }
+
+  function renderNearby() {
+    const p = photos.find(x => x.id === nearbyPhotoId);
+    if (!p || p.lat == null) return;
+    if (!p.nearby) return;
+
+    const filter = document.querySelector('input[name="nearbyFilter"]:checked').value;
+    const all = p.nearby.features;
+    const shown = (filter === 'all' ? all : all.filter(f => f.kind === filter)).slice(0, WANTED);
+
+    $('nearbyRadius').textContent = `${all.length} found within ${p.nearby.radius} m`;
+    $('nearbyCount').textContent = shown.length;
+    $('nearbyCount').classList.toggle('d-none', shown.length === 0);
+    $('btnWider').disabled = p.nearby.radius >= RADII[RADII.length - 1];
+
+    nearbyStatus(shown.length ? '' : `
+      <div class="alert alert-info mb-0" role="alert">
+        <i class="bi bi-info-circle me-1"></i>Nothing of this kind mapped within ${p.nearby.radius} m.
+      </div>`);
+
+    const list = $('nearbyList');
+    list.replaceChildren();
+    for (const f of shown) {
+      const chosen = p.place?.id === f.id;
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = `list-group-item list-group-item-action d-flex align-items-center gap-3${chosen ? ' active' : ''}`;
+      el.innerHTML = `
+        <i class="bi bi-${f.icon} fs-5 flex-shrink-0"></i>
+        <div class="flex-grow-1 min-w-0 text-start">
+          <div class="text-truncate">
+            <span class="fw-medium">${esc(f.name || f.category)}</span>
+            ${f.name ? `<span class="text-body-secondary small ms-1">${esc(f.category)}</span>` : ''}
+          </div>
+          <div class="small ${chosen ? '' : 'text-body-secondary'}">
+            <span class="badge rounded-pill ${f.kind === 'place' ? 'text-bg-primary' : 'text-bg-secondary'} me-1">
+              ${f.kind === 'place' ? 'Business' : 'Object'}
+            </span>
+            <span class="coords">${fmtDistance(f.distance)} away</span>
+          </div>
+        </div>
+        <i class="bi bi-${chosen ? 'check-circle-fill' : 'circle'} flex-shrink-0"></i>`;
+      el.addEventListener('click', () => choosePlace(p, chosen ? null : f));
+      list.appendChild(el);
+    }
+  }
+
+  function choosePlace(p, feature) {
+    p.place = feature || null;
+
+    for (const layer of [placeMarker, placeLine]) if (layer) map.removeLayer(layer);
+    placeMarker = placeLine = null;
+
+    if (feature) {
+      placeMarker = L.marker([feature.lat, feature.lon], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="pin text-bg-success"><span><i class="bi bi-${feature.icon}"></i></span></div>`,
+          iconSize: [32, 32], iconAnchor: [16, 30], popupAnchor: [0, -28],
+        }),
+        title: feature.name || feature.category,
+      }).addTo(map).bindPopup(`
+        <div class="text-center">
+          <div class="fw-semibold">${esc(feature.name || feature.category)}</div>
+          <div class="small text-body-secondary">${esc(feature.category)} &middot; ${fmtDistance(feature.distance)} from ${esc(p.name)}</div>
+          <a class="btn btn-sm btn-outline-secondary mt-2 w-100"
+             href="https://www.openstreetmap.org/${feature.id}" target="_blank" rel="noopener">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Open in OSM
+          </a>
+        </div>`);
+      // Leaflet writes stroke as an SVG attribute, which will not resolve a CSS variable.
+      const success = getComputedStyle(document.documentElement)
+        .getPropertyValue('--bs-success').trim() || '#198754';
+      placeLine = L.polyline([[p.lat, p.lon], [feature.lat, feature.lon]],
+        { color: success, weight: 2, dashArray: '4 4', opacity: .8 }).addTo(map);
+      map.fitBounds(placeLine.getBounds(), { padding: [80, 80], maxZoom: 18 });
+    }
+
+    renderNearby();
+    refreshRow(p);
+  }
+
+  function refreshRow(p) {
+    const slot = p.el?.querySelector('[data-place]');
+    if (!slot) return;
+    slot.innerHTML = p.place
+      ? `<i class="bi bi-${p.place.icon} me-1"></i>${esc(p.place.name || p.place.category)}`
+      : '';
+    slot.classList.toggle('d-none', !p.place);
   }
 
   function plot(p) {
@@ -479,6 +824,9 @@
     }
     photos.length = 0;
     selectedId = null;
+    nearbyPhotoId = null;
+    for (const layer of [placeMarker, placeLine]) if (layer) map.removeLayer(layer);
+    placeMarker = placeLine = null;
     els.list.replaceChildren();
     refreshStats();
     map.setView([20, 0], 2);
@@ -493,7 +841,13 @@
         properties: {
           name: p.name,
           taken: p.taken instanceof Date ? p.taken.toISOString() : null,
-          camera: [p.make, p.model].filter(Boolean).join(' ') || null
+          camera: [p.make, p.model].filter(Boolean).join(' ') || null,
+          place: p.place ? {
+            osm_id: p.place.id,
+            name: p.place.name,
+            category: p.place.pair,
+            distance_m: Math.round(p.place.distance)
+          } : null
         }
       }))
     };
@@ -518,6 +872,24 @@
   }
   els.dropzone.addEventListener('drop', e => ingest(e.dataTransfer.files));
   for (const type of ['dragover', 'drop']) document.addEventListener(type, e => e.preventDefault());
+
+  // Overpass is a shared public service — only query when the tab is actually opened,
+  // and reuse whatever we already fetched for this photo.
+  $('tabNearbyBtn').addEventListener('shown.bs.tab', () => {
+    const p = photos.find(x => x.id === nearbyPhotoId);
+    if (p && p.lat != null && !p.nearby) loadNearby(p, RADII[0]);
+  });
+
+  $('btnWider').addEventListener('click', () => {
+    const p = photos.find(x => x.id === nearbyPhotoId);
+    if (!p) return;
+    const next = RADII.find(r => r > (p.nearby?.radius ?? 0));
+    if (next) loadNearby(p, next);
+  });
+
+  for (const el of document.querySelectorAll('input[name="nearbyFilter"]')) {
+    el.addEventListener('change', renderNearby);
+  }
 
   els.btnFit.addEventListener('click', fitAll);
   els.btnClear.addEventListener('click', clearAll);

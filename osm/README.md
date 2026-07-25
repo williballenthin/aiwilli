@@ -13,8 +13,10 @@ the page is served as a plain static file and does no network calls beyond map t
 - plots each located photo as a numbered pin on an OpenStreetMap map and fits the view to them
 - lists every photo with its thumbnail and coordinates; selecting one flies the map to its pin
 - shows full per-photo metadata in a modal, with a deep link to the same spot on openstreetmap.org
+- lists the 10 nearest OpenStreetMap entities to a photo — businesses and street furniture
+  alike — and lets you pick the one the photo is actually of
 - calls out photos that carry no GPS data instead of silently dropping them
-- exports the located photos as GeoJSON
+- exports the located photos as GeoJSON, including any chosen place
 - follows the system light/dark preference, with a manual toggle
 
 ## Getting GPS data off an iPhone
@@ -27,6 +29,25 @@ iOS only hands location data to a web page if you ask it to, per upload:
 
 Photos captured through the picker's **Take Photo** option never carry GPS, regardless of
 that setting.
+
+## Nearby entities
+
+The **Nearby** tab of a photo's detail modal queries the
+[Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) for everything mapped
+around that photo's coordinates and lists the 10 nearest. Selecting one pins it on the
+map in green, draws a connector back to the photo, labels the photo's row in the sidebar,
+and adds the place to the GeoJSON export.
+
+- **Businesses / Objects** filters split shops, restaurants, hotels and offices from
+  street furniture such as waste baskets, post boxes, benches, hydrants, and bus stops.
+- The search starts at 150 m and widens automatically (400 m, 1 km, 2.5 km) when an area
+  is too sparse to fill the list; **Search wider** steps it out manually.
+- A small set of mapping minutiae is excluded so it cannot flood a dense area —
+  surveillance cameras, survey points, antennas, utility poles, manholes, street cabinets,
+  and street lamps. See `EXCLUDED` in `index.html` to change that.
+- Results are fetched once per photo and cached, and only when the tab is opened.
+  Overpass is a free shared service; public instances refuse requests when busy, so the
+  page tries a second instance and then offers a retry rather than failing silently.
 
 ## Files
 
