@@ -2230,7 +2230,7 @@ out center tags 250;`;
       finish('done', `${words} words`,
         `<i class="bi bi-check-circle text-success me-1"></i>${words} words${tokens}${cost}`);
       $('visionCta').innerHTML = '<button class="btn btn-primary" type="button" id="btnCtaPropose">'
-        + 'What tags does this support?<i class="bi bi-arrow-right ms-1"></i></button>';
+        + '<i class="bi bi-magic me-1"></i>Propose OSM tags<i class="bi bi-arrow-right ms-1"></i></button>';
       $('btnCtaPropose').addEventListener('click', () => openPhase('Propose'));
     } catch (e) {
       if (e.name === 'AbortError') {

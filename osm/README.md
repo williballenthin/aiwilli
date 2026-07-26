@@ -25,7 +25,7 @@ and re-frame when you pick an entity, which is why there is no longer a Fit butt
 
 **Every phase ends with one primary blue button** — the obvious thing to press to make
 progress: *Where was it taken?* → *Find what's nearby* → *Use &lt;entity&gt;* → *Describe the
-photo* → *Propose tags*. Secondary actions stay outlined so they never compete with it.
+photo* → *Propose OSM tags*. Secondary actions stay outlined so they never compete with it.
 Committing an entity goes **straight to extraction**: step 4 is reference material, offered
 as an outlined *Inspect the tag schema* beside the primary button, not the next stop.
 
