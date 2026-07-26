@@ -4,8 +4,10 @@
 out of its EXIF data, places it on an OpenStreetMap map, shows what OpenStreetMap has
 mapped around it, and — with your approval, tag by tag — sends corrections back.
 
-Its one-line description, and the claim every changeset it makes carries: *edits drawn
-from photo evidence collected and corroborated in person by the mapper.*
+What every changeset it makes says about itself, and the division of labour it is built
+around: *the mapper identified the object on site and chose what to record; the facts come
+from the mapper's own photograph; every tag was reviewed and approved by the mapper; a
+language model was used only to format those observations as OSM tags.*
 
 Everything runs in the browser. There is no server of ours: the page is a static file, and
 it talks directly to map tiles, the Overpass API, taginfo, OpenRouter and OpenStreetMap.
@@ -375,6 +377,62 @@ After a run the button becomes **Propose again**: edit the note, press it, and t
 proposals below are replaced. Steering it a second or third time is the expected way to
 use this, not an error path.
 
+### What the model returns is filtered, not merely requested
+
+The prompt says what to ask for. It does not constrain what comes back, and a model
+answering in good faith still crosses lines the project has drawn. So every proposal is
+checked before it is shown, at one of three severities.
+
+**Blocked** — the checkbox is disabled and the value cannot reach a changeset whatever
+else happens:
+
+| what | why |
+| --- | --- |
+| `name:de`, `int_name`, `loc_name`… | Machine-translated names have drawn DWG blocks three times since 2023. Nothing here can tell a transcription of a bilingual sign from a translation, so neither is accepted; add it by hand if the sign really says so. |
+| `wikidata`, `wikipedia`, `*:wikidata` | Identifies the object in another database. Not readable off a photograph, so it would be recalled knowledge. |
+| `description`, `note`, `fixme` | Free prose about an object is not verifiable. This is exactly what the September 2024 thread was shot down over. |
+| `source`, `source:*` | Provenance goes on the changeset, which snap-osm fills in already. |
+| `check_date`, `survey:date`… | A fact about the visit, not the photograph. snap-osm sets it itself. |
+| `ref:*`, `gnis:*`, `siret`, `fhrs:*` | An identifier from an external register cannot be observed on site. |
+| anything in iD's `discarded.json` | OpenStreetMap strips these on edit. |
+| a value outside a **closed** vocabulary | The reference editor refuses it and consumers ignore it, so it is not a judgement call — it is wrong. The allowed values are listed. |
+
+**Flagged** — unticked with the reason shown, but still the mapper's call:
+
+- **deprecated** — checked against iD's `deprecated.json` (503 rules, `*` wildcards
+  resolved). The replacement iD specifies is offered behind a *use it* link; a
+  multi-key replacement becomes several proposals rather than silently dropping the
+  ones that do not fit.
+- **not in the evidence** — for keys whose value has to be legible on the object
+  (`name`, `operator`, `brand`, `website`, `phone`, `addr:*`, `ref`…), the value is
+  looked for in the evidence the model quoted, the mapper's note and the description,
+  compared loosely enough to ignore case, punctuation and URL scheme. A value that is
+  nowhere in any of them came from somewhere other than the photograph. **This is the
+  check that catches the worst failure mode** — a plausible, correct-looking `website`
+  or `phone` recalled from training data, which the mapper cannot warrant under the
+  contributor terms.
+- **off-schema** — the reference editor does not offer this key for this kind of
+  object. Allowed, but worth a second look.
+
+`deprecated.min.json` and `discarded.min.json` are 6.7 kB together over the wire and are
+fetched once per session.
+
+### The visit is itself a contribution
+
+Above the save button is a `check_date` row, ticked by default, dated **from the EXIF
+capture time** rather than from when the upload happens. It is not a model proposal —
+nothing reads a survey date off a photograph — so snap-osm offers it directly.
+
+This matters most in the case that used to be a dead end: walk to a place whose tags are
+already perfect, and the model correctly proposes nothing. That is the most common survey
+outcome and a genuinely useful one — `check_date` is on 3.3M objects, and confirming a
+2009-vintage POI is still right in 2026 is real data. Step 6 now says so and still lets
+you save.
+
+Following StreetComplete's `ResurveyUtils`, a fresh survey mark supersedes the older
+spellings (`lastcheck`, `last_checked`, `survey:date`, `survey_date`) rather than leaving
+the object carrying two dates that disagree; they are removed in the same changeset.
+
 ### The response format
 
 The model answers in **JSON whose content is OSM keys and values**. Straight `key=value`
@@ -465,10 +523,17 @@ worth connecting before you start.
 
 ### Choosing what goes
 
-Everything staged is listed, **grouped by the object it targets**, with a checkbox on each
-group and on each tag inside it. A group with only some of its tags ticked shows as
-indeterminate rather than as fully selected. Each row shows the value it would write and,
-for a change, the value it would replace. The button counts exactly what will be sent.
+**One object per changeset.** Everything staged is listed, grouped by the object it
+targets, but the objects are a **single choice** rather than a multi-select: only the
+chosen one shows its tags, and only its tags are sent. The changeset guidance asks that a
+changeset be local and that its comment describe what is in it, and weeks of edits
+collected across a city satisfy neither — the bounding box spans places the mapper never
+touched and no honest one-line comment covers the contents. Switching objects remembers
+which of their tags you had unticked.
+
+Within the chosen object every tag has a checkbox. Each row shows the value it would write
+and, for a change, the value it would replace. The button names the object and counts
+exactly what will be sent.
 
 The changeset comment is pre-filled and editable; an upload with an empty comment is
 refused, because a comment is what a reviewer reads first.
@@ -481,8 +546,8 @@ One changeset, tagged:
 | --- | --- |
 | `comment` | yours |
 | `created_by` | `snap-osm 1.0` |
-| `source` | `survey;photo` |
-| `snap-osm:method` | the one-line description above |
+| `source` | `survey` — the documented value for "I took the pictures myself" (2.7M uses; `survey;photo` invents a value with 129) |
+| `snap-osm:method` | who did what, in that order: mapper identified and chose, photo supplied the facts, mapper approved every tag, model only formatted |
 | `snap-osm:models` | the vision and tagging models that contributed |
 
 Then one `osmChange` diff for every object at once, and a close. The sequence matters:

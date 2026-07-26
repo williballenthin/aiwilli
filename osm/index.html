@@ -1857,7 +1857,7 @@ out center tags 250;`;
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
     setPhase('Propose', { state: 'todo', summary: '', enabled: false });
-    photo.facts = null; photo.examples = null;
+    photo.facts = null; photo.examples = null; photo.surveyOn = undefined;
     $('proposeNote').value = '';       // it described the object just released
     $('proposeNote').style.height = 'auto';
     renderNearbyCta();     // ...and goes back to offering the commit when released
@@ -2110,6 +2110,9 @@ out center tags 250;`;
    */
   // External registry ids and editing metadata are part of the schema but can never
   // be read off a photograph, and listing them only dilutes the focus list.
+  // check_date is deliberately absent from this list even though it is not
+  // readable off a photograph: it is a fact about the visit, and snap-osm sets
+  // it itself. Everything here is something no photograph can show.
   const UNPHOTOGRAPHABLE = /(^ref($|:)|gnis|siret|^vat|wikidata|wikipedia|^not:|fixme|^note$|^source($|:)|^level$|^fax$|_id$|^check_date)/i;
   const FOCUS_LIMIT = 18;
 
@@ -2675,7 +2678,9 @@ out center tags 250;`;
         .filter(f => f && typeof f.key === 'string' && typeof f.value === 'string' && f.key && f.value)
         .map(f => ({ ...f, enabled: true }));
       renderProposals();
-      await validateHours(photo.facts);
+      // Both run before the mapper can tick anything: a proposal that will be
+      // refused should never look acceptable, even briefly.
+      await Promise.all([reviewFacts(photo.facts), validateHours(photo.facts)]);
       renderProposals();
 
       const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
@@ -2750,6 +2755,146 @@ out center tags 250;`;
     }
   }
 
+  /* ---------- guarding what the model returns ----------
+     The prompt says what to ask for. It does not constrain what comes back, and
+     a model answering in good faith still crosses lines the project has drawn:
+
+     - It recognises a chain and fills in `website`, `phone` or `brand:wikidata`
+       from what it knows rather than from the photograph. That is the worst
+       failure mode because the result looks right, and it is data the mapper
+       cannot warrant under the contributor terms.
+     - It writes `name:de`, `name:fr`, `description`. Machine-translated names
+       have drawn DWG blocks three times since 2023 and the guidance is flat:
+       "Do not add translations — machine-generated or otherwise — of names."
+     - It uses a tag the project deprecated years ago.
+
+     So the output is filtered, not merely requested. Three severities: blocked
+     (cannot be staged at all), flagged (unticked, with the reason, still the
+     mapper's call), and clean. */
+
+  const TAG_RULES = [
+    { re: /^name:[a-z]{2,3}([-_]|$)|^(int|loc|nat|reg)_name(:|$)/i, level: 'block',
+      why: 'Names in other languages must come from a sign in that language, and nothing here '
+         + 'can tell a transcription from a translation. Add it by hand if the sign really says so.' },
+    { re: /(^|:)(wikidata|wikipedia|wikimedia_commons)$/i, level: 'block',
+      why: 'This identifies the object in another database. It cannot be read off a photograph, '
+         + 'so it would be recalled knowledge, not survey.' },
+    { re: /^description(:|$)|^note(:|$)|^fixme$|^comment$/i, level: 'block',
+      why: 'Free prose about an object is not verifiable and does not belong in the map.' },
+    { re: /^source(:|$)/i, level: 'block',
+      why: 'Provenance goes on the changeset, which snap-osm fills in already.' },
+    { re: /^(check_date|survey_date|lastcheck|last_checked)(:|$)|^survey:date$/i, level: 'block',
+      why: 'Survey dates are a fact about the visit, not about the photograph. snap-osm sets '
+         + 'this itself from the capture date.' },
+    { re: /^ref:|^(gnis|siret|vatin|fhrs|ele:|nhd)/i, level: 'block',
+      why: 'An identifier from an external register cannot be observed on site.' },
+  ];
+
+  // Keys whose value has to be legible on the object itself. If the model
+  // returns one whose value is nowhere in the evidence it quoted, it came from
+  // somewhere other than the photograph.
+  const VERBATIM_KEYS =
+    /^(name|alt_name|old_name|official_name|operator|brand|website|contact:website|url|phone|contact:phone|email|contact:email|addr:(housenumber|street|postcode|city|housename)|ref|inscription)$/i;
+
+  /** Compare loosely: case, punctuation and separators are noise here. */
+  const loosely = s => String(s).toLowerCase().replace(/^https?:\/\/(www\.)?/, '')
+    .replace(/[^a-z0-9]+/g, '');
+
+  const DEPRECATED_URL = `${ID_SCHEMA_BASE}/deprecated.min.json`;
+  const DISCARDED_URL = `${ID_SCHEMA_BASE}/discarded.min.json`;
+  let tagRulesPromise = null;
+  const loadTagRules = () => tagRulesPromise ||= Promise.all([
+    fetch(DEPRECATED_URL).then(r => r.ok ? r.json() : []),
+    fetch(DISCARDED_URL).then(r => r.ok ? r.json() : {}),
+  ]).then(([deprecated, discarded]) => ({ deprecated, discarded }))
+    .catch(() => { tagRulesPromise = null; return { deprecated: [], discarded: {} }; });
+
+  /** iD's deprecation rules, with `*` meaning "any value, carried across as $1". */
+  function deprecationFor(rules, key, value, tags) {
+    for (const rule of rules) {
+      const entries = Object.entries(rule.old);
+      if (!entries.some(([k]) => k === key)) continue;
+      const wildcards = {};
+      const matches = entries.every(([k, v]) => {
+        const have = k === key ? value : tags[k];
+        if (have === undefined) return false;
+        if (v === '*') { wildcards['$1'] = have; return true; }
+        return have === v;
+      });
+      if (!matches) continue;
+      const replace = Object.fromEntries(Object.entries(rule.replace || {})
+        .map(([k, v]) => [k, v === '$1' ? wildcards.$1 : v]));
+      return { replace: Object.keys(replace).length ? replace : null };
+    }
+    return null;
+  }
+
+  /** The schema field that owns this key, if any. */
+  const fieldForKey = key => [...(photo.schema?.id?.recommended || []),
+                              ...(photo.schema?.id?.optional || [])]
+    .find(f => f.keys.includes(key) || f.keys.some(k => k.endsWith(':') && key.startsWith(k)));
+
+  function reviewFact(rules, f) {
+    const key = f.key;
+
+    for (const r of TAG_RULES) {
+      if (r.re.test(key)) return { level: 'block', label: 'not from a photo', why: r.why };
+    }
+    if (rules.discarded && key in rules.discarded) {
+      return { level: 'block', label: 'discarded tag',
+               why: 'OpenStreetMap strips this key on edit; it carries no meaning.' };
+    }
+
+    const dep = deprecationFor(rules.deprecated || [], key, f.value, photo.entity?.tags || {});
+    if (dep) {
+      const asText = dep.replace
+        ? Object.entries(dep.replace).map(([k, v]) => `${k}=${v}`).join(', ') : null;
+      return { level: 'warn', label: 'deprecated',
+               why: asText ? `OpenStreetMap has replaced this with ${asText}.`
+                           : 'OpenStreetMap has deprecated this tag with no direct replacement.',
+               replace: dep.replace };
+    }
+
+    const field = fieldForKey(key);
+    // A closed vocabulary is closed: the reference editor will not accept
+    // anything else and data consumers ignore it, so this is not a judgement
+    // call the mapper can usefully make — the value is simply wrong.
+    if (field?.closed && field.options.length
+        && !field.options.some(o => o.value === f.value)) {
+      return { level: 'block', label: 'not an allowed value',
+               why: `${key} takes a fixed list of values and “${f.value}” is not one of them. `
+                  + `Allowed: ${field.options.slice(0, 8).map(o => o.value).join(', ')}`
+                  + `${field.optionCount > 8 ? `, and ${field.optionCount - 8} more` : ''}.` };
+    }
+
+    if (VERBATIM_KEYS.test(key)) {
+      const hay = loosely(`${f.evidence || ''} ${proposeNote()} ${photo.description || ''}`);
+      const needle = key.toLowerCase().includes('phone')
+        ? String(f.value).replace(/\D+/g, '') : loosely(f.value);
+      if (needle && !hay.includes(needle)) {
+        return { level: 'warn', label: 'not in the evidence',
+                 why: 'This value does not appear in the description of the photograph, so it '
+                    + 'may be something the model knows rather than something it saw. Check it '
+                    + 'against the photo before sending.' };
+      }
+    }
+
+    if (!field && !(key in (photo.entity?.tags || {}))) {
+      return { level: 'warn', label: 'off-schema',
+               why: 'The reference editor does not offer this key for this kind of object. That '
+                  + 'is allowed, but worth a second look.' };
+    }
+    return { level: 'ok' };
+  }
+
+  async function reviewFacts(facts) {
+    const rules = await loadTagRules();
+    for (const f of facts) {
+      f.review = reviewFact(rules, f);
+      if (f.review.level !== 'ok') f.enabled = false;
+    }
+  }
+
   /** Sort each proposed fact against what the object already carries. */
   const classify = f => {
     const current = photo.entity.tags[f.key];
@@ -2758,6 +2903,26 @@ out center tags 250;`;
   };
 
   const CONF_CLASS = { high: 'text-bg-success', medium: 'text-bg-warning', low: 'text-bg-secondary' };
+
+  const reviewBadge = f => {
+    const r = f.review;
+    if (!r || r.level === 'ok') return '';
+    return `<span class="badge text-bg-${r.level === 'block' ? 'danger' : 'warning'}">${esc(r.label)}</span>`;
+  };
+
+  const reviewNote = (f, i) => {
+    const r = f.review;
+    if (!r || r.level === 'ok') return '';
+    const swap = r.replace
+      ? `<span class="d-block mt-1">Use instead:
+          <code>${esc(Object.entries(r.replace).map(([k, v]) => `${k}=${v}`).join(' '))}</code>
+          <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button"
+                  data-replace="${i}">use it</button></span>` : '';
+    return `<div class="small text-${r.level === 'block' ? 'danger' : 'warning'}-emphasis text-break mt-1">
+      <i class="bi bi-${r.level === 'block' ? 'x-octagon' : 'exclamation-triangle'} me-1"></i>${esc(r.why)}
+      ${r.level === 'block' ? '<span class="d-block">Cannot be staged.</span>' : ''}${swap}
+    </div>`;
+  };
 
   const hoursBadge = f => {
     const h = f.hours;
@@ -2788,14 +2953,64 @@ out center tags 250;`;
     </div>`;
   };
 
+  /* ---------- the survey itself is a contribution ----------
+     Walking to a place and confirming its tags are still right is the most
+     common survey outcome and a genuinely useful one — check_date is on 3.3M
+     objects, and it is the whole of Every Door's core interaction. It is not
+     read off the photograph, so no model proposes it; snap-osm offers it
+     directly, dated from the EXIF capture time rather than from when the
+     upload happens. */
+
+  // The variants StreetComplete supersedes when it stamps a fresh survey.
+  const LEGACY_CHECK_KEYS = ['lastcheck', 'last_checked', 'survey:date', 'survey_date'];
+
+  const surveyDate = () => {
+    const d = photo?.taken instanceof Date && !isNaN(photo.taken) ? photo.taken : new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
+  const surveyRow = () => {
+    if (!photo?.entity) return '';
+    const on = photo.surveyOn !== false;
+    const was = photo.entity.tags.check_date
+      || LEGACY_CHECK_KEYS.map(k => photo.entity.tags[k]).find(Boolean);
+    return `
+      <div class="px-3 pt-3">
+        <h3 class="fw-medium small fs-6 mb-1">
+          <i class="bi bi-geo-alt text-primary me-1"></i>The visit itself</h3>
+      </div>
+      <div class="list-group list-group-flush">
+        <label class="list-group-item d-flex gap-2 align-items-start py-2">
+          <input class="form-check-input mt-1 flex-shrink-0" type="checkbox"
+                 id="surveyCheck" ${on ? 'checked' : ''}>
+          <span class="min-w-0 flex-grow-1">
+            <span class="d-flex flex-wrap align-items-baseline gap-1">
+              <code class="small">check_date</code>
+              <span class="badge text-bg-primary">you were there</span>
+            </span>
+            <div class="text-break"><code class="small">${esc(surveyDate())}</code></div>
+            <div class="small text-body-secondary text-break">
+              ${was ? `replaces <code>${esc(was)}</code>` : 'records that you checked this object in person'}
+              ${photo.taken instanceof Date ? '' : ' &middot; the photo carries no date, so today is used'}
+            </div>
+          </span>
+        </label>
+      </div>`;
+  };
+
   function renderProposals() {
     const host = $('proposeList');
     const facts = photo.facts || [];
     if (!facts.length) {
+      // Not a dead end: confirming that everything already on the object is
+      // still correct is the contribution here.
       host.innerHTML = '<div class="p-3"><div class="alert alert-info mb-0" role="alert">'
-        + '<i class="bi bi-info-circle me-1"></i>The model proposed nothing the description supports.'
-        + '</div></div>';
-      $('proposeCta').replaceChildren();
+        + '<i class="bi bi-info-circle me-1"></i>The model proposed nothing the description '
+        + 'supports — which usually means the object is already tagged correctly. You can still '
+        + 'record that you checked it.</div></div>' + surveyRow();
+      wireProposalInputs(host);
+      renderProposeCta();
       return;
     }
 
@@ -2817,27 +3032,52 @@ out center tags 250;`;
             <label class="list-group-item d-flex gap-2 align-items-start py-2">
               <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" data-fact="${i}"
                      ${f.enabled && kind !== 'same' ? 'checked' : ''}
-                     ${kind === 'same' || f.hours?.ok === false ? 'disabled' : ''}>
+                     ${kind === 'same' || f.hours?.ok === false
+                       || f.review?.level === 'block' ? 'disabled' : ''}>
               <span class="min-w-0 flex-grow-1">
                 <span class="d-flex flex-wrap align-items-baseline gap-1">
                   <code class="small">${esc(f.key)}</code>
                   <span class="badge ${CONF_CLASS[f.confidence] || 'text-bg-secondary'}">${esc(f.confidence || '?')}</span>
-                  ${hoursBadge(f)}
+                  ${reviewBadge(f)}${hoursBadge(f)}
                 </span>
                 <div class="text-break"><code class="small">${esc(f.value)}</code></div>
                 ${kind === 'update' ? `<div class="small text-body-secondary text-break">
                     replaces <code>${esc(photo.entity.tags[f.key])}</code></div>` : ''}
                 ${f.evidence ? `<div class="small text-body-secondary fst-italic text-break">“${esc(f.evidence)}”</div>` : ''}
-                ${hoursNote(f, i)}
+                ${reviewNote(f, i)}${hoursNote(f, i)}
               </span>
             </label>`).join('')}
         </div>`;
-    }).join('');
+    }).join('') + surveyRow();
 
+    wireProposalInputs(host);
+    renderProposeCta();
+  }
+
+  function wireProposalInputs(host) {
     for (const box of host.querySelectorAll('input[data-fact]')) {
       box.addEventListener('change', () => {
         photo.facts[Number(box.dataset.fact)].enabled = box.checked;
         renderProposeCta();
+      });
+    }
+    // A deprecation with a replacement is the one case where the fix is
+    // unambiguous, so it is offered as a single tap. Multi-key replacements
+    // become extra facts rather than silently dropping the ones that do not fit.
+    for (const btn of host.querySelectorAll('button[data-replace]')) {
+      btn.addEventListener('click', async e => {
+        e.preventDefault();
+        const idx = Number(btn.dataset.replace);
+        const fact = photo.facts[idx];
+        const pairs = Object.entries(fact.review.replace);
+        const [firstKey, firstValue] = pairs[0];
+        Object.assign(fact, { key: firstKey, value: firstValue });
+        for (const [k, v] of pairs.slice(1)) {
+          photo.facts.push({ key: k, value: v, evidence: fact.evidence,
+                             confidence: fact.confidence, enabled: true });
+        }
+        await Promise.all([reviewFacts(photo.facts), validateHours(photo.facts)]);
+        renderProposals();
       });
     }
     for (const btn of host.querySelectorAll('button[data-canonical]')) {
@@ -2851,17 +3091,23 @@ out center tags 250;`;
         renderProposals();
       });
     }
-    renderProposeCta();
+    host.querySelector('#surveyCheck')?.addEventListener('change', e => {
+      photo.surveyOn = e.target.checked;
+      renderProposeCta();
+    });
   }
 
   // A value the validator rejects never reaches the changeset, whatever the
   // checkbox says.
   const enabledFacts = () => (photo.facts || [])
-    .filter(f => f.enabled && classify(f) !== 'same' && f.hours?.ok !== false);
+    .filter(f => f.enabled && classify(f) !== 'same' && f.hours?.ok !== false
+                 && f.review?.level !== 'block');
+
+  const surveyStaged = () => !!photo?.entity && photo.surveyOn !== false;
 
   function renderProposeCta() {
     const host = $('proposeCta');
-    const n = enabledFacts().length;
+    const n = enabledFacts().length + (surveyStaged() ? 1 : 0);
     host.innerHTML = `<button class="btn btn-primary" type="button" id="btnSaveChangeset" ${n ? '' : 'disabled'}>
       <i class="bi bi-save me-1"></i>${n ? `Save ${n} change${n === 1 ? '' : 's'}` : 'Nothing selected'}
     </button><p class="small text-body-secondary text-center mt-2 mb-0" id="saveNote">
@@ -2873,13 +3119,22 @@ out center tags 250;`;
   function saveChangeset() {
     const f = photo.entity;
     const chosen = enabledFacts();
-    if (!chosen.length) return;
+    const survey = surveyStaged();
+    if (!chosen.length && !survey) return;
 
     const key = f.id;
     const prev = readCache(CHANGES_PREFIX, key, Infinity) || { osm: f.id, tags: {}, base: {}, sources: [] };
     for (const fact of chosen) {
       prev.tags[fact.key] = fact.value;
       if (!(fact.key in prev.base)) prev.base[fact.key] = f.tags[fact.key] ?? null;
+    }
+    if (survey) {
+      prev.tags.check_date = surveyDate();
+      if (!('check_date' in prev.base)) prev.base.check_date = f.tags.check_date ?? null;
+      // StreetComplete's rule: a fresh survey mark supersedes the older spellings
+      // rather than leaving the object carrying two dates that disagree.
+      prev.drop = [...new Set([...(prev.drop || []),
+                               ...LEGACY_CHECK_KEYS.filter(k => k in f.tags)])];
     }
     prev.name = f.name || null;
     prev.pair = f.pair;
@@ -2891,12 +3146,13 @@ out center tags 250;`;
     }];
     writeCache(CHANGES_PREFIX, key, prev);
 
+    const n = chosen.length + (survey ? 1 : 0);
     const total = Object.keys(localStorage).filter(k => k.startsWith(CHANGES_PREFIX)).length;
     $('saveNote').innerHTML =
-      `<i class="bi bi-check-circle text-success me-1"></i>Saved ${chosen.length} tag`
-      + `${chosen.length === 1 ? '' : 's'} for <code>${esc(f.id)}</code>. `
+      `<i class="bi bi-check-circle text-success me-1"></i>Saved ${n} tag`
+      + `${n === 1 ? '' : 's'} for <code>${esc(f.id)}</code>. `
       + `${total} object${total === 1 ? '' : 's'} staged in this browser, awaiting upload to OpenStreetMap.`;
-    setPhase('Propose', { state: 'done', summary: `${chosen.length} saved` });
+    setPhase('Propose', { state: 'done', summary: `${n} saved` });
     refreshUpload();
   }
 
@@ -2923,8 +3179,16 @@ out center tags 250;`;
   };
   const APP_NAME = 'snap-osm';
   const APP_VERSION = '1.0';
+  // Says who did what, in that order, because that is the question a reviewer
+  // seeing "AI" anywhere near a changeset actually wants answered. Kept under
+  // the API's 255-character limit for a tag value.
   const APP_DESCRIPTION =
-    'snap-osm: edits drawn from photo evidence collected and corroborated in person by the mapper.';
+    'Mapper identified the object on site and chose what to record; facts come from the '
+    + "mapper's own photograph; every tag was reviewed and approved by the mapper. A language "
+    + 'model was used only to format those observations as OSM tags.';
+  // Set this once there is a page to point at; a URL is worth more to a reviewer
+  // than any claim we can make in a tag value.
+  const APP_WIKI_URL = '';
   const OSM_SCOPES = 'read_prefs write_api';
   const OSM_TOKEN_PREFIX = APP_PREFIX + 'osm:1:';
   // Survives the redirect, dies with the tab — exactly the lifetime a PKCE
@@ -3093,10 +3357,25 @@ out center tags 250;`;
   const uploadOff = new Map();
   let uploadBusy = false;
 
-  const uploadSelection = () => stagedEdits().map(x => ({
-    ...x,
-    keys: Object.keys(x.entry.tags).filter(k => !uploadOff.get(x.id)?.has(k)),
-  })).filter(x => x.keys.length);
+  /* One object per changeset. The changeset guidance asks that a changeset be
+     local and that its comment describe what is in it; weeks of edits collected
+     across a city satisfy neither — the bounding box spans places the mapper
+     never touched, and no honest one-line comment covers the contents. So the
+     objects are a single choice, not a multi-select. */
+  let uploadPick = null;
+
+  const uploadTarget = () => {
+    const staged = stagedEdits();
+    if (!staged.length) return null;
+    return staged.find(s => s.id === uploadPick) || staged[0];
+  };
+
+  const uploadSelection = () => {
+    const t = uploadTarget();
+    if (!t) return [];
+    const keys = Object.keys(t.entry.tags).filter(k => !uploadOff.get(t.id)?.has(k));
+    return keys.length ? [{ ...t, keys }] : [];
+  };
 
   function refreshUpload() {
     const staged = stagedEdits();
@@ -3151,27 +3430,33 @@ out center tags 250;`;
         + '</div></div>';
       return;
     }
-    host.innerHTML = staged.map(({ id, entry }) => {
-      const off = uploadOff.get(id) || new Set();
-      const keys = Object.keys(entry.tags);
-      const on = keys.filter(k => !off.has(k)).length;
-      const photos = [...new Set((entry.sources || []).map(s => s.photo))];
-      return `
+    const target = uploadTarget();
+    host.innerHTML = `
+      ${staged.length > 1 ? `<p class="small text-body-secondary px-3 pt-3 mb-0">
+        One object per changeset, so pick the one to send now. The rest keep waiting.</p>` : ''}
+      ${staged.map(({ id, entry }) => {
+        const chosen = id === target?.id;
+        const off = uploadOff.get(id) || new Set();
+        const keys = Object.keys(entry.tags);
+        const on = keys.filter(k => !off.has(k)).length;
+        const photos = [...new Set((entry.sources || []).map(s => s.photo))];
+        return `
         <div class="border-top">
           <label class="d-flex gap-2 align-items-start px-3 py-2 mb-0 nearby-head">
-            <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" data-group="${esc(id)}"
-                   ${on ? 'checked' : ''} ${on && on < keys.length ? 'data-partial="1"' : ''}>
+            <input class="form-check-input mt-1 flex-shrink-0" type="radio" name="uploadGroup"
+                   data-group="${esc(id)}" ${chosen ? 'checked' : ''}>
             <span class="min-w-0 flex-grow-1">
               <span class="fw-medium d-block text-truncate">${esc(entry.name || entry.pair || id)}</span>
               <span class="small text-body-secondary d-block text-truncate">
-                <code>${esc(id)}</code> &middot; ${on} of ${keys.length} tag${keys.length === 1 ? '' : 's'}
+                <code>${esc(id)}</code> &middot; ${chosen ? `${on} of ${keys.length}` : keys.length}
+                tag${keys.length === 1 ? '' : 's'}
                 ${photos.length ? ` &middot; from ${esc(photos.join(', '))}` : ''}
               </span>
               ${entry.conflict ? `<span class="small text-warning-emphasis d-block">
                   <i class="bi bi-exclamation-triangle me-1"></i>${esc(entry.conflict)}</span>` : ''}
             </span>
           </label>
-          <div class="list-group list-group-flush">
+          ${chosen ? `<div class="list-group list-group-flush">
             ${keys.map(k => `
               <label class="list-group-item d-flex gap-2 align-items-start py-2 ps-5">
                 <input class="form-check-input mt-1 flex-shrink-0" type="checkbox"
@@ -3183,9 +3468,9 @@ out center tags 250;`;
                       replaces <code>${esc(entry.base[k])}</code></span>` : ''}
                 </span>
               </label>`).join('')}
-          </div>
+          </div>` : ''}
         </div>`;
-    }).join('');
+      }).join('')}`;
 
     for (const box of host.querySelectorAll('input[data-tag]')) {
       box.addEventListener('change', () => {
@@ -3197,21 +3482,18 @@ out center tags 250;`;
     }
     for (const box of host.querySelectorAll('input[data-group]')) {
       box.addEventListener('change', () => {
-        const id = box.dataset.group;
-        const entry = staged.find(s => s.id === id)?.entry;
-        uploadOff.set(id, box.checked ? new Set() : new Set(Object.keys(entry?.tags || {})));
+        uploadPick = box.dataset.group;
+        $('uploadComment').value = '';        // it described the previous object
         renderUploadList(); renderUploadCta();
       });
     }
-    // A group with only some of its tags ticked reads as indeterminate rather
-    // than as "all of it", which is what a plain checkbox would imply.
-    for (const box of host.querySelectorAll('input[data-partial]')) box.indeterminate = true;
   }
 
   const defaultComment = sel => {
-    const n = sel.reduce((t, s) => t + s.keys.length, 0);
-    const what = sel.length === 1 ? (sel[0].entry.name || sel[0].id) : `${sel.length} objects`;
-    return `${n} tag${n === 1 ? '' : 's'} on ${what} from my own photographs, checked on site`;
+    if (!sel.length) return '';
+    const n = sel[0].keys.length;
+    return `Surveyed ${sel[0].entry.name || sel[0].id}: ${n} tag${n === 1 ? '' : 's'} `
+      + 'from my own photographs, checked on site';
   };
 
   function renderUploadCta() {
@@ -3223,17 +3505,19 @@ out center tags 250;`;
 
     if (!$('uploadComment').value.trim() && sel.length) $('uploadComment').value = defaultComment(sel);
     $('uploadTagsNote').innerHTML =
-      'The changeset also records <code>created_by</code>, <code>source=survey;photo</code> '
-      + 'and the models that helped, so anyone reviewing it can see how it was made.';
+      'The changeset also records <code>created_by</code>, <code>source=survey</code>, who did '
+      + 'what, and which models helped, so anyone reviewing it can see how it was made.';
 
+    const name = sel.length ? (sel[0].entry.name || sel[0].id) : '';
     host.innerHTML = `
       <button class="btn btn-primary" type="button" id="btnUpload" ${ready ? '' : 'disabled'}>
         <i class="bi bi-cloud-upload me-1"></i>${uploadBusy ? 'Uploading…'
-          : sel.length ? `Upload ${tags} tag${tags === 1 ? '' : 's'} on ${sel.length} object${sel.length === 1 ? '' : 's'}`
+          : sel.length ? `Upload ${tags} tag${tags === 1 ? '' : 's'} on ${esc(name)}`
           : 'Nothing selected'}
       </button>
       <p class="small text-body-secondary text-center mt-2 mb-0" id="uploadNote">
-        ${osmToken() ? `One changeset, to the ${esc(osmServer().label)}. Uploaded edits are removed from this browser.`
+        ${osmToken() ? `One changeset, one object, to the ${esc(osmServer().label)}. `
+                       + 'Uploaded tags are removed from this browser.'
                      : 'Connect an OpenStreetMap account to upload.'}
       </p>`;
     $('btnUpload').addEventListener('click', runUpload);
@@ -3280,6 +3564,9 @@ out center tags 250;`;
       for (const t of [...el.querySelectorAll('tag')]) el.removeChild(t);
       const merged = { ...live.tags };
       for (const k of keys) merged[k] = entry.tags[k];
+      // Superseded survey-date spellings go, so the object does not end up
+      // carrying two check dates that disagree.
+      if (keys.includes('check_date')) for (const k of entry.drop || []) delete merged[k];
       for (const [k, v] of Object.entries(merged)) {
         const t = doc.createElement('tag');
         t.setAttribute('k', k); t.setAttribute('v', v);
@@ -3297,8 +3584,12 @@ out center tags 250;`;
     const tags = {
       comment,
       created_by: `${APP_NAME} ${APP_VERSION}`,
-      source: 'survey;photo',
+      // Just `survey`. The wiki says to use it when you took the pictures
+      // yourself, and it is what 2.7M changesets use; `survey;photo` invents a
+      // value (129 uses) to say something `survey` already says.
+      source: 'survey',
       [`${APP_NAME}:method`]: APP_DESCRIPTION,
+      ...(APP_WIKI_URL ? { description: APP_WIKI_URL } : {}),
       ...(models.length ? { [`${APP_NAME}:models`]: models.join(';') } : {}),
     };
     const doc = document.implementation.createDocument('', 'osm');
@@ -3387,6 +3678,7 @@ out center tags 250;`;
         writeCache(CHANGES_PREFIX, i.id, { ...i.entry, tags: rest });
       }
       uploadOff.clear();
+      uploadPick = null;                    // fall through to whatever is next
       $('uploadComment').value = '';
 
       const tags = items.reduce((t, i) => t + i.keys.length, 0);
