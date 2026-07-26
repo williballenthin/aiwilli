@@ -572,7 +572,7 @@ One changeset, tagged:
 | `created_by` | `snap-osm 1.0` |
 | `source` | `survey` — the documented value for "I took the pictures myself" (2.7M uses; `survey;photo` invents a value with 129) |
 | `snap-osm:method` | who did what, in that order: mapper identified and chose, photo supplied the facts, mapper approved every tag, model only formatted |
-| `snap-osm:models` | the vision and tagging models that contributed |
+| `snap-osm:models` | **only if you ask for it in settings** — see below |
 
 Then one `osmChange` diff for every object at once, and a close. The sequence matters:
 
@@ -591,7 +591,25 @@ Then one `osmChange` diff for every object at once, and a close. The sequence ma
    stays staged rather than being silently binned. A failure at any point leaves everything
    in the browser, and says so.
 
-On success you get a link to the changeset on the server you uploaded to.
+**Naming the models is off by default.** The changeset already says a language model
+formatted the observations and that you approved every tag, which is the part a reviewer
+needs; the exact model ids add detail nobody asked for, and no convention exists for
+publishing them. There is a settings toggle for when there *is* a reason — a wiki page
+describing a particular setup, or a discussion where someone asked.
+
+On success the changeset **opens in a new tab** and the link stays on the page. The tab is
+opened without `noopener` and then has its `opener` severed by hand: `window.open(url,
+'_blank', 'noopener')` returns `null` by specification, so there would be no way to tell
+"opened" from "blocked by the browser" — and the result line says which happened.
+
+### Throwing edits away
+
+Every staged object has a discard control, and there is one for all of them at once. Both
+take **two taps**: the first arms the button and says *Really discard?*, the second does
+it, and an armed button disarms itself after five seconds. Nothing is recoverable
+afterwards, so the confirmation is the point — but a modal for something this small is
+worse than a button that asks once. The notice afterwards says how many went and that
+nothing was sent to OpenStreetMap.
 
 ## Getting GPS data off an iPhone
 

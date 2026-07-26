@@ -66,6 +66,8 @@
   .btn { min-height: 2.75rem; }
   .btn-group-sm > .btn { padding: .5rem .6rem; font-size: .95rem; min-height: 2.75rem; }
   .btn-link, .leaflet-container .btn { min-height: 0; }
+  /* …but a discard control is a real target, not an inline link. */
+  .btn-touch { min-height: 2.75rem; min-width: 2.75rem; }
   .accordion-button { padding-top: 1rem; padding-bottom: 1rem; }
   .leaflet-touch .leaflet-bar a { width: 2.25rem; height: 2.25rem; line-height: 2.25rem; }
   /* font:inherit on the container dragged the attribution up to 16px, where it
@@ -647,6 +649,18 @@
           <button class="btn btn-outline-secondary" type="button" id="btnCopyDescription">Copy</button>
         </div>
 
+        <div class="form-check mt-3">
+          <input class="form-check-input" type="checkbox" id="setOsmNameModels">
+          <label class="form-check-label" for="setOsmNameModels">
+            Name the models in the changeset
+          </label>
+          <div class="form-text">Off by default. The changeset already states that a language
+            model formatted the observations and that you approved every tag, which is the part
+            a reviewer needs. Naming the exact models adds detail nobody has asked for and no
+            convention exists for. Turn it on when there is a reason — a wiki page describing a
+            specific setup, or a discussion where someone asked.</div>
+        </div>
+
         <div class="mt-3" id="osmAuthState"></div>
 
       </div>
@@ -1105,7 +1119,7 @@ out center tags 250;`;
   // be able to land on the real map by accident.
   const SETTINGS_DEFAULTS = {
     apiKey: '', model: '', tagModel: '', tagEffort: 'high',
-    osmServer: 'dev', osmClientIds: {},
+    osmServer: 'dev', osmClientIds: {}, osmNameModels: false,
   };
   const loadSettings = () => {
     try {
@@ -3358,6 +3372,7 @@ out center tags 250;`;
     const server = osmServer();
     $('setOsmServer').value = settings.osmServer;
     $('setOsmClientId').value = settings.osmClientIds?.[settings.osmServer] || '';
+    $('setOsmNameModels').checked = !!settings.osmNameModels;
     $('osmRedirectUri').value = redirectUri();
     $('osmAppDescription').value = APP_DESCRIPTION;
     const link = $('osmRegisterLink');
@@ -3390,6 +3405,8 @@ out center tags 250;`;
      never touched, and no honest one-line comment covers the contents. So the
      objects are a single choice, not a multi-select. */
   let uploadPick = null;
+  // Which discard button is armed, if any: an object id, or '*' for all.
+  let discardArmed = null, discardTimer = null;
 
   const uploadTarget = () => {
     const staged = stagedEdits();
@@ -3483,6 +3500,13 @@ out center tags 250;`;
               ${entry.conflict ? `<span class="small text-warning-emphasis d-block">
                   <i class="bi bi-exclamation-triangle me-1"></i>${esc(entry.conflict)}</span>` : ''}
             </span>
+            <button class="btn btn-sm btn-link btn-touch link-secondary flex-shrink-0 align-self-center"
+                    type="button" data-discard="${esc(id)}"
+                    title="Throw away the staged edits for this object">
+              ${discardArmed === id
+                ? '<span class="text-danger-emphasis">Really discard?</span>'
+                : '<i class="bi bi-trash"></i><span class="visually-hidden">Discard</span>'}
+            </button>
           </label>
           ${chosen ? `<div class="list-group list-group-flush">
             ${keys.map(k => `
@@ -3498,7 +3522,37 @@ out center tags 250;`;
               </label>`).join('')}
           </div>` : ''}
         </div>`;
-      }).join('')}`;
+      }).join('')}
+      ${staged.length > 1 ? `<div class="px-3 py-2 border-top text-center">
+        <button class="btn btn-sm btn-link btn-touch link-secondary" type="button" data-discard="*">
+          ${discardArmed === '*' ? '<span class="text-danger-emphasis">Really discard all '
+            + `${staged.length} objects?</span>` : `Discard all ${staged.length} staged objects`}
+        </button></div>` : ''}`;
+
+    // Two taps to discard, because it cannot be undone — the first arms the
+    // button and says so, the second does it. A stray tap elsewhere disarms.
+    for (const btn of host.querySelectorAll('button[data-discard]')) {
+      btn.addEventListener('click', e => {
+        e.preventDefault();
+        const id = btn.dataset.discard;
+        if (discardArmed !== id) {
+          discardArmed = id;
+          clearTimeout(discardTimer);
+          discardTimer = setTimeout(() => { discardArmed = null; renderUploadList(); }, 5000);
+          renderUploadList();
+          return;
+        }
+        clearTimeout(discardTimer);
+        discardArmed = null;
+        const gone = id === '*' ? stagedEdits().map(x => x.id) : [id];
+        for (const g of gone) { dropCache(CHANGES_PREFIX, g); uploadOff.delete(g); previewCache.delete(g); }
+        if (gone.includes(uploadPick)) uploadPick = null;
+        $('uploadComment').value = '';
+        refreshUpload();
+        flashAlert(`Discarded ${gone.length} staged object${gone.length === 1 ? '' : 's'}. `
+          + 'Nothing was sent to OpenStreetMap.', 'secondary', 'trash');
+      });
+    }
 
     for (const box of host.querySelectorAll('input[data-tag]')) {
       box.addEventListener('change', () => {
@@ -3533,8 +3587,9 @@ out center tags 250;`;
 
     if (!$('uploadComment').value.trim() && sel.length) $('uploadComment').value = defaultComment(sel);
     $('uploadTagsNote').innerHTML =
-      'The changeset also records <code>created_by</code>, <code>source=survey</code>, who did '
-      + 'what, and which models helped, so anyone reviewing it can see how it was made.';
+      'The changeset also records <code>created_by</code>, <code>source=survey</code> and who '
+      + 'did what, so anyone reviewing it can see how it was made.'
+      + (settings.osmNameModels ? ' The models are named too, as you asked in settings.' : '');
 
     const name = sel.length ? (sel[0].entry.name || sel[0].id) : '';
     host.innerHTML = `
@@ -3619,9 +3674,12 @@ out center tags 250;`;
       // yourself, and it is what 2.7M changesets use; `survey;photo` invents a
       // value (129 uses) to say something `survey` already says.
       source: 'survey',
+      // The disclosure that matters: a model was involved, and here is exactly
+      // what it did. Which model is off by default — see settings.
       [`${APP_NAME}:method`]: APP_DESCRIPTION,
       ...(APP_WIKI_URL ? { description: APP_WIKI_URL } : {}),
-      ...(models.length ? { [`${APP_NAME}:models`]: models.join(';') } : {}),
+      ...(settings.osmNameModels && models.length
+        ? { [`${APP_NAME}:models`]: models.join(';') } : {}),
     };
     const doc = document.implementation.createDocument('', 'osm');
     const cs = doc.createElement('changeset');
@@ -3795,11 +3853,20 @@ out center tags 250;`;
 
       const tags = items.reduce((t, i) => t + i.keys.length, 0);
       const url = `${osmServer().web}/changeset/${changesetId}`;
+      // Open it. The upload began with a click, but several awaits have passed
+      // since, so some browsers will treat this as unsolicited and block it —
+      // hence the link below stays, and says so when the tab did not appear.
+      // Not window.open(..., 'noopener'): that returns null by specification, so
+      // there would be no way to tell "opened" from "blocked". Opening normally
+      // and then severing opener gives the same protection and a real handle.
+      const tab = window.open(url, '_blank');
+      if (tab) tab.opener = null;
       done('done', `Changeset ${changesetId}`,
         `<i class="bi bi-check-circle text-success me-1"></i>Uploaded ${tags} tag`
         + `${tags === 1 ? '' : 's'} on ${items.length} object${items.length === 1 ? '' : 's'} as `
-        + `<a href="${esc(url)}" target="_blank" rel="noopener">changeset ${esc(changesetId)}</a>. `
-        + 'They have been removed from this browser.');
+        + `<a href="${esc(url)}" target="_blank" rel="noopener">changeset ${esc(changesetId)}</a>`
+        + `${tab ? ', now open in a new tab' : ' — your browser blocked the new tab, so open it '
+           + 'from that link'}. They have been removed from this browser.`);
     } catch (e) {
       done('warn', 'Failed',
         `<i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}`
@@ -3945,6 +4012,7 @@ out center tags 250;`;
     settings.osmClientIds = { ...settings.osmClientIds,
                               [$('setOsmServer').value]: $('setOsmClientId').value.trim() };
     settings.osmServer = $('setOsmServer').value;
+    settings.osmNameModels = $('setOsmNameModels').checked;
     saveSettings();
     settingsModal.hide();
     if (photo?.entity) { renderVisionControls(); renderProposeControls(); }
