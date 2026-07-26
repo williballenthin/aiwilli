@@ -202,16 +202,8 @@
        costs nothing while you work. Room here for a Settings button next. -->
   <div class="toolbar bg-body border-bottom" id="topBar">
     <div class="phase-column d-flex flex-wrap align-items-center gap-2 p-2">
-      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnExport" disabled
-              title="Download the photo's position, and the entity you chose, as a .geojson file">
-        <i class="bi bi-download me-1"></i>GeoJSON
-      </button>
-      <button class="btn btn-sm btn-outline-secondary" type="button" id="btnTheme"
-              title="Switch between the light and dark colour scheme">
-        <i class="bi bi-circle-half me-1"></i>Theme
-      </button>
       <button class="btn btn-sm btn-outline-secondary" type="button" id="btnSettings"
-              title="Set the OpenRouter API key and the vision model used to describe the photo">
+              title="Models, appearance, and the OpenStreetMap account used to upload">
         <i class="bi bi-gear me-1"></i>Settings
       </button>
     </div>
@@ -567,6 +559,16 @@
       </div>
       <div class="modal-body">
 
+        <label for="setTheme" class="form-label fw-medium">Appearance</label>
+        <select class="form-select" id="setTheme">
+          <option value="auto">Follow the device</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+        <p class="form-text">Applies immediately, and is remembered on this device.</p>
+
+        <hr class="my-4">
+
         <label for="setApiKey" class="form-label fw-medium">OpenRouter API key</label>
         <div class="input-group">
           <input type="password" class="form-control" id="setApiKey" autocomplete="off"
@@ -684,14 +686,27 @@
 
   const $ = id => document.getElementById(id);
 
-  /* ---------- theme ---------- */
+  /* ---------- theme ----------
+     Three states, not two. A plain light/dark toggle has no way back to
+     following the device once it has been pressed once, which is the setting
+     most people actually want. */
   const THEME_KEY = 'photomap-theme';
-  const setTheme = t => {
-    document.documentElement.setAttribute('data-bs-theme', t);
-    localStorage.setItem(THEME_KEY, t);
+  const THEMES = ['auto', 'light', 'dark'];
+  const prefersDark = matchMedia('(prefers-color-scheme: dark)');
+
+  const applyTheme = () => {
+    const choice = localStorage.getItem(THEME_KEY) || 'auto';
+    document.documentElement.setAttribute('data-bs-theme',
+      choice === 'auto' ? (prefersDark.matches ? 'dark' : 'light') : choice);
   };
-  setTheme(localStorage.getItem(THEME_KEY) ||
-    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  const setTheme = t => {
+    if (!THEMES.includes(t)) t = 'auto';
+    localStorage.setItem(THEME_KEY, t);
+    applyTheme();
+  };
+  // Older builds stored a resolved light/dark; that still reads as an override.
+  applyTheme();
+  prefersDark.addEventListener('change', applyTheme);
 
   /* ---------- map ---------- */
   /* Two maps, each owned by the phase that needs it, and both locked: the user
@@ -1238,6 +1253,7 @@ out center tags 250;`;
     $('modelFilter').value = '';
     $('tagModelFilter').value = '';
     $('setTagEffort').value = settings.tagEffort;
+    $('setTheme').value = localStorage.getItem(THEME_KEY) || 'auto';
     renderOsmSettings();
     settingsModal.show();
     populateModels(false);
@@ -1405,7 +1421,6 @@ out center tags 250;`;
     renderGps();
     if (photo.lat != null) {
       plotPhoto();
-      $('btnExport').disabled = false;
     }
     openPhase('Gps');
   }
@@ -3915,33 +3930,8 @@ out center tags 250;`;
     setPhase('Schema', { state: 'todo', summary: '', enabled: false });
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
     setPhase('Propose', { state: 'todo', summary: '', enabled: false });
-    $('btnExport').disabled = true;
     openPhase('Photo');
     for (const m of Object.values(maps)) m.setView([20, 0], 2);
-  }
-
-  function exportGeoJson() {
-    const fc = {
-      type: 'FeatureCollection',
-      features: [{
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [photo.lon, photo.lat, ...(photo.alt != null ? [photo.alt] : [])] },
-        properties: {
-          name: photo.name,
-          taken: photo.taken instanceof Date ? photo.taken.toISOString() : null,
-          camera: [photo.make, photo.model].filter(Boolean).join(' ') || null,
-          place: photo.place ? {
-            osm_id: photo.place.id,
-            name: photo.place.name,
-            category: photo.place.pair,
-            distance_m: Math.round(photo.place.distance)
-          } : null
-        }
-      }]
-    };
-    const url = URL.createObjectURL(new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' }));
-    Object.assign(document.createElement('a'), { href: url, download: 'photo-location.geojson' }).click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   /* ---------- wiring ---------- */
@@ -4062,9 +4052,7 @@ out center tags 250;`;
     if (photo?.entity) $('propPromptText').textContent = buildProposePrompt();
   });
 
-  $('btnExport').addEventListener('click', exportGeoJson);
-  $('btnTheme').addEventListener('click', () =>
-    setTheme(document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark'));
+  $('setTheme').addEventListener('change', e => setTheme(e.target.value));
 
   addEventListener('resize', () => { for (const m of Object.values(maps)) m.invalidateSize(); });
   $('phaseGps').addEventListener('shown.bs.collapse', () => remeasure('mapGps'));

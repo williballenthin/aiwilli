@@ -35,16 +35,18 @@ photo* → *Propose OSM tags*. Secondary actions stay outlined so they never com
 Committing an entity goes **straight to extraction**: step 4 is reference material, offered
 as an outlined *Inspect the tag schema* beside the primary button, not the next stop.
 
-Every button carries a visible text label, not just an icon, and a `title` that spells out
-what it does:
+The toolbar holds **Settings**, and nothing else — appearance, the API key, the two models
+and the OpenStreetMap account all live inside it. The button carries a visible text label,
+not just an icon, and a `title` that spells out what it does. The row wraps, so more
+buttons can be added if anything ever earns a place there.
 
-| Button | What it does |
-| --- | --- |
-| **GeoJSON** | Downloads `photo-location.geojson` — one Point feature at the photo's coordinates, with its filename, capture time, camera, and the entity you committed to (its OSM id, name, tag and distance). Disabled until a photo with coordinates is loaded. |
-| **Theme** | Switches between the light and dark colour scheme. The page already follows the device setting, so this is only an override, and the choice is remembered. |
-| **Settings** | OpenRouter API key, the two models, and the OpenStreetMap account used in step 7. See below. |
+**Appearance** is three states rather than a toggle: *Follow the device*, *Light*, *Dark*.
+A plain light/dark switch has no way back to following the device once it has been pressed
+once, which is the setting most people actually want; the page also re-resolves when the
+device scheme changes underneath it. The choice is remembered per device.
 
-The row wraps, so more buttons can be added.
+There is no GeoJSON export. It predated step 7 and answered a question this app no longer
+asks: the output is a changeset, not a file.
 
 Within step 3 the order is list, then map, then the details of whatever is selected —
 **the detail pane always sits directly under that step's map**. Selecting an entity does
