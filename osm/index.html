@@ -457,6 +457,48 @@
               </div>
             </div>
 
+
+            <!-- Phase 7 — send the staged edits to OpenStreetMap.
+                 Unlike the others this one is not about the current photo: it reads
+                 whatever has accumulated in localStorage, so it works on a cold page. -->
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed d-flex align-items-center gap-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#phaseUpload" disabled
+                        aria-expanded="false" aria-controls="phaseUpload" id="phaseUploadBtn">
+                  <span class="phase-num" id="phaseUploadNum">7</span>
+                  <span class="text-nowrap flex-shrink-0">Upload to OSM</span>
+                  <span class="spinner-border spinner-border-sm text-primary ms-auto d-none" id="phaseUploadSpinner"
+                        role="status" aria-label="Uploading"></span>
+                  <span class="small text-body-secondary text-truncate ms-auto" id="phaseUploadSummary"></span>
+                </button>
+              </h2>
+              <div id="phaseUpload" class="accordion-collapse collapse" data-bs-parent="#phases">
+                <div class="accordion-body p-0">
+
+                  <div class="p-3 border-bottom" id="uploadAccount"></div>
+
+                  <h3 class="fw-medium fs-6 px-3 pt-3 mb-1">Edits waiting to go</h3>
+                  <p class="small text-body-secondary px-3 mb-0">
+                    Everything staged in this browser, whichever photo it came from.
+                    Untick anything you do not want in this changeset.
+                  </p>
+                  <div id="uploadList" aria-live="polite"></div>
+
+                  <div class="p-3 border-top">
+                    <label for="uploadComment" class="form-label fw-medium">Changeset comment</label>
+                    <textarea class="form-control" id="uploadComment" rows="2"
+                              placeholder="What you changed and how you know"></textarea>
+                    <div class="form-text" id="uploadTagsNote"></div>
+                  </div>
+
+                  <div class="p-3 d-grid border-top" id="uploadCta"></div>
+                  <div class="px-3 pb-3" id="uploadResult" aria-live="polite"></div>
+
+                </div>
+              </div>
+            </div>
+
           </div>
     </div>
   </div>
@@ -523,6 +565,44 @@
         <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnReloadModels">
           <i class="bi bi-arrow-clockwise me-1"></i>Reload model list
         </button>
+
+        <hr class="my-4">
+
+        <h3 class="fs-6 fw-medium">OpenStreetMap account</h3>
+        <p class="form-text mt-0">Needed only for step 7, which writes your staged edits to
+          OpenStreetMap. Everything before that works signed out.</p>
+
+        <label for="setOsmServer" class="form-label fw-medium mt-2">Server</label>
+        <select class="form-select" id="setOsmServer">
+          <option value="dev">Sandbox — a throwaway copy, safe to practise on</option>
+          <option value="live">Live OpenStreetMap — real, public, permanent</option>
+        </select>
+        <div class="form-text" id="osmServerNote"></div>
+
+        <label for="setOsmClientId" class="form-label fw-medium mt-3">OAuth client ID</label>
+        <div class="form-text mt-0 mb-1">
+          Register an application on
+          <a href="#" target="_blank" rel="noopener" id="osmRegisterLink">the server you chose</a>,
+          then paste its Client ID here. Tick <strong>write_api</strong> and
+          <strong>read_prefs</strong>, and leave <em>Confidential application</em>
+          <strong>unticked</strong> — this page is a public client and holds no secret.
+        </div>
+        <input type="text" class="form-control" id="setOsmClientId" autocomplete="off"
+               spellcheck="false" placeholder="paste the Client ID">
+
+        <div class="form-text mt-2">Redirect URI to register, exactly:</div>
+        <div class="input-group input-group-sm mt-1">
+          <input type="text" class="form-control font-monospace" id="osmRedirectUri" readonly>
+          <button class="btn btn-outline-secondary" type="button" id="btnCopyRedirect">Copy</button>
+        </div>
+
+        <div class="form-text mt-2">Description to give it:</div>
+        <div class="input-group input-group-sm mt-1">
+          <input type="text" class="form-control" id="osmAppDescription" readonly>
+          <button class="btn btn-outline-secondary" type="button" id="btnCopyDescription">Copy</button>
+        </div>
+
+        <div class="mt-3" id="osmAuthState"></div>
 
       </div>
       <div class="modal-footer">
@@ -971,13 +1051,20 @@ out center tags 250;`;
   const MODELS_TTL_MS = 24 * 3600 * 1000;
 
   const TAG_EFFORTS = ['off', 'low', 'medium', 'high'];
-  const SETTINGS_DEFAULTS = { apiKey: '', model: '', tagModel: '', tagEffort: 'high' };
+  // osmServer defaults to the sandbox: the first upload someone makes should not
+  // be able to land on the real map by accident.
+  const SETTINGS_DEFAULTS = {
+    apiKey: '', model: '', tagModel: '', tagEffort: 'high',
+    osmServer: 'dev', osmClientIds: {},
+  };
   const loadSettings = () => {
     try {
       const s = { ...SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
       if (!TAG_EFFORTS.includes(s.tagEffort)) s.tagEffort = SETTINGS_DEFAULTS.tagEffort;
+      if (s.osmServer !== 'live' && s.osmServer !== 'dev') s.osmServer = 'dev';
+      if (!s.osmClientIds || typeof s.osmClientIds !== 'object') s.osmClientIds = {};
       return s;
-    } catch { return { ...SETTINGS_DEFAULTS }; }
+    } catch { return { ...SETTINGS_DEFAULTS, osmClientIds: {} }; }
   };
   let settings = loadSettings();
   const saveSettings = () => {
@@ -1087,6 +1174,7 @@ out center tags 250;`;
     $('modelFilter').value = '';
     $('tagModelFilter').value = '';
     $('setTagEffort').value = settings.tagEffort;
+    renderOsmSettings();
     settingsModal.show();
     populateModels(false);
   }
@@ -1198,7 +1286,8 @@ out center tags 250;`;
       num.classList.toggle('is-error', state === 'warn');
       num.innerHTML = state === 'done' ? '<i class="bi bi-check-lg"></i>'
                     : state === 'warn' ? '<i class="bi bi-exclamation-lg"></i>'
-                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4', Vision: '5', Propose: '6' }[name];
+                    : { Photo: '1', Gps: '2', Nearby: '3', Schema: '4', Vision: '5',
+                        Propose: '6', Upload: '7' }[name];
     }
   }
 
@@ -2759,6 +2848,514 @@ out center tags 250;`;
       + `${chosen.length === 1 ? '' : 's'} for <code>${esc(f.id)}</code>. `
       + `${total} object${total === 1 ? '' : 's'} staged in this browser, awaiting upload to OpenStreetMap.`;
     setPhase('Propose', { state: 'done', summary: `${chosen.length} saved` });
+    refreshUpload();
+  }
+
+  /* ---------- phase 7: OpenStreetMap account ----------
+     OSM speaks OAuth 2.0 with PKCE, and both its token endpoint and its write
+     API send permissive CORS headers, so a static page can do the whole thing
+     itself with no server and no client secret.
+
+     The client id cannot be baked in: OSM matches the redirect URI exactly, so
+     it belongs to wherever this copy of the page is hosted. Each person
+     registers their own application and pastes the id in. Sandbox and live are
+     separate installations of OSM with separate accounts, applications and
+     tokens, so everything here is keyed by server. */
+
+  const OSM_SERVERS = {
+    dev: {
+      label: 'sandbox', web: 'https://master.apis.dev.openstreetmap.org',
+      api: 'https://master.apis.dev.openstreetmap.org',
+    },
+    live: {
+      label: 'live OpenStreetMap', web: 'https://www.openstreetmap.org',
+      api: 'https://api.openstreetmap.org',
+    },
+  };
+  const APP_NAME = 'snap-osm';
+  const APP_VERSION = '1.0';
+  const APP_DESCRIPTION =
+    'snap-osm: edits drawn from photo evidence collected and corroborated in person by the mapper.';
+  const OSM_SCOPES = 'read_prefs write_api';
+  const OSM_TOKEN_PREFIX = APP_PREFIX + 'osm:1:';
+  // Survives the redirect, dies with the tab — exactly the lifetime a PKCE
+  // verifier should have.
+  const PKCE_KEY = APP_PREFIX + 'pkce';
+
+  const osmServer = () => OSM_SERVERS[settings.osmServer] || OSM_SERVERS.dev;
+  const osmClientId = () => (settings.osmClientIds?.[settings.osmServer] || '').trim();
+  // Query and hash are stripped: OSM compares the registered URI literally, and
+  // the authorization code comes back as a query parameter on this same path.
+  const redirectUri = () => location.origin + location.pathname;
+
+  const osmToken = () => readCache(OSM_TOKEN_PREFIX, settings.osmServer, Infinity);
+  const setOsmToken = t => t
+    ? writeCache(OSM_TOKEN_PREFIX, settings.osmServer, t)
+    : dropCache(OSM_TOKEN_PREFIX, settings.osmServer);
+
+  const b64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  async function beginOsmAuth() {
+    const clientId = osmClientId();
+    if (!clientId) { flashAlert('Paste the OAuth client ID first.', 'warning'); return; }
+    const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+    const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
+    const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+    sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state, server: settings.osmServer }));
+    // Concatenated, not resolved against a base: an absolute path would discard
+    // any base path the server is mounted under.
+    const url = new URL(`${osmServer().web}/oauth2/authorize`);
+    url.search = new URLSearchParams({
+      client_id: clientId, redirect_uri: redirectUri(), response_type: 'code',
+      scope: OSM_SCOPES, state, code_challenge: challenge, code_challenge_method: 'S256',
+    });
+    location.assign(url);
+  }
+
+  /** Called once on load: finish the flow if we have just come back from OSM. */
+  async function completeOsmAuth() {
+    const params = new URLSearchParams(location.search);
+    const code = params.get('code'), returnedState = params.get('state');
+    const denied = params.get('error');
+    if (!code && !denied) return;
+
+    // Clear the code out of the address bar either way — it is single-use, and
+    // a reload must not try to redeem it twice.
+    history.replaceState(null, '', redirectUri());
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || 'null'); } catch { /* gone */ }
+    sessionStorage.removeItem(PKCE_KEY);
+
+    if (denied) { flashAlert(`OpenStreetMap declined the sign-in: ${esc(denied)}`, 'warning'); return; }
+    if (!pending) { flashAlert('Sign-in could not be completed — the tab lost its place.', 'warning'); return; }
+    if (pending.state !== returnedState) { flashAlert('Sign-in rejected: state mismatch.', 'danger', 'shield-exclamation'); return; }
+
+    settings.osmServer = pending.server;
+    saveSettings();
+    try {
+      const res = await fetch(`${osmServer().web}/oauth2/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code', code, redirect_uri: redirectUri(),
+          client_id: osmClientId(), code_verifier: pending.verifier,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error_description || json.error || `HTTP ${res.status}`);
+      setOsmToken({ access_token: json.access_token, scope: json.scope, at: Date.now() });
+      const who = await osmUser().catch(() => null);
+      if (who) { const t = osmToken(); setOsmToken({ ...t, user: who }); }
+      flashAlert(`Signed in to the ${osmServer().label}${who ? ` as ${esc(who.name)}` : ''}.`, 'success', 'person-check');
+    } catch (e) {
+      setOsmToken(null);
+      flashAlert(`Could not complete sign-in: ${esc(e.message)}`, 'danger');
+    }
+    renderOsmAuthState();
+    refreshUpload();
+    // Signing in navigates away and back, so put the reader where they were
+    // heading — but only if there is something there to do.
+    if (osmToken() && stagedEdits().length) openPhase('Upload');
+  }
+
+  function osmFetch(path, { method = 'GET', body, contentType } = {}) {
+    const token = osmToken()?.access_token;
+    if (!token) return Promise.reject(new Error('not signed in to OpenStreetMap'));
+    return fetch(`${osmServer().api}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(contentType ? { 'Content-Type': contentType } : {}),
+      },
+      body,
+    }).then(async res => {
+      if (res.status === 401) { setOsmToken(null); renderOsmAuthState(); refreshUpload(); }
+      if (!res.ok) throw new Error(`${method} ${path} — HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+      return res;
+    });
+  }
+
+  async function osmUser() {
+    const xml = await osmFetch('/api/0.6/user/details').then(r => r.text());
+    const el = new DOMParser().parseFromString(xml, 'application/xml').querySelector('user');
+    return el ? { id: el.getAttribute('id'), name: el.getAttribute('display_name') } : null;
+  }
+
+  function renderOsmAuthState() {
+    const host = $('osmAuthState');
+    if (!host) return;
+    const token = osmToken(), server = osmServer();
+    if (token) {
+      host.innerHTML = `
+        <div class="alert alert-success mb-0" role="alert">
+          <i class="bi bi-person-check me-1"></i>Signed in to the ${esc(server.label)}
+          ${token.user ? `as <strong>${esc(token.user.name)}</strong>` : ''}.
+          <button class="btn btn-sm btn-outline-secondary mt-2 w-100" type="button" id="btnOsmSignOut">
+            <i class="bi bi-box-arrow-right me-1"></i>Sign out
+          </button>
+        </div>`;
+      $('btnOsmSignOut').addEventListener('click', () => {
+        setOsmToken(null); renderOsmAuthState(); refreshUpload();
+        flashAlert('Signed out. The token has been deleted from this browser.', 'info', 'box-arrow-right');
+      });
+      return;
+    }
+    host.innerHTML = `
+      <button class="btn btn-primary w-100" type="button" id="btnOsmSignIn">
+        <i class="bi bi-box-arrow-in-right me-1"></i>Connect to the ${esc(server.label)}
+      </button>
+      <p class="form-text mb-0">You will be sent to OpenStreetMap to approve access and
+        brought straight back. That reloads the page, so <strong>a photo you are part-way
+        through will be lost</strong> — staged edits are kept. Signing in before you start
+        avoids that. The token is stored in this browser's local storage, in plain text,
+        exactly like the API key above: anything with access to this device can use it to
+        edit the map as you.</p>`;
+    $('btnOsmSignIn').addEventListener('click', beginOsmAuth);
+  }
+
+  function renderOsmSettings() {
+    const server = osmServer();
+    $('setOsmServer').value = settings.osmServer;
+    $('setOsmClientId').value = settings.osmClientIds?.[settings.osmServer] || '';
+    $('osmRedirectUri').value = redirectUri();
+    $('osmAppDescription').value = APP_DESCRIPTION;
+    const link = $('osmRegisterLink');
+    link.href = `${server.web}/oauth2/applications/new`;
+    link.textContent = server.web.replace(/^https:\/\//, '');
+    $('osmServerNote').innerHTML = settings.osmServer === 'live'
+      ? '<span class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>'
+        + 'Edits go to the real map immediately and are permanent and public.</span>'
+      : 'A separate copy of OpenStreetMap for testing, with its own accounts. '
+        + 'Nothing here reaches the real map.';
+    renderOsmAuthState();
+  }
+
+  /* ---------- phase 7: reviewing and uploading the staged edits ---------- */
+
+  const stagedEdits = () => Object.keys(localStorage)
+    .filter(k => k.startsWith(CHANGES_PREFIX))
+    .map(k => ({ key: k, id: k.slice(CHANGES_PREFIX.length), entry: readCache(CHANGES_PREFIX, k.slice(CHANGES_PREFIX.length), Infinity) }))
+    .filter(x => x.entry && x.entry.tags && Object.keys(x.entry.tags).length)
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  // id -> Set of tag keys the user has unticked. Kept out of localStorage: it is
+  // a view preference for this sitting, not part of the edit.
+  const uploadOff = new Map();
+  let uploadBusy = false;
+
+  const uploadSelection = () => stagedEdits().map(x => ({
+    ...x,
+    keys: Object.keys(x.entry.tags).filter(k => !uploadOff.get(x.id)?.has(k)),
+  })).filter(x => x.keys.length);
+
+  function refreshUpload() {
+    const staged = stagedEdits();
+    setPhase('Upload', {
+      enabled: staged.length > 0,
+      summary: staged.length ? `${staged.length} object${staged.length === 1 ? '' : 's'}` : '',
+      state: staged.length ? 'todo' : 'todo',
+    });
+    renderUploadAccount();
+    renderUploadList();
+    renderUploadCta();
+  }
+
+  function renderUploadAccount() {
+    const host = $('uploadAccount');
+    if (!host) return;
+    const token = osmToken(), server = osmServer();
+    const live = settings.osmServer === 'live';
+    if (!token) {
+      host.innerHTML = `
+        <div class="alert alert-info mb-0" role="alert">
+          <i class="bi bi-info-circle me-1"></i>
+          Connect an OpenStreetMap account in settings before uploading.
+          <button class="btn btn-sm btn-outline-secondary mt-2 w-100" type="button" id="btnOpenSettings3">
+            <i class="bi bi-gear me-1"></i>Open settings
+          </button>
+        </div>`;
+      $('btnOpenSettings3').addEventListener('click', openSettings);
+      return;
+    }
+    host.innerHTML = `
+      <div class="d-flex align-items-center gap-2 small">
+        <i class="bi bi-person-check text-success"></i>
+        <span class="min-w-0 text-truncate">
+          ${token.user ? `<strong>${esc(token.user.name)}</strong> on ` : ''}the ${esc(server.label)}
+        </span>
+      </div>
+      ${live ? `<div class="small text-warning-emphasis mt-2">
+          <i class="bi bi-exclamation-triangle me-1"></i>This uploads to the real map. Edits are
+          public, permanent and attributed to you.</div>`
+        : `<div class="small text-body-secondary mt-2">
+          <i class="bi bi-shield-check me-1"></i>Sandbox server — nothing here reaches the real map.</div>`}`;
+  }
+
+  function renderUploadList() {
+    const host = $('uploadList');
+    if (!host) return;
+    const staged = stagedEdits();
+    if (!staged.length) {
+      host.innerHTML = '<div class="p-3"><div class="alert alert-info mb-0" role="alert">'
+        + '<i class="bi bi-inbox me-1"></i>Nothing staged. Approve some tags in step 6 first.'
+        + '</div></div>';
+      return;
+    }
+    host.innerHTML = staged.map(({ id, entry }) => {
+      const off = uploadOff.get(id) || new Set();
+      const keys = Object.keys(entry.tags);
+      const on = keys.filter(k => !off.has(k)).length;
+      const photos = [...new Set((entry.sources || []).map(s => s.photo))];
+      return `
+        <div class="border-top">
+          <label class="d-flex gap-2 align-items-start px-3 py-2 mb-0 nearby-head">
+            <input class="form-check-input mt-1 flex-shrink-0" type="checkbox" data-group="${esc(id)}"
+                   ${on ? 'checked' : ''} ${on && on < keys.length ? 'data-partial="1"' : ''}>
+            <span class="min-w-0 flex-grow-1">
+              <span class="fw-medium d-block text-truncate">${esc(entry.name || entry.pair || id)}</span>
+              <span class="small text-body-secondary d-block text-truncate">
+                <code>${esc(id)}</code> &middot; ${on} of ${keys.length} tag${keys.length === 1 ? '' : 's'}
+                ${photos.length ? ` &middot; from ${esc(photos.join(', '))}` : ''}
+              </span>
+              ${entry.conflict ? `<span class="small text-warning-emphasis d-block">
+                  <i class="bi bi-exclamation-triangle me-1"></i>${esc(entry.conflict)}</span>` : ''}
+            </span>
+          </label>
+          <div class="list-group list-group-flush">
+            ${keys.map(k => `
+              <label class="list-group-item d-flex gap-2 align-items-start py-2 ps-5">
+                <input class="form-check-input mt-1 flex-shrink-0" type="checkbox"
+                       data-object="${esc(id)}" data-tag="${esc(k)}" ${off.has(k) ? '' : 'checked'}>
+                <span class="min-w-0 flex-grow-1">
+                  <code class="small">${esc(k)}</code>
+                  <span class="d-block text-break"><code class="small">${esc(entry.tags[k])}</code></span>
+                  ${entry.base?.[k] != null ? `<span class="small text-body-secondary d-block text-break">
+                      replaces <code>${esc(entry.base[k])}</code></span>` : ''}
+                </span>
+              </label>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+
+    for (const box of host.querySelectorAll('input[data-tag]')) {
+      box.addEventListener('change', () => {
+        const { object, tag } = box.dataset;
+        if (!uploadOff.has(object)) uploadOff.set(object, new Set());
+        box.checked ? uploadOff.get(object).delete(tag) : uploadOff.get(object).add(tag);
+        renderUploadList(); renderUploadCta();
+      });
+    }
+    for (const box of host.querySelectorAll('input[data-group]')) {
+      box.addEventListener('change', () => {
+        const id = box.dataset.group;
+        const entry = staged.find(s => s.id === id)?.entry;
+        uploadOff.set(id, box.checked ? new Set() : new Set(Object.keys(entry?.tags || {})));
+        renderUploadList(); renderUploadCta();
+      });
+    }
+    // A group with only some of its tags ticked reads as indeterminate rather
+    // than as "all of it", which is what a plain checkbox would imply.
+    for (const box of host.querySelectorAll('input[data-partial]')) box.indeterminate = true;
+  }
+
+  const defaultComment = sel => {
+    const n = sel.reduce((t, s) => t + s.keys.length, 0);
+    const what = sel.length === 1 ? (sel[0].entry.name || sel[0].id) : `${sel.length} objects`;
+    return `${n} tag${n === 1 ? '' : 's'} on ${what} from my own photographs, checked on site`;
+  };
+
+  function renderUploadCta() {
+    const host = $('uploadCta');
+    if (!host) return;
+    const sel = uploadSelection();
+    const tags = sel.reduce((t, s) => t + s.keys.length, 0);
+    const ready = !!osmToken() && sel.length > 0 && !uploadBusy;
+
+    if (!$('uploadComment').value.trim() && sel.length) $('uploadComment').value = defaultComment(sel);
+    $('uploadTagsNote').innerHTML =
+      'The changeset also records <code>created_by</code>, <code>source=survey;photo</code> '
+      + 'and the models that helped, so anyone reviewing it can see how it was made.';
+
+    host.innerHTML = `
+      <button class="btn btn-primary" type="button" id="btnUpload" ${ready ? '' : 'disabled'}>
+        <i class="bi bi-cloud-upload me-1"></i>${uploadBusy ? 'Uploading…'
+          : sel.length ? `Upload ${tags} tag${tags === 1 ? '' : 's'} on ${sel.length} object${sel.length === 1 ? '' : 's'}`
+          : 'Nothing selected'}
+      </button>
+      <p class="small text-body-secondary text-center mt-2 mb-0" id="uploadNote">
+        ${osmToken() ? `One changeset, to the ${esc(osmServer().label)}. Uploaded edits are removed from this browser.`
+                     : 'Connect an OpenStreetMap account to upload.'}
+      </p>`;
+    $('btnUpload').addEventListener('click', runUpload);
+  }
+
+  /* ---------- the upload itself ----------
+     Tag-only edits still have to resend the whole element: the API replaces
+     what it is given, so a way uploaded without its <nd> children loses its
+     geometry. Fetching each element gives the live version number, the current
+     tags to merge onto, and those children to carry across untouched. */
+
+  const uploadStatus = (html, tone = 'body-secondary') => {
+    const el = $('uploadResult');
+    if (el) el.innerHTML = `<p class="small text-${tone} mb-0">${html}</p>`;
+  };
+
+  async function fetchElement(id) {
+    const [type, num] = id.split('/');
+    const xml = await osmFetch(`/api/0.6/${type}/${num}`).then(r => r.text());
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const el = doc.querySelector(type);
+    if (!el) throw new Error(`${id} is not on the ${osmServer().label}`);
+    const tags = {};
+    for (const t of el.querySelectorAll('tag')) tags[t.getAttribute('k')] = t.getAttribute('v');
+    return { el, tags, version: el.getAttribute('version') };
+  }
+
+  /** Somebody else changed a tag we are about to change, since we staged it. */
+  const conflictsIn = (entry, live, keys) => keys.filter(k => {
+    const now = live.tags[k] ?? null;
+    const was = entry.base?.[k] ?? null;
+    return now !== was && now !== entry.tags[k];
+  });
+
+  function osmChangeXml(changesetId, items) {
+    const doc = document.implementation.createDocument('', 'osmChange');
+    const root = doc.documentElement;
+    root.setAttribute('version', '0.6');
+    root.setAttribute('generator', `${APP_NAME} ${APP_VERSION}`);
+    const modify = doc.createElement('modify');
+    for (const { live, entry, keys } of items) {
+      const el = doc.importNode(live.el, true);
+      el.setAttribute('changeset', changesetId);
+      for (const t of [...el.querySelectorAll('tag')]) el.removeChild(t);
+      const merged = { ...live.tags };
+      for (const k of keys) merged[k] = entry.tags[k];
+      for (const [k, v] of Object.entries(merged)) {
+        const t = doc.createElement('tag');
+        t.setAttribute('k', k); t.setAttribute('v', v);
+        el.appendChild(t);
+      }
+      modify.appendChild(el);
+    }
+    root.appendChild(modify);
+    return new XMLSerializer().serializeToString(doc);
+  }
+
+  function changesetXml(comment, items) {
+    const models = [...new Set(items.flatMap(i =>
+      (i.entry.sources || []).flatMap(s => [s.visionModel, s.tagModel])).filter(Boolean))];
+    const tags = {
+      comment,
+      created_by: `${APP_NAME} ${APP_VERSION}`,
+      source: 'survey;photo',
+      [`${APP_NAME}:method`]: APP_DESCRIPTION,
+      ...(models.length ? { [`${APP_NAME}:models`]: models.join(';') } : {}),
+    };
+    const doc = document.implementation.createDocument('', 'osm');
+    const cs = doc.createElement('changeset');
+    for (const [k, v] of Object.entries(tags)) {
+      const t = doc.createElement('tag');
+      t.setAttribute('k', k); t.setAttribute('v', String(v));
+      cs.appendChild(t);
+    }
+    doc.documentElement.appendChild(cs);
+    return new XMLSerializer().serializeToString(doc);
+  }
+
+  async function runUpload() {
+    const sel = uploadSelection();
+    const comment = $('uploadComment').value.trim();
+    if (!sel.length) return;
+    if (!comment) { flashAlert('Give the changeset a comment — reviewers rely on it.', 'warning'); return; }
+
+    uploadBusy = true;
+    $('phaseUploadSpinner').classList.remove('d-none');
+    $('phaseUploadSummary').classList.add('d-none');
+    setPhase('Upload', { state: 'busy' });
+    renderUploadCta();
+
+    // refreshUpload resets the header, so the outcome is written after it rather
+    // than before, or the warning state would be wiped by its own redraw.
+    const done = (state, summary, html, tone) => {
+      uploadBusy = false;
+      $('phaseUploadSpinner').classList.add('d-none');
+      $('phaseUploadSummary').classList.remove('d-none');
+      refreshUpload();
+      setPhase('Upload', { state, summary });
+      uploadStatus(html, tone);
+    };
+
+    let changesetId = null;
+    try {
+      // 1. Read the live elements first, so a conflict costs nothing.
+      uploadStatus(`<span class="spinner-border spinner-border-sm me-1"></span>`
+        + `Reading current data for ${sel.length} object${sel.length === 1 ? '' : 's'}…`);
+      const items = [];
+      for (const s of sel) items.push({ ...s, live: await fetchElement(s.id) });
+
+      const clashes = items
+        .map(i => ({ i, keys: conflictsIn(i.entry, i.live, i.keys) }))
+        .filter(x => x.keys.length);
+      if (clashes.length) {
+        for (const { i, keys } of clashes) {
+          i.entry.conflict = `Changed on OpenStreetMap since you staged this: `
+            + keys.map(k => `${k} is now "${i.live.tags[k] ?? '(removed)'}"`).join(', ')
+            + '. Unticked — re-check before sending.';
+          writeCache(CHANGES_PREFIX, i.id, i.entry);
+          const off = uploadOff.get(i.id) || new Set();
+          for (const k of keys) off.add(k);
+          uploadOff.set(i.id, off);
+        }
+        done('warn', 'Conflicts',
+          `<i class="bi bi-exclamation-triangle me-1"></i>Nothing was uploaded. `
+          + `${clashes.length} object${clashes.length === 1 ? ' has' : 's have'} been edited on `
+          + `OpenStreetMap since you staged them; the affected tags are unticked above. `
+          + `Review them, then upload again.`, 'warning-emphasis');
+        return;
+      }
+
+      // 2. Open a changeset, 3. send one diff, 4. close it.
+      uploadStatus('<span class="spinner-border spinner-border-sm me-1"></span>Opening a changeset…');
+      changesetId = (await osmFetch('/api/0.6/changeset/create', {
+        method: 'PUT', contentType: 'text/xml', body: changesetXml(comment, items),
+      }).then(r => r.text())).trim();
+
+      uploadStatus('<span class="spinner-border spinner-border-sm me-1"></span>Uploading the changes…');
+      await osmFetch(`/api/0.6/changeset/${changesetId}/upload`, {
+        method: 'POST', contentType: 'text/xml', body: osmChangeXml(changesetId, items),
+      });
+
+      await osmFetch(`/api/0.6/changeset/${changesetId}/close`, { method: 'PUT' })
+        .catch(() => { /* the edit is already in; an unclosed changeset self-closes */ });
+
+      // 5. Only now is it safe to forget them — and only the tags that actually
+      // went. Anything the user unticked is still staged, not silently binned.
+      for (const i of items) {
+        const rest = Object.fromEntries(
+          Object.entries(i.entry.tags).filter(([k]) => !i.keys.includes(k)));
+        if (!Object.keys(rest).length) { dropCache(CHANGES_PREFIX, i.id); continue; }
+        writeCache(CHANGES_PREFIX, i.id, { ...i.entry, tags: rest });
+      }
+      uploadOff.clear();
+      $('uploadComment').value = '';
+
+      const tags = items.reduce((t, i) => t + i.keys.length, 0);
+      const url = `${osmServer().web}/changeset/${changesetId}`;
+      done('done', `Changeset ${changesetId}`,
+        `<i class="bi bi-check-circle text-success me-1"></i>Uploaded ${tags} tag`
+        + `${tags === 1 ? '' : 's'} on ${items.length} object${items.length === 1 ? '' : 's'} as `
+        + `<a href="${esc(url)}" target="_blank" rel="noopener">changeset ${esc(changesetId)}</a>. `
+        + 'They have been removed from this browser.');
+    } catch (e) {
+      done('warn', 'Failed',
+        `<i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}`
+        + (changesetId
+          ? ` The changeset <a href="${esc(osmServer().web)}/changeset/${esc(changesetId)}" target="_blank"
+              rel="noopener">${esc(changesetId)}</a> was opened; nothing was removed from this browser.`
+          : ' Nothing was uploaded, and nothing has been removed from this browser.'),
+        'warning-emphasis');
+    }
   }
 
   /* ---------- map-wide actions ---------- */
@@ -2889,10 +3486,34 @@ out center tags 250;`;
       if (chosen) settings[p.key] = chosen;
     }
     if (TAG_EFFORTS.includes($('setTagEffort').value)) settings.tagEffort = $('setTagEffort').value;
+    settings.osmClientIds = { ...settings.osmClientIds,
+                              [$('setOsmServer').value]: $('setOsmClientId').value.trim() };
+    settings.osmServer = $('setOsmServer').value;
     saveSettings();
     settingsModal.hide();
     if (photo?.entity) { renderVisionControls(); renderProposeControls(); }
+    refreshUpload();
   });
+
+  // Switching server switches account, application and staged token together, so
+  // the pane has to redraw rather than just remember the last id typed.
+  $('setOsmServer').addEventListener('change', () => {
+    settings.osmClientIds = { ...settings.osmClientIds,
+                              [settings.osmServer]: $('setOsmClientId').value.trim() };
+    settings.osmServer = $('setOsmServer').value;
+    renderOsmSettings();
+  });
+  for (const [btn, field] of [['btnCopyRedirect', 'osmRedirectUri'],
+                              ['btnCopyDescription', 'osmAppDescription']]) {
+    $(btn).addEventListener('click', async () => {
+      const el = $(field);
+      try { await navigator.clipboard.writeText(el.value); }
+      catch { el.select(); document.execCommand('copy'); }   // no clipboard permission
+      $(btn).textContent = 'Copied';
+      setTimeout(() => { $(btn).textContent = 'Copy'; }, 1500);
+    });
+  }
+  $('uploadComment').addEventListener('input', renderUploadCta);
 
   $('btnExport').addEventListener('click', exportGeoJson);
   $('btnTheme').addEventListener('click', () =>
@@ -2901,6 +3522,11 @@ out center tags 250;`;
   addEventListener('resize', () => { for (const m of Object.values(maps)) m.invalidateSize(); });
   $('phaseGps').addEventListener('shown.bs.collapse', () => remeasure('mapGps'));
   $('phaseNearby').addEventListener('shown.bs.collapse', () => remeasure('mapNear'));
+
+  // Step 7 stands on its own: edits pile up in localStorage across sittings, so
+  // it is live on a cold page with no photo, and the OAuth redirect lands here.
+  refreshUpload();
+  completeOsmAuth();
 })();
 </script>
 </body>

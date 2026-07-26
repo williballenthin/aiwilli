@@ -1,11 +1,15 @@
 # osm
 
-Photo Map is a single static HTML page that takes one photo, reads the GPS coordinates
-out of its EXIF data, places it on an OpenStreetMap map, and shows what OpenStreetMap has
-mapped around it.
+**snap-osm** is a single static HTML page that takes one photo, reads the GPS coordinates
+out of its EXIF data, places it on an OpenStreetMap map, shows what OpenStreetMap has
+mapped around it, and — with your approval, tag by tag — sends corrections back.
 
-Everything runs in the browser. The photo is never uploaded — the page is served as a
-plain static file and makes no network calls beyond map tiles and the Overpass API.
+Its one-line description, and the claim every changeset it makes carries: *edits drawn
+from photo evidence collected and corroborated in person by the mapper.*
+
+Everything runs in the browser. There is no server of ours: the page is a static file, and
+it talks directly to map tiles, the Overpass API, taginfo, OpenRouter and OpenStreetMap.
+The photo is sent to whichever vision model you configure and nowhere else.
 
 ## Layout
 
@@ -36,7 +40,7 @@ what it does:
 | --- | --- |
 | **GeoJSON** | Downloads `photo-location.geojson` — one Point feature at the photo's coordinates, with its filename, capture time, camera, and the entity you committed to (its OSM id, name, tag and distance). Disabled until a photo with coordinates is loaded. |
 | **Theme** | Switches between the light and dark colour scheme. The page already follows the device setting, so this is only an override, and the choice is remembered. |
-| **Settings** | OpenRouter API key and the vision model used in step 5. See below. |
+| **Settings** | OpenRouter API key, the two models, and the OpenStreetMap account used in step 7. See below. |
 
 The row wraps, so more buttons can be added.
 
@@ -90,7 +94,8 @@ its schema as context, and streams back an exhaustive description. See below.
 **6 · Proposed tags.** Turns that description into OSM tags, sorts them against what the
 object already carries, and stages the ones you approve. See below.
 
-More phases will be added after these.
+**7 · Upload to OSM.** Signs in to OpenStreetMap and sends the staged edits as one
+changeset. See below.
 
 ## Selecting versus committing
 
@@ -397,8 +402,85 @@ selected.
 Saving writes a changeset entry to `localStorage` under
 `photomap:changes:1:<type>/<id>`, holding the chosen tags, the value each one replaces,
 and provenance — which photo, its coordinates, and which two models were involved.
-Staging the same object again merges rather than overwrites. **Nothing is sent to
-OpenStreetMap**; the page says so, and collecting and uploading these is a later step.
+Staging the same object again merges rather than overwrites. Nothing is sent anywhere at
+this point; step 7 does that.
+
+## Upload to OpenStreetMap
+
+Step 7 is the only one that writes anything. It is also the only one that does not belong
+to the current photo: it reads whatever has accumulated in `localStorage`, so it is live
+on a cold page with no photo loaded, and edits from several outings go up together.
+
+### Signing in
+
+OpenStreetMap speaks OAuth 2.0 with PKCE, and both its token endpoint and its write API
+send permissive CORS headers, so a static page can do the whole handshake itself — no
+server, no client secret, no proxy.
+
+The client ID cannot be baked into the page: OSM matches the redirect URI **exactly**, so
+it belongs to wherever this copy is hosted. Settings therefore asks for one, and shows the
+two strings needed to register it:
+
+- the **redirect URI**, which is this page's own URL with no query or hash;
+- a **description** — *"snap-osm: edits drawn from photo evidence collected and
+  corroborated in person by the mapper."*
+
+Register at `/oauth2/applications/new` on whichever server you picked, tick **write_api**
+and **read_prefs**, and leave *Confidential application* **unticked** — this is a public
+client. Those are the only two scopes requested.
+
+**Sandbox is the default.** `master.apis.dev.openstreetmap.org` is a separate copy of
+OpenStreetMap with its own accounts, applications and tokens, and nothing on it reaches
+the real map. Switching to live is a deliberate act, and both settings and step 7 say
+plainly which one you are pointed at. Because the two servers are genuinely separate
+installations, the client ID and the token are stored per server.
+
+The token lands in `localStorage` under `photomap:osm:1:<server>`, in plain text, with the
+same exposure as the OpenRouter key: anything that can run script on this origin can edit
+the map as you. Signing out deletes it. Note that signing in navigates away and back,
+which reloads the page — staged edits survive, a half-finished photo does not, so it is
+worth connecting before you start.
+
+### Choosing what goes
+
+Everything staged is listed, **grouped by the object it targets**, with a checkbox on each
+group and on each tag inside it. A group with only some of its tags ticked shows as
+indeterminate rather than as fully selected. Each row shows the value it would write and,
+for a change, the value it would replace. The button counts exactly what will be sent.
+
+The changeset comment is pre-filled and editable; an upload with an empty comment is
+refused, because a comment is what a reviewer reads first.
+
+### What is actually sent
+
+One changeset, tagged:
+
+| tag | value |
+| --- | --- |
+| `comment` | yours |
+| `created_by` | `snap-osm 1.0` |
+| `source` | `survey;photo` |
+| `snap-osm:method` | the one-line description above |
+| `snap-osm:models` | the vision and tagging models that contributed |
+
+Then one `osmChange` diff for every object at once, and a close. The sequence matters:
+
+1. **Read the live elements first.** This gives the current version number, the current
+   tags to merge onto, and — the trap in a tag-only edit — the element's children. The API
+   replaces what it is given, so a way uploaded without its `<nd>` refs loses its geometry.
+   Everything is fetched and rebuilt before a changeset is opened, so a problem costs
+   nothing.
+2. **Detect conflicts.** Each staged tag records the value the object carried when it was
+   staged. If the live value differs from that *and* from what we would write, somebody
+   else has been there since. The whole upload aborts before opening a changeset, the
+   affected tags are unticked, the row says what changed, and nothing is discarded. Press
+   upload again to send the rest.
+3. **Create, upload, close.**
+4. **Only then forget them** — and only the tags that actually went. Anything left unticked
+   stays staged rather than being silently binned. A failure at any point leaves everything
+   in the browser, and says so.
+
+On success you get a link to the changeset on the server you uploaded to.
 
 ## Getting GPS data off an iPhone
 
@@ -416,7 +498,8 @@ of that setting.
 `index.html` is the whole application. Bootstrap 5.3, Bootstrap Icons, Leaflet and exifr
 load from CDNs with subresource-integrity hashes; there is no build step.
 `opening_hours.js` loads the same way but **on demand**, the first time a proposal carries
-an hours key, so a run that never reaches step 6 never pays for it.
+an hours key, so a run that never reaches step 6 never pays for it. There is no OAuth
+library: the PKCE handshake is about forty lines against `crypto.subtle`.
 
 ## Deployment
 
