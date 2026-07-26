@@ -30,20 +30,39 @@ as it should, and the view is always the one the step means to show. They frame 
 and re-frame when you pick an entity, which is why there is no longer a Fit button.
 
 **Every phase ends with one primary blue button** — the obvious thing to press to make
-progress: *Where was it taken?* → *Find what's nearby* → *Use &lt;entity&gt;* → *Describe the
-photo* → *Propose OSM tags*. Secondary actions stay outlined so they never compete with it.
-Committing an entity goes **straight to extraction**: step 4 is reference material, offered
-as an outlined *Inspect the tag schema* beside the primary button, not the next stop.
+progress: *Where was it taken?* → *Find what's nearby* → *Use &lt;entity&gt;* →
+*Next: describe the photo* → *Next: propose OSM tags* → *Next: upload to OpenStreetMap*.
+Secondary actions stay outlined so they never compete with it. Committing an entity goes
+**straight to extraction**: step 4 is reference material, offered as an outlined
+*Inspect the tag schema* beside the primary button, not the next stop.
 
-The toolbar holds **Settings**, and nothing else — appearance, the API key, the two models
-and the OpenStreetMap account all live inside it. The button carries a visible text label,
-not just an icon, and a `title` that spells out what it does. The row wraps, so more
-buttons can be added if anything ever earns a place there.
+Buttons follow one convention throughout, so their shape says what they do before the
+words are read:
+
+| kind | reads | icon |
+| --- | --- | --- |
+| moves you to the next step | *Next: &lt;destination&gt;* | trailing `→`, nothing leading |
+| does something here | a verb — *Save 3 changes*, *Propose again* | leading icon, no arrow |
+
+The toolbar is the product name on the left — **snap-osm**, with a map-pin mark — and
+**Settings** on the right, and nothing else: appearance, the API key, the two models and
+the OpenStreetMap account all live inside the dialog. The button carries a visible text
+label, not just an icon, and a `title` that spells out what it does.
+
+Colour carries one meaning each and is not spent anywhere else. **Blue** is *press this
+next* and belongs to primary buttons and the open phase. **Green, amber and red** are
+verdicts the page has reached about a value — valid, check this, cannot be staged — and
+stay solid so they read as a judgement. Anything merely descriptive, including the model's
+own *high / medium / low confidence*, is an **outline pill in secondary text**: it is
+information, not a verdict, and it used to compete with both.
 
 **Appearance** is three states rather than a toggle: *Follow the device*, *Light*, *Dark*.
 A plain light/dark switch has no way back to following the device once it has been pressed
 once, which is the setting most people actually want; the page also re-resolves when the
-device scheme changes underneath it. The choice is remembered per device.
+device scheme changes underneath it. The choice is remembered per device. It **previews as
+you change it and commits on *Save***, like everything else in the dialog — *Cancel* puts
+the previous theme back, because a Cancel that silently keeps one of your changes is not a
+Cancel.
 
 There is no GeoJSON export. It predated step 7 and answered a question this app no longer
 asks: the output is a changeset, not a file.
@@ -61,6 +80,15 @@ which grow into the page rather than trapping text behind an invisible iOS overl
 scrollbar; the scale bar is hidden where it would collide with the attribution; and marker
 popups are deliberately terse and skipped entirely on phone list selections, because a tall
 popup covers most of a short map when the full record is already in the pane below it.
+
+**One selection idiom, everywhere.** Every list you choose from — nearby entities in
+step 3, proposals in step 6, staged edits in step 7 — is a `<label>` wrapping a **real
+radio or checkbox on the left**, in the same column all the way down the page, and the
+whole row is the target. A chosen row is **tinted**, never filled with the primary blue
+that means *press this*. Lists you cannot choose from say so by using marks that could not
+be controls: step 4's *already set / not set* column is a bare tick or dash, not a circle,
+and a proposal that cannot be staged shows a struck-through circle where its checkbox
+would be rather than a checkbox that refuses to tick.
 
 Accessibility: every phase header is a real `<button>` that keeps its focus ring when
 expanded, the status dot beside it stays green or amber whether or not its phase is the
@@ -81,10 +109,11 @@ locked until the earlier ones can supply what they need.
 once it is loaded the upload pane is replaced by a thumbnail with the file name, capture
 date, camera and size, and the flow moves on. *Use a different photo* starts over.
 
-**2 · GPS location.** Latitude, longitude, altitude, capture time and camera, plus a deep
-link to the same spot on openstreetmap.org. The photo appears on the map as a red camera
-pin. If the photo carries no coordinates the phase turns amber, explains the iPhone
-Location toggle, and phase 3 stays locked.
+**2 · GPS location.** Latitude, longitude, altitude, accuracy, capture time and camera,
+plus a deep link to the same spot on openstreetmap.org. The photo appears on the map as a
+red camera pin, and the pane says **where the position came from** — the photograph's own
+GPS, or your device. If neither can supply one the phase turns amber and phase 3 stays
+locked. See *Where the position comes from*, below.
 
 **3 · Nearby entities.** The 10 nearest things OpenStreetMap knows about, businesses and
 street furniture alike. See below.
@@ -131,7 +160,7 @@ photo's red pin. Selection is two-way:
 
 - click a **row** and its point turns green and grows, and the map re-frames to fit it
   together with the photo;
-- click a **point** and the matching row goes active and scrolls into view.
+- click a **point** and the matching row's radio ticks and it scrolls into view.
 
 Either way a dashed connector is drawn back to the photo and the full details appear in
 the pane under the map — category, OSM tag, kind, distance, coordinates, plus address,
@@ -266,6 +295,13 @@ key/value output.
 
 The **Settings** button holds the OpenRouter API key and the model. Both live in
 `localStorage` under `photomap:settings:1`.
+
+The dialog is three named sections — **Appearance**, **Models**, **OpenStreetMap
+account** — and within each one every field reads the same way: label, then control, then
+the help text explaining it. Nothing is a hint you have to read before you can see what it
+is hinting about. Section headings are visually distinct from the field labels beneath
+them, every control has a real `<label>` bound to it, and every button carries visible
+text rather than a bare icon. The whole dialog commits on **Save**, including the theme.
 
 The key is stored **in plain text** and is sent only to openrouter.ai — anything with
 access to the device or to another script on this origin can read it. The settings dialog
@@ -481,6 +517,19 @@ completeness, not selectable). Every actionable one has a checkbox, ticked by de
 unless the hours validator has something to say about it; the save button counts what is
 selected.
 
+Within each group the rows you can act on come **first**, and the ones you cannot — already
+correct, or blocked by the output filter or the hours validator — sink to the bottom and
+show a mark in place of a checkbox rather than a checkbox that will not tick.
+
+**Two proposals for the same key are mutually exclusive.** A model asked to describe a
+sign can return `website` twice with different values; both used to be tickable and the
+last one silently won. Ticking one now unticks the other and each says, under its value,
+that another proposal offers the same key.
+
+Once something is saved, the step's primary button changes from *Save N changes* to
+**Next: upload to OpenStreetMap →**, with saving again demoted to an outlined button. The
+step has done its job; the exit should be the loudest thing in it.
+
 Saving writes a changeset entry to `localStorage` under
 `photomap:changes:1:<type>/<id>`, holding the chosen tags, the value each one replaces,
 and provenance — which photo, its coordinates, and which two models were involved.
@@ -522,6 +571,11 @@ same exposure as the OpenRouter key: anything that can run script on this origin
 the map as you. Signing out deletes it. Note that signing in navigates away and back,
 which reloads the page — staged edits survive, a half-finished photo does not, so it is
 worth connecting before you start.
+
+Signed out, step 7 leads with a primary **Connect an OpenStreetMap account** and hides
+the comment box, the XML preview and the upload button — there is nothing to review until
+there is somewhere to send it. The queue itself stays on screen, because discarding
+staged edits is something you may reasonably want to do without signing in at all.
 
 ### Choosing what goes
 
@@ -613,16 +667,57 @@ afterwards, so the confirmation is the point — but a modal for something this 
 worse than a button that asks once. The notice afterwards says how many went and that
 nothing was sent to OpenStreetMap.
 
-## Getting GPS data off an iPhone
+## Where the position comes from
 
-iOS only hands location data to a web page if you ask it to, per upload:
+Two sources, in that order: the photograph's own EXIF GPS, and failing that **your
+device's live position**.
+
+### Getting GPS data off an iPhone
+
+iOS only hands a photo's location data to a web page if you ask it to, per upload:
 
 1. Tap **Choose a photo** and pick **Photo Library**.
 2. Tap **Options** at the bottom-left of the picker.
 3. Turn **Location** on, then select the photo.
 
 A photo captured through the picker's **Take Photo** option never carries GPS, regardless
-of that setting.
+of that setting. Neither does one taken while the phone has no recent fix — the camera
+writes GPS only if it has a position at the moment of the shot, which after a cold start,
+indoors, or straight out of a pocket it often does not.
+
+### Priming the device fix
+
+That last case is common enough on a survey that the page **asks for location on load**,
+before you have chosen anything, and keeps a fix warm:
+
+- `navigator.permissions.query` is consulted first, so a browser that has already granted
+  or denied does not get prompted again;
+- when it may, the page opens a `watchPosition` with `enableHighAccuracy` and leaves it
+  running, so the position is already there when it is needed rather than being asked for
+  at the moment of use — a cold `getCurrentPosition` on an iPhone can take twenty seconds,
+  which is far too late;
+- step 1 shows the state in a line under the dropzone: *getting your location…*, *your
+  location is ready, ±12 m*, or *location is turned off for this page* with a **Try
+  again** button.
+
+### How a photo gets a position
+
+| the photo | what happens |
+| --- | --- |
+| has EXIF GPS | that is used, always. A device fix never overrides the photograph. |
+| has none, was taken **within the last 10 minutes**, and there is a fix newer than 60 s and accurate to better than 200 m | the fix is **applied automatically** — you took the picture just now, standing here |
+| has none, and a usable fix exists | step 2 offers a primary **Use my current location** |
+| has none, and no fix | step 2 is amber; the way out is *Choose a different photo*, or granting location and retrying |
+
+Whenever a position came from the device rather than the photograph, step 2 says so in as
+many words, the header summary is suffixed *(device)*, an **Accuracy** row appears, and
+the pane warns you to check that the entity you pick is really the one you photographed.
+The distinction matters: a device fix places you, not necessarily the object, and the
+whole point of the app is that the two were in the same place at the same time.
+
+Device-specific copy is gated on the hardware rather than shown to everyone: the *Options
+→ Location* instructions appear only on iOS, and *double-tap* reads *double-click* on a
+pointer-fine device.
 
 ## Files
 
