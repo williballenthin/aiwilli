@@ -10,7 +10,8 @@ from the mapper's own photograph; every tag was reviewed and approved by the map
 language model was used only to format those observations as OSM tags.*
 
 Everything runs in the browser. There is no server of ours: the page is a static file, and
-it talks directly to map tiles, the Overpass API, taginfo, OpenRouter and OpenStreetMap.
+it talks directly to map tiles, the OpenStreetMap API, taginfo, OpenRouter and — only for
+an area the API will not serve — the Overpass API.
 The photo is sent to whichever vision model you configure and nowhere else.
 
 ## Layout
@@ -182,39 +183,111 @@ them without losing sight of the map.
 - A small set of mapping minutiae is excluded so it cannot flood a dense area —
   surveillance cameras, survey points, antennas, utility poles, manholes, street cabinets
   and street lamps. See `EXCLUDED` in `index.html` to change that.
-- Overpass is queried once, when the phase is first opened, and the result is cached both
-  in memory and in `localStorage` — see below. A spinner runs in the phase header, and the
-  body reports the radius being searched and says so when it widens.
+- The map around the photo is read once, when the phase is first opened, and kept in
+  `localStorage` — see below. A spinner runs in the phase header, and the body says
+  whether it is reading an area already held or downloading a new one, and reports when
+  the radius widens.
 
-### Caching the Overpass answer
+## Where the map data comes from
 
-Picking the same photo again asks the same question of the same coordinates, so the answer
-is kept in `localStorage` for 24 hours under
-`photomap:nearby:1:<lat>,<lon>@<radius>`, coordinates rounded to 6 decimal places
-(~11 cm — far finer than any phone's GPS, and stable across re-picks of one photo). Each
-radius is cached separately, so **Wider** benefits too, and re-narrowing costs nothing.
+Not Overpass, any more. Overpass is a data-mining service under permanent load, and asking
+it a fresh `around` query per photo was the least reliable thing in the app: public
+instances refuse outright a good fraction of the time and take seconds when they do not.
 
-Distances are deliberately *not* stored. They are recomputed against whichever position is
-asking, so a second photo taken a few metres away reuses the same cached features and
-still gets its own correct distances and ordering.
+Both of the survey editors this app is closest to reached the same conclusion. **Every
+Door** never used Overpass — `lib/providers/osm_api.dart` calls `/api/0.6/map?bbox=`
+exclusively, over a box from a 1 km radius, and pipes the stream through
+`CollectGeometry → StripMembers → FilterAmenities` before storing. **StreetComplete** used
+Overpass until v26 and has read the plain API since. That call is what every editor uses
+to download its working area: it is CORS-open, needs no token, answers in about a second,
+and is the live database rather than a mirror that may be weeks behind.
 
-Measured on the Harrogate example: **16.5 s cold, 0.4 s from cache**, no Overpass traffic
-at all on the second run, for 9 kB of stored data covering all 36 features found. The
-source line under the results says when the data came from cache and how old it is, and
-offers a **refresh** that drops the entries for every radius at that position and refetches.
-Entries past the 24-hour TTL are evicted on read rather than left to accumulate.
+So the OSM API is the source, and Overpass is kept only as the fallback for the rare area
+the API refuses.
 
-### Which server answered, and how old its data is
+Reads always go to **live** OpenStreetMap even when the upload server is set to the
+sandbox: the sandbox answers `/map` with an empty document, so there is nothing there to
+survey.
 
-Overpass is a free shared service and its public instances refuse requests when busy, so
-the page tries a second instance before giving up, and offers a retry rather than failing
-silently. That fallback matters for correctness, not just availability: mirrors run their
-own database snapshots and can lag badly. At the time of writing `overpass-api.de` was
-current to the minute while `overpass.kumi.systems` was **54 days behind** — enough that a
-recently mapped feature is missing entirely from one and first in the list on the other.
+### Areas, not questions
 
-The page therefore prints which host answered and that host's database timestamp beneath
-the results, and flags it in warning colours when the data is more than a week old.
+The unit is a **slippy-map tile at z14** — about 2.4 km square at the equator and 1.4 km at
+54° north. Big enough that a 1 km search usually needs one or two, small enough to stay
+well inside the API's 50,000-node ceiling. A search asks for every tile its circle
+touches, takes what is already held, downloads the rest at most three at a time, and
+filters by distance itself.
+
+The consequence is the one worth having: **a photo whose position falls inside areas
+already held needs no network at all.** Measured on the Harrogate example, one bbox call
+and two by-id reads cold, then a second photo in the same place answered in 447 ms with
+the network switched off entirely.
+
+Entries live under `photomap:tile:1:<z>/<x>/<y>` for **24 hours**, are evicted on read once
+past it, and the store is capped at 24 areas with the least recently fetched dropped
+first. The source line under the results says how many areas were read, whether they came
+from this browser and how old they are, and offers a **refresh** that drops every area
+covering the widest search at that position.
+
+### An index, not the objects
+
+A tile stores six fields per element — type, id, latitude, longitude, the one tag that
+decides how it is listed, and a display name. Roughly sixty bytes a row.
+
+That choice is what makes the whole thing fit. Measured against the real API:
+
+| stored form | Harrogate, 0.57 km² | central London, 1.15 km² |
+| --- | --- | --- |
+| raw `/map` JSON | 654 kB | 10.2 MB |
+| tagged elements only, ways reduced to a centroid | 77 kB | 2.2 MB |
+| filtered to what the list can show | 18 kB | 791 kB |
+| **the index actually stored** | **7.7 kB** | **183 kB** |
+
+Full tags would put one central-London tile at 800 kB against a roughly 5 MB
+`localStorage` budget. Instead they are read **by id**, batched by type through
+`/api/0.6/nodes.json?nodes=…`, for the ten rows on screen and no more — one or two small
+requests, cached per element for six hours under `photomap:el:1:<type>/<id>`. One id
+deleted since the tile was cached 404s the whole batch, so that case falls back to one
+request each and drops whatever has gone.
+
+There is a second, better reason to do it this way: the tags a change is proposed against
+are always current, even when the area index is twenty-three hours old.
+
+Ways are collapsed to the centroid of their nodes rather than a bounding-box midpoint —
+`/map` returns every node a returned way references, including ones outside the box, so
+the real centre is available. Relations are skipped: they carry no geometry of their own
+in a `/map` response.
+
+### Warming the area around you
+
+The same reasoning as priming the GPS fix, one step further out. When a fix lands and the
+page has been idle for a few seconds, the areas covering a **500 m radius** around it are
+fetched quietly in the background — so by the time a photo is taken there, step 3 has
+nothing left to ask.
+
+It is deliberately unobtrusive: it never reports, never blocks, never competes with a
+search the user is actually waiting on, runs once per area per session, and stands down
+entirely when `navigator.connection.saveData` is set.
+
+### What is disposable, and what is not
+
+A quota error used to wipe every `photomap:` key — including staged edits and the OAuth
+token. Map tiles make that a routine event rather than a theoretical one, so eviction is
+now restricted to the caches (`schema:`, `tile:`, `el:`, `models:`, `examples:`) and works
+oldest-first, retrying the write after each drop. Staged edits and the token are never in
+the blast radius.
+
+### When the API will not serve an area
+
+Its limits are 0.25 deg² and 50,000 nodes; over either it answers `400` with the reason in
+plain text. Only the densest city tiles get there, and that is exactly where Overpass's
+server-side filter earns its keep, so the search falls back to it for that request. The
+source line says so, and nothing is cached from a fallback.
+
+Overpass's own failure modes are still handled: two public instances are tried in order,
+and mirrors run their own snapshots and can lag badly — at the time of writing
+`overpass-api.de` was current to the minute while `overpass.kumi.systems` was **54 days
+behind**. When a fallback answers, the page prints which host it was and that host's
+database timestamp, in warning colours past a week.
 
 ## Tag schema
 
@@ -657,6 +730,16 @@ On success the changeset **opens in a new tab** and the link stays on the page. 
 opened without `noopener` and then has its `opener` severed by hand: `window.open(url,
 '_blank', 'noopener')` returns `null` by specification, so there would be no way to tell
 "opened" from "blocked by the browser" — and the result line says which happened.
+
+### Afterwards
+
+Nothing is opened for you. On a phone a new tab dropped on you mid-survey is how you lose
+your place, so the changeset is offered instead:
+
+- with objects still staged, the link sits **below** the upload button as a secondary
+  action and the note says which changeset is away and how much is left;
+- with the queue empty, the link becomes the step's **primary** action, beside an outlined
+  *Start again with another photo* that resets the page and scrolls back to the top.
 
 ### Throwing edits away
 

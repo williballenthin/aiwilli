@@ -352,8 +352,10 @@
 
                   <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
                   <p class="text-body-secondary small px-3 py-2 mb-0">
-                    <i class="bi bi-globe2 me-1"></i>Data from the
-                    <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank" rel="noopener">Overpass API</a>
+                    <i class="bi bi-globe2 me-1"></i>Map data from the
+                    <a href="https://wiki.openstreetmap.org/wiki/API_v0.6" target="_blank" rel="noopener">OpenStreetMap API</a>,
+                    or the <a href="https://wiki.openstreetmap.org/wiki/Overpass_API" target="_blank"
+                       rel="noopener">Overpass API</a> where that will not serve it
                     &middot; &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors
                   </p>
 
@@ -867,9 +869,31 @@ out center tags 250;`;
 
   const titleCase = v => v.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 
+  /* The Overpass query asks for these three by name; reading a whole bbox from
+     the OSM API does not get to filter server-side, so the same restriction has
+     to hold here or every road segment in the tile lands in the list. */
+  const HIGHWAY_VALUES = new Set(['bus_stop', 'elevator', 'street_lamp']);
+
   function describe(tags) {
-    for (const k of PRIMARY_KEYS) if (tags[k]) return { key: k, value: tags[k], pair: `${k}=${tags[k]}` };
+    for (const k of PRIMARY_KEYS) {
+      if (!tags[k]) continue;
+      if (k === 'highway' && !HIGHWAY_VALUES.has(tags[k])) continue;
+      return { key: k, value: tags[k], pair: `${k}=${tags[k]}` };
+    }
     return { key: '', value: '', pair: '' };
+  }
+
+  /** Everything a list row needs, derived from the primary tag alone. */
+  function decorate({ key, value, pair }) {
+    return {
+      pair,
+      // "Gift" reads badly on its own; "Gift shop" does not.
+      category: key === 'shop' && value !== 'shop' ? `${titleCase(value)} shop`
+              : key === 'craft' ? `${titleCase(value)} (craft)`
+              : titleCase(value),
+      kind: OBJECT_VALUES.has(pair) || key === 'emergency' || key === 'man_made' ? 'object' : 'place',
+      icon: ICONS[pair] || FALLBACK_ICON[key] || 'geo-alt',
+    };
   }
 
   function toFeature(el, lat, lon) {
@@ -878,18 +902,11 @@ out center tags 250;`;
     if (!pos) return null;
     const d = describe(tags);
     if (!d.pair || EXCLUDED.has(d.pair)) return null;
-    // "Gift" reads badly on its own; "Gift shop" does not.
-    const category = d.key === 'shop' && d.value !== 'shop' ? `${titleCase(d.value)} shop`
-                   : d.key === 'craft' ? `${titleCase(d.value)} (craft)`
-                   : titleCase(d.value);
     return {
       id: `${el.type}/${el.id}`,
       lat: pos.lat, lon: pos.lon,
       name: tags.name || tags.brand || tags.operator || null,
-      category,
-      pair: d.pair,
-      kind: OBJECT_VALUES.has(d.pair) || d.key === 'emergency' || d.key === 'man_made' ? 'object' : 'place',
-      icon: ICONS[d.pair] || FALLBACK_ICON[d.key] || 'geo-alt',
+      ...decorate(d),
       distance: haversine(lat, lon, pos.lat, pos.lon),
       tags,
     };
@@ -980,16 +997,27 @@ out center tags 250;`;
     } catch { return null; }
   };
 
+  /* What may be thrown away to make room, and what may never be. Staged edits
+     are the user's unsent work and the token is their session; both used to be
+     inside the blast radius of a quota error, which map tiles make a routine
+     event rather than a theoretical one. */
+  const DISPOSABLE = ['schema:', 'tile:', 'el:', 'models:', 'examples:'];
+  const disposable = k => DISPOSABLE.some(p => k.startsWith(APP_PREFIX + p));
+
   const writeCache = (prefix, key, value) => {
     const payload = JSON.stringify({ ...value, fetchedAt: Date.now() });
     try { localStorage.setItem(prefix + key, payload); }
     catch {
-      // Quota reached — drop everything this app cached and try once more.
-      try {
-        for (const k of Object.keys(localStorage))
-          if (k.startsWith(APP_PREFIX)) localStorage.removeItem(k);
-        localStorage.setItem(prefix + key, payload);
-      } catch { /* give up; it still works, it just is not cached */ }
+      // Quota reached. Drop the caches — never the staged edits or the token —
+      // oldest first, retrying as we go, so one huge tile cannot cost the rest.
+      const aged = Object.keys(localStorage).filter(disposable)
+        .map(k => [k, JSON.parse(localStorage.getItem(k) || '{}').fetchedAt || 0])
+        .sort((a, b) => a[1] - b[1]);
+      for (const [k] of aged) {
+        localStorage.removeItem(k);
+        try { localStorage.setItem(prefix + key, payload); return; } catch { /* keep going */ }
+      }
+      /* give up; it still works, it just is not cached */
     }
   };
 
@@ -1128,42 +1156,262 @@ out center tags 250;`;
     return schema;
   }
 
-  /* ---------- caching the Overpass answer per position ----------
-     Re-picking the same photo asks the same question of the same coordinates,
-     so the answer is worth keeping for a day. Distances are deliberately not
-     stored: they are recomputed against whatever position is asking, so a
-     second photo taken a few metres away can still use the same cached
-     features and get its own correct distances. */
+  /* ---------- where nearby entities come from ----------
+     Overpass is a data-mining service under permanent load, and asking it a
+     fresh `around` query per photo was the least reliable thing in the app:
+     public instances refuse outright about half the time and take seconds when
+     they do not. Both of the survey editors this app is closest to gave up on
+     it for exactly this — StreetComplete moved off Overpass in v26, and Every
+     Door never used it: both read `/api/0.6/map?bbox=` from the ordinary OSM
+     API and do the filtering themselves. That call is what every editor uses to
+     download its working area, it answers in about a second, it is CORS-open
+     and needs no token, and it is the live database rather than a mirror that
+     may be weeks behind.
 
-  const NEARBY_PREFIX = APP_PREFIX + 'nearby:1:';
-  const NEARBY_TTL_MS = 24 * 3600 * 1000;
+     So: the API is the source, tiled and cached, and Overpass stays only as the
+     fallback for the rare tile the API will not serve.
 
-  // 6 dp is ~11 cm — far finer than any phone's GPS, and stable for one photo.
-  const nearbyKey = (lat, lon, r) => `${lat.toFixed(6)},${lon.toFixed(6)}@${r}`;
+     Reads always go to **live** OpenStreetMap even when the upload server is
+     set to the sandbox. The sandbox answers `/map` with an empty document —
+     there is nothing there to survey. */
 
-  const withDistances = (features, lat, lon) => features
-    .map(f => ({ ...f, distance: haversine(lat, lon, f.lat, f.lon) }))
-    .sort((a, b) => a.distance - b.distance);
+  const OSM_READ = 'https://api.openstreetmap.org';
 
-  async function queryOverpassCached(lat, lon, radius) {
-    const key = nearbyKey(lat, lon, radius);
-    const hit = readCache(NEARBY_PREFIX, key, NEARBY_TTL_MS);
-    if (hit) {
-      return {
-        host: hit.host,
-        asOf: hit.asOf ? new Date(hit.asOf) : null,
-        cachedAt: hit.fetchedAt,
-        features: withDistances(hit.features, lat, lon),
-      };
+  /* Slippy tiles at z14 — about 2.4 km square at the equator and 1.4 km at 54°
+     north. Big enough that a 1 km search usually needs one or two of them, and
+     small enough to stay well inside the API's 50,000-node ceiling. */
+  const TILE_Z = 14;
+  const TILE_PREFIX = APP_PREFIX + 'tile:1:';
+  const TILE_TTL_MS = 24 * 3600 * 1000;
+  const TILE_KEEP = 24;              // tiles retained before the oldest are dropped
+  const TILE_CONCURRENCY = 3;        // parallel /map calls: enough to be quick, few enough to be polite
+
+  const zoomScale = z => 2 ** z;
+  const lon2x = (lon, z) => Math.floor((lon + 180) / 360 * zoomScale(z));
+  const lat2y = (lat, z) => Math.floor(
+    (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * zoomScale(z));
+  const x2lon = (x, z) => x / zoomScale(z) * 360 - 180;
+  const y2lat = (y, z) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / zoomScale(z)))) * 180 / Math.PI;
+  const tileBbox = (x, y, z) => ({
+    w: x2lon(x, z), e: x2lon(x + 1, z), n: y2lat(y, z), s: y2lat(y + 1, z),
+  });
+
+  /** Keys of every tile that touches the circle of `radius` around a point. */
+  function tilesFor(lat, lon, radius) {
+    const n = zoomScale(TILE_Z);
+    const dLat = radius / 111320;
+    // cos() is clamped so a position near a pole cannot ask for the whole row.
+    const dLon = radius / (111320 * Math.max(0.05, Math.cos(lat * Math.PI / 180)));
+    const clampX = v => Math.min(n - 1, Math.max(0, v));
+    const clampY = v => Math.min(n - 1, Math.max(0, v));
+    const x0 = clampX(lon2x(lon - dLon, TILE_Z)), x1 = clampX(lon2x(lon + dLon, TILE_Z));
+    const y0 = clampY(lat2y(Math.min(85, lat + dLat), TILE_Z));
+    const y1 = clampY(lat2y(Math.max(-85, lat - dLat), TILE_Z));
+    const keys = [];
+    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++)
+      for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) keys.push(`${TILE_Z}/${x}/${y}`);
+    return keys;
+  }
+
+  /* What a tile stores per element, and nothing more: type, id, position, the
+     one tag that decides how it is listed, and a display name. Sixty-odd bytes
+     a row, against roughly 300 for the full tag set — and in a city centre that
+     is the difference between 8 kB and 800 kB for a single tile. The full tags
+     are read by id when they are actually needed, which also means the values
+     a change is proposed against are current rather than up to a day old. */
+  const TYPE_CHAR = { node: 'n', way: 'w', relation: 'r' };
+  const CHAR_TYPE = { n: 'node', w: 'way', r: 'relation' };
+
+  function indexElements(elements) {
+    // /map returns every node a returned way references, including ones outside
+    // the box, so a way's centre can be computed properly rather than guessed
+    // from a bounding box.
+    const pos = new Map();
+    for (const e of elements) if (e.type === 'node') pos.set(e.id, [e.lat, e.lon]);
+
+    const rows = [];
+    for (const e of elements) {
+      const tags = e.tags;
+      if (!tags) continue;
+      const d = describe(tags);
+      if (!d.pair || EXCLUDED.has(d.pair)) continue;
+      let lat, lon;
+      if (e.type === 'node') { lat = e.lat; lon = e.lon; }
+      else if (e.type === 'way') {
+        let n = 0, sLat = 0, sLon = 0;
+        for (const id of e.nodes || []) {
+          const p = pos.get(id);
+          if (p) { sLat += p[0]; sLon += p[1]; n++; }
+        }
+        if (!n) continue;
+        lat = sLat / n; lon = sLon / n;
+      } else continue;      // relations carry no geometry of their own in /map
+      rows.push([TYPE_CHAR[e.type], e.id, +lat.toFixed(6), +lon.toFixed(6), d.pair,
+                 tags.name || tags.brand || tags.operator || '']);
+    }
+    return rows;
+  }
+
+  const rowToFeature = (row, lat, lon) => {
+    const [t, id, la, lo, pair, name] = row;
+    const [key, ...rest] = pair.split('=');
+    return {
+      id: `${CHAR_TYPE[t]}/${id}`,
+      lat: la, lon: lo,
+      name: name || null,
+      ...decorate({ key, value: rest.join('='), pair }),
+      distance: haversine(lat, lon, la, lo),
+      tags: null,           // filled in on demand — see ensureTags
+    };
+  };
+
+  /** Drop the least recently fetched tiles once there are more than we keep. */
+  function evictTiles() {
+    const keys = Object.keys(localStorage).filter(k => k.startsWith(TILE_PREFIX));
+    if (keys.length <= TILE_KEEP) return;
+    keys.map(k => [k, JSON.parse(localStorage.getItem(k) || '{}').fetchedAt || 0])
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, keys.length - TILE_KEEP)
+      .forEach(([k]) => localStorage.removeItem(k));
+  }
+
+  async function fetchTile(key) {
+    const [z, x, y] = key.split('/').map(Number);
+    const b = tileBbox(x, y, z);
+    const url = `${OSM_READ}/api/0.6/map.json?bbox=${b.w.toFixed(7)},${b.s.toFixed(7)},`
+              + `${b.e.toFixed(7)},${b.n.toFixed(7)}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) {
+      // 400 is the node ceiling or the area ceiling, in plain text. A tile that
+      // dense is exactly where Overpass's server-side filter earns its keep.
+      const why = res.status === 400 ? (await res.text()).trim().slice(0, 140)
+                                     : `the OSM API returned HTTP ${res.status}`;
+      throw new Error(why);
+    }
+    return indexElements((await res.json()).elements || []);
+  }
+
+  /** Fetch missing tiles a few at a time, writing each one as it lands. */
+  async function fillTiles(keys, onProgress) {
+    const queue = keys.slice();
+    let done = 0;
+    const worker = async () => {
+      for (let k = queue.shift(); k; k = queue.shift()) {
+        const rows = await fetchTile(k);
+        writeCache(TILE_PREFIX, k, { rows });
+        evictTiles();
+        onProgress?.(++done, keys.length);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(TILE_CONCURRENCY, keys.length) }, worker));
+  }
+
+  /** Every listable thing within `radius`, from the tile cache, filling gaps. */
+  async function queryTiles(lat, lon, radius, onProgress) {
+    const keys = tilesFor(lat, lon, radius);
+    const have = new Map();
+    const missing = [];
+    for (const k of keys) {
+      const hit = readCache(TILE_PREFIX, k, TILE_TTL_MS);
+      if (hit) have.set(k, hit); else missing.push(k);
+    }
+    if (missing.length) {
+      await fillTiles(missing, onProgress);
+      for (const k of missing) have.set(k, readCache(TILE_PREFIX, k, TILE_TTL_MS) || { rows: [], fetchedAt: Date.now() });
     }
 
-    const res = await queryOverpass(lat, lon, radius);
-    writeCache(NEARBY_PREFIX, key, {
-      host: res.host,
-      asOf: res.asOf ? res.asOf.toISOString() : null,
-      features: res.features.map(({ distance, ...rest }) => rest),
-    });
-    return res;
+    const seen = new Set(), features = [];
+    for (const tile of have.values()) {
+      for (const row of tile.rows) {
+        const f = rowToFeature(row, lat, lon);
+        // A way crossing a tile edge comes back in both tiles, identically.
+        if (f.distance > radius || seen.has(f.id)) continue;
+        seen.add(f.id);
+        features.push(f);
+      }
+    }
+    features.sort((a, b) => a.distance - b.distance);
+    return {
+      host: 'api.openstreetmap.org',
+      asOf: null,                 // the API is the live database, never a mirror
+      features,
+      tiles: keys.length,
+      fetched: missing.length,
+      // Null when everything was just downloaded; otherwise the oldest tile in play.
+      cachedAt: missing.length === keys.length ? null
+        : Math.min(...[...have.values()].map(t => t.fetchedAt || Date.now())),
+    };
+  }
+
+  /** True when the whole search can be answered without touching the network. */
+  const tilesReady = (lat, lon, radius) =>
+    tilesFor(lat, lon, radius).every(k => !!readCache(TILE_PREFIX, k, TILE_TTL_MS));
+
+  async function queryNearby(lat, lon, radius, onProgress) {
+    try {
+      return await queryTiles(lat, lon, radius, onProgress);
+    } catch (e) {
+      // Only the densest city tiles get here. Overpass can filter server-side,
+      // so it answers where a whole-bbox download will not.
+      const res = await queryOverpass(lat, lon, radius);
+      return { ...res, tiles: 0, fetched: 0, cachedAt: null, fellBack: e.message };
+    }
+  }
+
+  /* ---------- full tags, by id, when they are wanted ----------
+     A tile row knows enough to draw a list row and no more. Everything past
+     that — the detail pane, the schema step, what a proposal would replace —
+     needs the real tag set, so it is read for the handful of elements on screen
+     rather than for the couple of thousand in the tile. */
+
+  const ELEM_PREFIX = APP_PREFIX + 'el:1:';
+  const ELEM_TTL_MS = 6 * 3600 * 1000;
+
+  async function fetchElements(type, ids) {
+    const plural = `${type}s`;
+    try {
+      const res = await fetch(`${OSM_READ}/api/0.6/${plural}.json?${plural}=${ids.join(',')}`,
+                              { headers: { Accept: 'application/json' } });
+      if (!res.ok) throw new Error(String(res.status));
+      return (await res.json()).elements || [];
+    } catch {
+      // One id deleted since the tile was cached 404s the entire batch, so fall
+      // back to one request each and simply drop whatever has gone.
+      const each = await Promise.all(ids.map(id =>
+        fetch(`${OSM_READ}/api/0.6/${type}/${id}.json`, { headers: { Accept: 'application/json' } })
+          .then(r => r.ok ? r.json() : null).catch(() => null)));
+      return each.filter(Boolean).flatMap(j => j.elements || []);
+    }
+  }
+
+  /** Fill in `.tags` on features that do not have them yet. Never throws. */
+  async function ensureTags(features) {
+    const pending = [];
+    for (const f of features) {
+      if (f.tags) continue;
+      const hit = readCache(ELEM_PREFIX, f.id, ELEM_TTL_MS);
+      if (hit) f.tags = hit.tags; else pending.push(f);
+    }
+    if (!pending.length) return features;
+
+    const byType = new Map();
+    for (const f of pending) {
+      const [type, id] = f.id.split('/');
+      if (!byType.has(type)) byType.set(type, []);
+      byType.get(type).push(id);
+    }
+    const found = new Map();
+    await Promise.all([...byType].map(async ([type, ids]) => {
+      for (const el of await fetchElements(type, ids)) {
+        const tags = el.tags || {};
+        found.set(`${el.type}/${el.id}`, tags);
+        writeCache(ELEM_PREFIX, `${el.type}/${el.id}`, { tags });
+      }
+    }));
+    // Anything the API would not give us gets an empty tag set rather than a
+    // null the rest of the page would have to keep testing for.
+    for (const f of pending) f.tags = found.get(f.id) || {};
+    return features;
   }
 
   /* ---------- settings: OpenRouter key and vision model ---------- */
@@ -1407,6 +1655,7 @@ out center tags 250;`;
           at: pos.timestamp || Date.now(),
         };
         renderLocStatus();
+        scheduleAreaPrefetch();
       },
       err => {
         geo.state = err.code === err.PERMISSION_DENIED ? 'denied' : 'error';
@@ -1415,6 +1664,38 @@ out center tags 250;`;
       },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 },
     );
+  }
+
+  /* ---------- warming the map around you ----------
+     The same reasoning as priming the fix itself, one step further out: when a
+     photo is chosen the app is going to want the map around it, and the answer
+     is worth having before it is asked for. A survey happens where you are
+     standing, so the fix says which areas those will be.
+
+     Quiet on purpose. It never reports, never blocks, runs once per area per
+     session, and stands down entirely when the connection asks it to. */
+
+  const PREFETCH_RADIUS = 500;      // metres around the fix worth having in hand
+  const PREFETCH_IDLE_MS = 4000;    // let the page finish loading first
+  const prefetched = new Set();
+  let prefetchTimer = null;
+
+  function scheduleAreaPrefetch() {
+    if (prefetchTimer || !fixUsable()) return;
+    // Data saver, or a metered connection: this is a convenience, not a need.
+    if (navigator.connection?.saveData) return;
+    prefetchTimer = setTimeout(() => { prefetchTimer = null; prefetchArea(); }, PREFETCH_IDLE_MS);
+  }
+
+  async function prefetchArea() {
+    if (!fixUsable()) return;
+    // Never compete with a search the user is actually waiting on.
+    if (photo && !photo.nearby && photo.lat != null) return;
+    const keys = tilesFor(geo.fix.lat, geo.fix.lon, PREFETCH_RADIUS)
+      .filter(k => !prefetched.has(k) && !readCache(TILE_PREFIX, k, TILE_TTL_MS));
+    if (!keys.length) return;
+    keys.forEach(k => prefetched.add(k));
+    try { await fillTiles(keys); } catch { /* it was only ever an optimisation */ }
   }
 
   /* Asked for on load, because the answer is needed the instant a photo is
@@ -1729,6 +2010,12 @@ out center tags 250;`;
 
   function nearbyStatus(html) { $('nearbyStatus').innerHTML = html; }
 
+  const busy = text => `
+    <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
+      <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+      ${text}
+    </div>`;
+
   async function loadNearby(radius) {
     $('nearbyList').replaceChildren();
     $('btnWider').disabled = true;
@@ -1739,29 +2026,29 @@ out center tags 250;`;
     $('phaseNearbySummary').classList.add('d-none');
     setPhase('Nearby', { state: 'busy' });
 
-    nearbyStatus(`
-      <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
-        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-        Searching OpenStreetMap within ${radius} m&hellip;
-      </div>`);
+    // Say which of the two it is: a cached area answers instantly and a cold one
+    // takes a second, and a spinner that means both explains neither.
+    nearbyStatus(busy(tilesReady(photo.lat, photo.lon, radius)
+      ? `Reading the map around you within ${radius} m&hellip;`
+      : `Downloading the map around you&hellip;`));
 
     const done = () => {
       $('phaseNearbySpinner').classList.add('d-none');
       $('phaseNearbySummary').classList.remove('d-none');
     };
 
+    const progress = (n, total) => nearbyStatus(busy(
+      total > 1 ? `Downloading the map around you — area ${n + 1} of ${total}&hellip;`
+                : 'Downloading the map around you&hellip;'));
+
     try {
-      let res = await queryOverpassCached(photo.lat, photo.lon, radius);
+      let res = await queryNearby(photo.lat, photo.lon, radius, progress);
       let used = radius;
       // Sparse area: widen automatically until we have enough to show.
       for (const wider of RADII.filter(r => r > radius)) {
         if (res.features.length >= WANTED) break;
-        nearbyStatus(`
-          <div class="d-flex align-items-center gap-2 text-body-secondary py-4 justify-content-center">
-            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-            Only ${res.features.length} found — widening to ${wider} m&hellip;
-          </div>`);
-        res = await queryOverpassCached(photo.lat, photo.lon, wider);
+        nearbyStatus(busy(`Only ${res.features.length} found — widening to ${wider} m&hellip;`));
+        res = await queryNearby(photo.lat, photo.lon, wider, progress);
         used = wider;
       }
       photo.nearby = { radius: used, ...res };
@@ -1771,7 +2058,7 @@ out center tags 250;`;
       nearbyStatus(`
         <div class="alert alert-warning" role="alert">
           <i class="bi bi-exclamation-triangle me-1"></i>
-          Could not reach the Overpass API — public instances often refuse requests when busy.
+          Could not read the map around this photo.
           <div class="small mt-1 text-body-secondary">${esc(e.message)}</div>
           <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnRetryNearby">
             <i class="bi bi-arrow-clockwise me-1"></i>Try again
@@ -1783,6 +2070,13 @@ out center tags 250;`;
     }
     done();
     renderNearby();
+  }
+
+  /** Full tags for what is currently listed, in the background. */
+  function prefetchShownTags(shown) {
+    const need = shown.filter(f => !f.tags);
+    if (!need.length) return;
+    ensureTags(need).then(() => renderFeatureDetail()).catch(() => {});
   }
 
   const dotIcon = (f, selected) => {
@@ -1895,6 +2189,10 @@ out center tags 250;`;
     plotNearby(shown);
     renderFeatureDetail();
     renderNearbyCta();
+    // Rows come from the tile index, which holds no tags. Read them for what is
+    // on screen — one batched request — so the first tap does not wait for a
+    // round trip. Re-runs on every filter and widen, for whatever is new.
+    prefetchShownTags(shown);
   }
 
   /* Once something is committed the header should say *what*, not how many were
@@ -1931,23 +2229,29 @@ out center tags 250;`;
 
   /* Which mirror answered, and how old its data is. A busy primary sends us to a
      fallback that can be weeks behind, which quietly changes what you see. */
-  function renderSource({ host, asOf, cachedAt }) {
+  function renderSource({ host, asOf, cachedAt, tiles, fellBack }) {
     const el = $('nearbySource');
     if (!host) { el.textContent = ''; return; }
     const days = asOf ? Math.floor((Date.now() - asOf) / 86400000) : null;
     const stale = days != null && days > 7;
-    el.className = `small px-3 pt-2 mb-0 ${stale ? 'text-warning-emphasis' : 'text-body-secondary'}`;
+    el.className = `small px-3 pt-2 mb-0 ${stale || fellBack ? 'text-warning-emphasis' : 'text-body-secondary'}`;
     el.innerHTML =
-      `<i class="bi bi-${stale ? 'exclamation-triangle' : 'database'} me-1"></i>` +
+      `<i class="bi bi-${stale || fellBack ? 'exclamation-triangle' : 'database'} me-1"></i>` +
       `via ${esc(host)}` +
+      (fellBack ? ' &middot; the OSM API would not serve this area' : '') +
+      (tiles ? ` &middot; ${tiles} map area${tiles === 1 ? '' : 's'}` : '') +
       (asOf ? ` &middot; data as of ${asOf.toLocaleDateString(undefined, { dateStyle: 'medium' })}` +
               (stale ? ` (${days} days old)` : '') : '') +
-      (cachedAt ? ` &middot; <span id="nearbyCached">from this browser's cache, ` +
+      (cachedAt ? ` &middot; <span id="nearbyCached">held in this browser, ` +
                   `${describeAge(Date.now() - cachedAt)} old</span>` : '') +
       ` <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button" id="btnRefreshNearby">refresh</button>`;
 
     $('btnRefreshNearby').addEventListener('click', () => {
-      for (const r of RADII) dropCache(NEARBY_PREFIX, nearbyKey(photo.lat, photo.lon, r));
+      // Forget the areas covering the widest search, not just the current one,
+      // so "refresh" means the same thing before and after pressing Wider.
+      for (const k of tilesFor(photo.lat, photo.lon, RADII[RADII.length - 1]))
+        dropCache(TILE_PREFIX, k);
+      for (const f of photo.nearby?.features || []) dropCache(ELEM_PREFIX, f.id);
       loadNearby(photo.nearby?.radius ?? RADII[0]);
     });
   }
@@ -2008,6 +2312,13 @@ out center tags 250;`;
 
     renderFeatureDetail();
     renderNearbyCta();
+    // Usually already in hand from the list-level prefetch; this covers a
+    // selection made before that landed, or one restored from the map.
+    if (feature && !feature.tags) {
+      ensureTags([feature])
+        .then(() => { if (photo.place?.id === feature.id) renderFeatureDetail(); })
+        .catch(() => {});
+    }
   }
 
   /* Details of the selected entity, below the list, so results can be browsed. */
@@ -2020,16 +2331,20 @@ out center tags 250;`;
     const f = photo?.place;
     if (!f) { host.classList.add('d-none'); host.replaceChildren(); return; }
 
+    // The list is drawn from the tile index, which carries no tags; they arrive a
+    // moment later from the by-id read. Everything above the tag rows is known
+    // straight away, so the pane opens filled in rather than empty.
+    const tags = f.tags || {};
     const rows = [
       ['Category', f.category],
       ['OSM tag', f.pair, 'code'],
       ['Kind', f.kind === 'place' ? 'Business / destination' : 'Object / street furniture'],
       ['Distance', `${fmtDistance(f.distance)} from the photo`],
       ['Coordinates', `${fmtCoord(f.lat, ['N', 'S'])}, ${fmtCoord(f.lon, ['E', 'W'])}`],
-      ...DETAIL_TAGS.filter(k => f.tags[k]).map(k => [titleCase(k.replace('addr:', '')), f.tags[k]]),
+      ...DETAIL_TAGS.filter(k => tags[k]).map(k => [titleCase(k.replace('addr:', '')), tags[k]]),
     ];
 
-    const extra = Object.entries(f.tags)
+    const extra = Object.entries(tags)
       .filter(([k]) => k !== 'name' && !DETAIL_TAGS.includes(k) && !PRIMARY_KEYS.includes(k));
 
     host.classList.remove('d-none');
@@ -2050,6 +2365,9 @@ out center tags 250;`;
               : esc(v)}</td>
           </tr>`).join('')}
       </table>
+      ${f.tags ? '' : `<p class="small text-body-secondary d-flex align-items-center gap-2 mb-2">
+        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+        Reading its tags from OpenStreetMap&hellip;</p>`}
       ${extra.length ? `
         <details class="mb-2">
           <summary class="small text-body-secondary">All ${extra.length + rows.length} OSM tags</summary>
@@ -2113,7 +2431,11 @@ out center tags 250;`;
     }
   }
 
-  function lockEntity(f) {
+  async function lockEntity(f) {
+    // Everything downstream reads f.tags — the schema's "already set", the
+    // vision context, what a proposal would replace. It is nearly always
+    // already there; when it is not, this is one small request.
+    if (!f.tags) await ensureTags([f]);
     photo.entity = f;
     if (photo.place?.id !== f.id) choosePlace(f, 'map');   // 'map': don't yank the page around
     refreshLockIndicators();
@@ -3885,6 +4207,7 @@ out center tags 250;`;
     for (const box of host.querySelectorAll('input[data-group]')) {
       box.addEventListener('change', () => {
         uploadPick = box.dataset.group;
+        lastUpload = null;                    // picking something new moves us on
         $('uploadComment').value = '';        // it described the previous object
         growTextarea($('uploadComment'));
         renderUploadList(); renderUploadCta(); renderUploadPreview();
@@ -3899,9 +4222,46 @@ out center tags 250;`;
       + 'from my own photographs, checked on site';
   };
 
+  /* Set by a successful upload and cleared the moment anything else is picked.
+     It is what turns step 7 from "send this" into "here is what you sent". */
+  let lastUpload = null;
+
+  /** How many objects are still staged — what decides whether step 7 is done. */
+  const uploadRemaining = () => stagedEdits().length;
+
   function renderUploadCta() {
     const host = $('uploadCta');
     if (!host) return;
+
+    // Straight after an upload the step's job changes: what to do with the
+    // changeset, not what to send. The link is offered rather than flung into a
+    // new tab, which on a phone means losing your place mid-survey.
+    const link = lastUpload ? `
+      <a class="btn ${uploadRemaining() ? 'btn-outline-secondary mt-2' : 'btn-primary'}"
+         href="${esc(lastUpload.url)}" target="_blank" rel="noopener" id="lnkChangeset">
+        View changeset ${esc(lastUpload.id)} on OpenStreetMap<i class="bi bi-arrow-right ms-1"></i>
+      </a>` : '';
+
+    // Nothing staged and nothing to send: the changeset link leads, and the only
+    // other thing left to do is go round again.
+    if (lastUpload && !uploadRemaining()) {
+      $('uploadTagsNote').textContent = '';
+      host.innerHTML = link + `
+        <button class="btn btn-outline-secondary mt-2" type="button" id="btnUploadAgain">
+          <i class="bi bi-images me-1"></i>Start again with another photo
+        </button>
+        <p class="small text-body-secondary text-center mt-2 mb-0" id="uploadNote">
+          Opens in a new tab. Give it a day before judging how it looks — the map renders
+          on its own schedule.
+        </p>`;
+      $('btnUploadAgain').addEventListener('click', () => {
+        lastUpload = null;
+        startOver();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      return;
+    }
+
     if (!osmToken()) { host.replaceChildren(); $('uploadTagsNote').textContent = ''; return; }
     const sel = uploadSelection();
     const tags = sel.reduce((t, s) => t + s.keys.length, 0);
@@ -3923,10 +4283,13 @@ out center tags 250;`;
           : sel.length ? `Upload ${tags} tag${tags === 1 ? '' : 's'} on ${esc(name)}`
           : 'Nothing selected'}
       </button>
+      ${link}
       <p class="small text-body-secondary text-center mt-2 mb-0" id="uploadNote">
-        ${osmToken() ? `One changeset, one object, to the ${esc(osmServer().label)}. `
-                       + 'Uploaded tags are removed from this browser.'
-                     : 'Connect an OpenStreetMap account to upload.'}
+        ${lastUpload ? `Changeset ${esc(lastUpload.id)} is away. Still staged below: `
+                       + `${uploadRemaining()} object${uploadRemaining() === 1 ? '' : 's'}.`
+          : osmToken() ? `One changeset, one object, to the ${esc(osmServer().label)}. `
+                         + 'Uploaded tags are removed from this browser.'
+          : 'Connect an OpenStreetMap account to upload.'}
       </p>`;
     $('btnUpload').addEventListener('click', runUpload);
   }
@@ -4184,21 +4547,18 @@ out center tags 250;`;
       $('uploadComment').value = '';
 
       const tags = items.reduce((t, i) => t + i.keys.length, 0);
-      const url = `${osmServer().web}/changeset/${changesetId}`;
-      // Open it. The upload began with a click, but several awaits have passed
-      // since, so some browsers will treat this as unsolicited and block it —
-      // hence the link below stays, and says so when the tab did not appear.
-      // Not window.open(..., 'noopener'): that returns null by specification, so
-      // there would be no way to tell "opened" from "blocked". Opening normally
-      // and then severing opener gives the same protection and a real handle.
-      const tab = window.open(url, '_blank');
-      if (tab) tab.opener = null;
+      // What happens next is the reader's call, not ours: the changeset link is
+      // offered as this step's primary action rather than being flung into a
+      // new tab, which on a phone means losing your place mid-survey.
+      lastUpload = {
+        id: changesetId,
+        url: `${osmServer().web}/changeset/${changesetId}`,
+        tags, objects: items.length,
+      };
       done('done', `Changeset ${changesetId}`,
         `<i class="bi bi-check-circle text-success me-1"></i>Uploaded ${tags} tag`
         + `${tags === 1 ? '' : 's'} on ${items.length} object${items.length === 1 ? '' : 's'} as `
-        + `<a href="${esc(url)}" target="_blank" rel="noopener">changeset ${esc(changesetId)}</a>`
-        + `${tab ? ', now open in a new tab' : ' — your browser blocked the new tab, so open it '
-           + 'from that link'}. They have been removed from this browser.`);
+        + `changeset ${esc(changesetId)}. They have been removed from this browser.`);
     } catch (e) {
       done('warn', 'Failed',
         `<i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}`
