@@ -353,6 +353,28 @@ supports. It reads text, not the photo, so any model will do.
   with them, which matters for `opening_hours` and addresses. They come from a bounding-box
   Overpass query (a 30 km `around` times out), cached for 30 days.
 
+### What the mapper adds
+
+Above the run button is a note field that starts one line tall and grows as you fill it.
+It is for what the photograph cannot carry: *"the name is misspelled, it should be
+Pavilion"*, *"the side door is step-free"*, *"the sign is out of date, they told me they
+open at nine now"*.
+
+This is not a hint. The prompt introduces it as coming from someone who was standing in
+front of the object, tells the model to weigh it as first-hand observation alongside the
+description, to follow any instruction in it, and that **where it contradicts the
+description the mapper is right**. Without that, the standing rule — propose nothing the
+description does not state — would make the note unusable, since by definition it says
+things the photograph does not show. When a note is present the no-inference rule widens
+to admit the mapper as a source, and evidence may be quoted from either.
+
+The Prompt tab updates as you type, before anything is sent, so what the note does is
+visible rather than implied. An empty note adds nothing to the prompt at all.
+
+After a run the button becomes **Propose again**: edit the note, press it, and the
+proposals below are replaced. Steering it a second or third time is the expected way to
+use this, not an error path.
+
 ### The response format
 
 The model answers in **JSON whose content is OSM keys and values**. Straight `key=value`

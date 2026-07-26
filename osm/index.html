@@ -104,6 +104,11 @@
            background: var(--bs-secondary-bg); flex: 0 0 auto; }
   .thumb-lg { width: 100%; max-height: 9rem; object-fit: cover; border-radius: var(--bs-border-radius); }
 
+  /* Starts at one line and grows with its content — a fixed box either wastes
+     space or makes you scroll inside a form field on a phone. Height is set in
+     JS from scrollHeight; this keeps it from ever showing its own scrollbar. */
+  .grow-text { resize: none; overflow-y: hidden; }
+
   .scroll-y { overflow-y: auto; overscroll-behavior: contain; }
   .coords { font-variant-numeric: tabular-nums; }
 
@@ -423,6 +428,21 @@
               </h2>
               <div id="phasePropose" class="accordion-collapse collapse" data-bs-parent="#phases">
                 <div class="accordion-body p-0">
+
+                  <div class="p-3 border-bottom">
+                    <label for="proposeNote" class="form-label fw-medium">
+                      Anything else you noticed?
+                    </label>
+                    <div class="form-text mt-0 mb-2">
+                      Optional. You were standing there and the model was not, so what you
+                      write here counts as first-hand knowledge, not a hint — for example
+                      <em>&ldquo;the name is misspelled, it should be Pavilion&rdquo;</em>
+                      or <em>&ldquo;the side door is step-free&rdquo;</em>.
+                      Edit it and propose again to try a different steer.
+                    </div>
+                    <textarea class="form-control grow-text" id="proposeNote" rows="1"
+                              placeholder="Corrections, context, things the photo does not show…"></textarea>
+                  </div>
 
                   <div class="p-3 border-bottom" id="proposeControls"></div>
 
@@ -1833,6 +1853,8 @@ out center tags 250;`;
     setPhase('Vision', { state: 'todo', summary: '', enabled: false });
     setPhase('Propose', { state: 'todo', summary: '', enabled: false });
     photo.facts = null; photo.examples = null;
+    $('proposeNote').value = '';       // it described the object just released
+    $('proposeNote').style.height = 'auto';
     renderNearbyCta();     // ...and goes back to offering the commit when released
     setPhase('Nearby', { state: 'done', summary: nearbySummary(nearbyMarkers.size) });
     collapse($('phaseSchema')).hide();
@@ -2359,8 +2381,11 @@ out center tags 250;`;
     },
   };
 
+  const proposeNote = () => ($('proposeNote')?.value || '').trim();
+
   function buildProposePrompt() {
     const f = photo.entity, s = photo.schema, ex = photo.examples || [];
+    const note = proposeNote();
     // recommended and optional are deduped within themselves but overlap each
     // other, and a repeated 41-value list is pure token cost. Dedupe on the
     // resolved keys rather than the field id: payment_multi and
@@ -2440,22 +2465,37 @@ out center tags 250;`;
       (photo.description || '').trim(),
       '"""',
       '',
+      note ? 'WHAT THE MAPPER ADDS' : '',
+      note ? 'The person who took this photograph was standing in front of the object and'
+           : '',
+      note ? 'has written the following. They saw things the photograph does not show and'
+           : '',
+      note ? 'they know this place; treat it as first-hand observation with the same weight'
+           : '',
+      note ? 'as the description, and follow any instruction in it. Where it contradicts the'
+           : '',
+      note ? 'description, the mapper is right.'
+           : '',
+      note ? '"""' : '',
+      note,
+      note ? '"""' : '',
+      '',
       'TASK',
       'Propose the tags this photograph supports. For each one give the OSM key, the',
-      'value exactly as it should be stored, the words in the description that support',
-      'it, and your confidence.',
+      'value exactly as it should be stored, the words that support it — quoted from the',
+      `description${note ? ' or from what the mapper added' : ''} — and your confidence.`,
       '',
       'RULES',
-      '- Only propose a tag if the description states it. Do not infer from the object',
+      `- Only propose a tag if the description${note ? ' or the mapper' : ''} states it.`
+        + ' Do not infer from the object',
       '  type, the name, the location, or from what is usual for this kind of place.',
       '- Prefer the keys in the schema above. Match the formatting conventions of the',
       '  real examples, particularly for addresses.',
       '- For a key with a controlled vocabulary, use one of the listed values verbatim.',
       '  If the photograph shows something that no listed value describes, propose no',
       '  tag for that key rather than inventing a value.',
-      '- Include a tag that already exists only if the description shows a different',
-      '  value for it.',
-      '- If the description supports nothing, return an empty list. That is a valid answer.',
+      '- Include a tag that already exists only if there is a different value for it.',
+      '- If nothing above supports a tag, return an empty list. That is a valid answer.',
     ].filter(l => l !== '').join('\n');
   }
 
@@ -2467,6 +2507,7 @@ out center tags 250;`;
     const model = findModel(settings.tagModel);
     const ready = !!settings.apiKey && !!settings.tagModel && !!photo?.description;
     const running = !!proposeAbort;
+    const ran = Array.isArray(photo?.facts);
 
     if (!settings.apiKey || !settings.tagModel) {
       host.innerHTML = `
@@ -2496,9 +2537,12 @@ out center tags 250;`;
       <div class="d-grid">
         <button class="btn ${running ? 'btn-outline-danger' : 'btn-outline-primary'}"
                 type="button" id="btnRunPropose">
-          <i class="bi bi-${running ? 'stop-circle' : 'magic'} me-1"></i>${running ? 'Stop' : 'Propose tags'}
+          <i class="bi bi-${running ? 'stop-circle' : ran ? 'arrow-clockwise' : 'magic'} me-1"></i>${
+            running ? 'Stop' : ran ? 'Propose again' : 'Propose tags'}
         </button>
       </div>
+      ${ran && !running ? `<p class="small text-body-secondary mt-2 mb-0">
+          Editing the note above and pressing this replaces the proposals below.</p>` : ''}
       <p class="small text-body-secondary mt-2 mb-0" id="proposeStatus"
          role="status" aria-live="polite"></p>`;
     $('btnRunPropose').addEventListener('click', () => running ? proposeAbort.abort() : runPropose());
@@ -3385,6 +3429,9 @@ out center tags 250;`;
     $('proposeControls').replaceChildren();
     $('proposeList').replaceChildren();
     $('proposeCta').replaceChildren();
+    // The note is about one object seen on one visit; it does not carry over.
+    $('proposeNote').value = '';
+    $('proposeNote').style.height = 'auto';
     nearbyStatus('');
     setPhase('Photo', { state: 'todo', summary: '', enabled: true });
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
@@ -3514,6 +3561,22 @@ out center tags 250;`;
     });
   }
   $('uploadComment').addEventListener('input', renderUploadCta);
+
+  // One line until it needs more. Reset to auto first so it shrinks on deletion.
+  const growTextarea = el => {
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  for (const id of ['proposeNote', 'uploadComment']) {
+    const el = $(id);
+    el.classList.add('grow-text');
+    el.addEventListener('input', () => growTextarea(el));
+  }
+  // The prompt tab is the honest record of what will be sent, so it tracks the
+  // note as it is typed rather than only at run time.
+  $('proposeNote').addEventListener('input', () => {
+    if (photo?.entity) $('propPromptText').textContent = buildProposePrompt();
+  });
 
   $('btnExport').addEventListener('click', exportGeoJson);
   $('btnTheme').addEventListener('click', () =>
