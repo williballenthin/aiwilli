@@ -843,7 +843,12 @@ out center tags 250;`;
      most once per session; the small derived result is cached in localStorage
      so a repeat visit for the same tag needs no network at all. */
 
-  const ID_SCHEMA_BASE = 'https://cdn.jsdelivr.net/npm/@openstreetmap/id-tagging-schema/dist';
+  // Pinned like every other CDN dependency. Floating here was a real hazard: the
+  // package went 6.x -> 7.0.1 in July 2026, and an unreviewed major release
+  // would have changed steps 4 and 6 under us with no SRI to catch it. Bump
+  // deliberately, and bump CACHE_PREFIX with it if the derived shape changes.
+  const ID_SCHEMA_BASE =
+    'https://cdn.jsdelivr.net/npm/@openstreetmap/id-tagging-schema@7.0.1/dist';
   const TAGINFO = 'https://taginfo.openstreetmap.org/api/4';
   const APP_PREFIX = 'photomap:';
   // v2: inPractice entries gained a label distinguishing key rows from key=value rows.
