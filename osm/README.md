@@ -538,6 +538,30 @@ exactly what will be sent.
 The changeset comment is pre-filled and editable; an upload with an empty comment is
 refused, because a comment is what a reviewer reads first.
 
+### Seeing it before you send it
+
+Under the comment field is the **exact XML**, both documents, pretty-printed and
+syntax-highlighted, rebuilt on every toggle. Every layer above it is an abstraction over
+two XML files and the mapper is the one signing their name to them, so they are shown by
+default rather than hidden behind a link.
+
+It is the real thing, not a reconstruction: selecting an object reads it from the API —
+anonymously, since OSM serves element reads without a token — so the version number,
+coordinates and carried-over tags in the preview are the ones that will be uploaded. Untick
+a tag and it disappears from the diff; type in the comment and it appears in the changeset;
+switch objects and it re-reads. If the read fails the pane says so plainly and notes that
+the upload will read the object again rather than send anything built on a guess.
+
+The preview also earned its keep immediately: it showed the previous editor's `timestamp`,
+`user` and `uid` being echoed back to the server. The API ignores them, but sending the last
+editor's name back at it is noise, and they are now stripped.
+
+The highlighter is about fifteen lines — escape first, then wrap attributes, then tags, so
+the markup it inserts cannot match its own output. Colours come from the Bootstrap semantic
+palette, so they track the theme. The blocks use `pre-wrap` rather than `pre`: a
+230-character method value scrolled off the right of a phone is not reviewable, and
+losing the alignment of wrapped continuations is the cheaper loss.
+
 ### What is actually sent
 
 One changeset, tagged:

@@ -109,6 +109,22 @@
      JS from scrollHeight; this keeps it from ever showing its own scrollbar. */
   .grow-text { resize: none; overflow-y: hidden; }
 
+  /* XML preview. Colours are the Bootstrap semantic palette rather than an
+     invented one, so they track the theme and clear 4.5:1 in both. */
+  /* pre-wrap, not pre: this is for reading, and a 230-character method value
+     scrolled off the right of a phone screen is not reviewable. Indentation
+     survives; wrapped continuations are not aligned, which is the cheaper loss. */
+  .xml-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8125rem;
+             line-height: 1.45; margin: 0; tab-size: 2; }
+  .x-tag { color: var(--bs-primary-text-emphasis); font-weight: 600; }
+  .x-attr { color: var(--bs-success-text-emphasis); }
+  .x-val { color: var(--bs-danger-text-emphasis); }
+  .x-decl { color: var(--bs-secondary-color); }
+  [data-bs-theme="dark"] .x-tag { color: #6ea8fe; }
+  [data-bs-theme="dark"] .x-attr { color: #75b798; }
+  [data-bs-theme="dark"] .x-val { color: #ea868f; }
+  summary { cursor: pointer; }
+
   .scroll-y { overflow-y: auto; overscroll-behavior: contain; }
   .coords { font-variant-numeric: tabular-nums; }
 
@@ -511,6 +527,15 @@
                               placeholder="What you changed and how you know"></textarea>
                     <div class="form-text" id="uploadTagsNote"></div>
                   </div>
+
+                  <!-- Exactly what will go on the wire, rebuilt on every toggle. -->
+                  <details class="border-top" id="uploadPreviewWrap" open>
+                    <summary class="px-3 py-2 fw-medium">
+                      <i class="bi bi-filetype-xml me-1"></i>What will be sent
+                      <span class="small text-body-secondary" id="uploadPreviewNote"></span>
+                    </summary>
+                    <div class="px-3 pb-3" id="uploadPreview" aria-live="polite"></div>
+                  </details>
 
                   <div class="p-3 d-grid border-top" id="uploadCta"></div>
                   <div class="px-3 pb-3" id="uploadResult" aria-live="polite"></div>
@@ -3272,18 +3297,20 @@ out center tags 250;`;
     if (osmToken() && stagedEdits().length) openPhase('Upload');
   }
 
-  function osmFetch(path, { method = 'GET', body, contentType } = {}) {
+  // `anon` is for reads, which OSM serves without a token. The XML preview needs
+  // the live element before anyone has signed in.
+  function osmFetch(path, { method = 'GET', body, contentType, anon = false } = {}) {
     const token = osmToken()?.access_token;
-    if (!token) return Promise.reject(new Error('not signed in to OpenStreetMap'));
+    if (!token && !anon) return Promise.reject(new Error('not signed in to OpenStreetMap'));
     return fetch(`${osmServer().api}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(contentType ? { 'Content-Type': contentType } : {}),
       },
       body,
     }).then(async res => {
-      if (res.status === 401) { setOsmToken(null); renderOsmAuthState(); refreshUpload(); }
+      if (res.status === 401 && token) { setOsmToken(null); renderOsmAuthState(); refreshUpload(); }
       if (!res.ok) throw new Error(`${method} ${path} — HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
       return res;
     });
@@ -3387,6 +3414,7 @@ out center tags 250;`;
     renderUploadAccount();
     renderUploadList();
     renderUploadCta();
+    renderUploadPreview();
   }
 
   function renderUploadAccount() {
@@ -3477,14 +3505,14 @@ out center tags 250;`;
         const { object, tag } = box.dataset;
         if (!uploadOff.has(object)) uploadOff.set(object, new Set());
         box.checked ? uploadOff.get(object).delete(tag) : uploadOff.get(object).add(tag);
-        renderUploadList(); renderUploadCta();
+        renderUploadList(); renderUploadCta(); renderUploadPreview();
       });
     }
     for (const box of host.querySelectorAll('input[data-group]')) {
       box.addEventListener('change', () => {
         uploadPick = box.dataset.group;
         $('uploadComment').value = '';        // it described the previous object
-        renderUploadList(); renderUploadCta();
+        renderUploadList(); renderUploadCta(); renderUploadPreview();
       });
     }
   }
@@ -3534,9 +3562,9 @@ out center tags 250;`;
     if (el) el.innerHTML = `<p class="small text-${tone} mb-0">${html}</p>`;
   };
 
-  async function fetchElement(id) {
+  async function fetchElement(id, { anon = false } = {}) {
     const [type, num] = id.split('/');
-    const xml = await osmFetch(`/api/0.6/${type}/${num}`).then(r => r.text());
+    const xml = await osmFetch(`/api/0.6/${type}/${num}`, { anon }).then(r => r.text());
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
     const el = doc.querySelector(type);
     if (!el) throw new Error(`${id} is not on the ${osmServer().label}`);
@@ -3561,6 +3589,9 @@ out center tags 250;`;
     for (const { live, entry, keys } of items) {
       const el = doc.importNode(live.el, true);
       el.setAttribute('changeset', changesetId);
+      // These describe the previous edit, not this one. The server sets them;
+      // echoing the last editor's name back at it is just noise.
+      for (const a of ['timestamp', 'user', 'uid']) el.removeAttribute(a);
       for (const t of [...el.querySelectorAll('tag')]) el.removeChild(t);
       const merged = { ...live.tags };
       for (const k of keys) merged[k] = entry.tags[k];
@@ -3601,6 +3632,86 @@ out center tags 250;`;
     }
     doc.documentElement.appendChild(cs);
     return new XMLSerializer().serializeToString(doc);
+  }
+
+  /* ---------- the XML, before it is sent ----------
+     Every layer above this is an abstraction over two XML documents, and the
+     mapper is the one signing their name to them. So show them, exactly as they
+     will go on the wire, rebuilt on every toggle. */
+
+  /** The serializer emits one long line; this is the same tree, readable. */
+  function prettyXml(xml) {
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const out = [];
+    (function walk(node, depth) {
+      const pad = '  '.repeat(depth);
+      const attrs = [...node.attributes]
+        .map(a => ` ${a.name}="${a.value.replace(/"/g, '&quot;')}"`).join('');
+      const kids = [...node.children];
+      if (!kids.length) { out.push(`${pad}<${node.nodeName}${attrs}/>`); return; }
+      out.push(`${pad}<${node.nodeName}${attrs}>`);
+      for (const k of kids) walk(k, depth + 1);
+      out.push(`${pad}</${node.nodeName}>`);
+    })(doc.documentElement, 0);
+    return out.join('\n');
+  }
+
+  /* Escape first, then wrap: the markup this inserts uses real quotes, so the
+     attribute pass — which looks for &quot; — cannot match its own output. */
+  const highlightXml = xml => esc(xml)
+    .replace(/([\w:.-]+)=(&quot;)([\s\S]*?)(&quot;)/g,
+      '<span class="x-attr">$1</span>=$2<span class="x-val">$3</span>$4')
+    .replace(/(&lt;\/?)([\w:.-]+)/g, '$1<span class="x-tag">$2</span>');
+
+  // One live element per object, so toggling tags does not re-hit the API.
+  const previewCache = new Map();
+
+  async function renderUploadPreview() {
+    const host = $('uploadPreview'), note = $('uploadPreviewNote');
+    if (!host) return;
+    const sel = uploadSelection();
+    if (!sel.length) {
+      note.textContent = '';
+      host.innerHTML = '<p class="small text-body-secondary mb-0">Nothing selected.</p>';
+      return;
+    }
+    const target = sel[0];
+
+    if (!previewCache.has(target.id)) {
+      host.innerHTML = '<p class="small text-body-secondary mb-0">'
+        + '<span class="spinner-border spinner-border-sm me-1"></span>'
+        + `Reading <code>${esc(target.id)}</code> from the ${esc(osmServer().label)}…</p>`;
+      try {
+        previewCache.set(target.id, await fetchElement(target.id, { anon: true }));
+      } catch (e) {
+        note.textContent = '';
+        host.innerHTML = `<div class="alert alert-warning mb-0 small" role="alert">
+          <i class="bi bi-exclamation-triangle me-1"></i>Cannot show the exact XML:
+          ${esc(e.message)}. The upload will read the object again and will not send
+          anything built on a guess.</div>`;
+        return;
+      }
+      // A later toggle may have changed the target while this was in flight.
+      if (uploadSelection()[0]?.id !== target.id) return renderUploadPreview();
+    }
+
+    const items = [{ ...target, live: previewCache.get(target.id) }];
+    const comment = $('uploadComment').value.trim();
+    const cs = prettyXml(changesetXml(comment || '(add a comment above)', items));
+    // The real id is assigned by the server when the changeset opens.
+    const diff = prettyXml(osmChangeXml('«new»', items));
+    const tagCount = (diff.match(/<tag /g) || []).length;
+    note.textContent = ` · 1 modify, ${tagCount} tag${tagCount === 1 ? '' : 's'} in total`;
+
+    host.innerHTML = `
+      <p class="small text-body-secondary mb-1">
+        1 &middot; <code>PUT /api/0.6/changeset/create</code> — opens the changeset.</p>
+      <pre class="xml-pre border rounded p-2 mb-3" id="previewChangeset">${highlightXml(cs)}</pre>
+      <p class="small text-body-secondary mb-1">
+        2 &middot; <code>POST /api/0.6/changeset/&lt;id&gt;/upload</code> — the whole edit, in one diff.
+        The object is resent in full because the API replaces what it is given; tags you did not
+        touch are carried across unchanged.</p>
+      <pre class="xml-pre border rounded p-2 mb-0" id="previewDiff">${highlightXml(diff)}</pre>`;
   }
 
   async function runUpload() {
@@ -3679,6 +3790,7 @@ out center tags 250;`;
       }
       uploadOff.clear();
       uploadPick = null;                    // fall through to whatever is next
+      previewCache.clear();                 // versions have moved on
       $('uploadComment').value = '';
 
       const tags = items.reduce((t, i) => t + i.keys.length, 0);
@@ -3857,7 +3969,14 @@ out center tags 250;`;
       setTimeout(() => { $(btn).textContent = 'Copy'; }, 1500);
     });
   }
-  $('uploadComment').addEventListener('input', renderUploadCta);
+  let previewTimer = null;
+  $('uploadComment').addEventListener('input', () => {
+    renderUploadCta();
+    // Debounced: the comment lands in the changeset XML, but re-highlighting on
+    // every keystroke is wasted work.
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderUploadPreview, 250);
+  });
 
   // One line until it needs more. Reset to auto first so it shrinks on deletion.
   const growTextarea = el => {
