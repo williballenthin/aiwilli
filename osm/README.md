@@ -49,6 +49,16 @@ words are read:
 | moves you to the next step | *Next: &lt;destination&gt;* | trailing `→`, nothing leading |
 | does something here | a verb — *Save 3 changes*, *Propose again* | leading icon, no arrow |
 
+**Exactly one button is solid blue at any moment** — the next thing to press —
+or none, when the step is waiting for you to pick something. Everything else is
+outlined or plainly disabled, and a button that has done its job demotes itself:
+*Describe this photo* becomes an outlined *Describe it again* the moment there is
+a description, handing the blue to *Next: propose OSM tags*. A disabled
+`btn-primary` does not count as demoted, because Bootstrap only fades it and it
+still reads as the thing to press; those are outlined instead. The flow suite
+checks this at every stop, because it is the invariant that breaks silently as
+buttons are added.
+
 The toolbar is the product name on the left — **snap-osm**, with a map-pin mark — and
 **Settings** on the right, and nothing else: appearance, the API key, the two models and
 the OpenStreetMap account all live inside the dialog. The button carries a visible text
@@ -123,6 +133,14 @@ ever reads your position. See *Where the position comes from*, below.
 
 **3 · Nearby entities.** The 10 nearest things OpenStreetMap knows about, businesses and
 street furniture alike. See below.
+
+Beside the ordinary next step, once an entity is picked, there is a smaller
+**Straight to tags**. Steps 4 to 6 are three presses that always come in the same
+order and never take a decision from the mapper — read the schema, describe the
+photo, turn that into tags — so that button does all of it and stops at the
+proposals, where judgement is actually needed. About four seconds, against three
+presses and three waits. It stops at the first thing that goes wrong too, leaving
+the failure on screen with its own retry, and each stage's *Stop* ends the run.
 
 **4 · Tag schema.** Once one of those entities is committed to, how that *kind* of thing
 is described in OpenStreetMap. See below.
@@ -493,7 +511,12 @@ supports. It reads text, not the photo, so any model will do.
 
 ### What the mapper adds
 
-Above the run button is a note field that starts one line tall and grows as you fill it.
+Above the run button is a fold, **closed by default**, holding a note field that
+starts one line tall and grows as you fill it. Most runs never open it, and open
+it pushed the run button and the proposals below the fold on a phone. A note
+steers the model whether or not the fold is open, so when there is one the closed
+summary says *your note is included* — otherwise the proposals would change for
+reasons nothing on screen explains.
 It is for what the photograph cannot carry: *"the name is misspelled, it should be
 Pavilion"*, *"the side door is step-free"*, *"the sign is out of date, they told me they
 open at nine now"*.
@@ -877,7 +900,9 @@ pointer-fine device.
 
 ## Files
 
-`index.html` is the whole application. Bootstrap 5.3, Bootstrap Icons, Leaflet and exifr
+`index.html` is the whole application. `test/` is the verification harness — a
+local mirror of everything the page talks to, and four suites over it; see
+[TESTING.md](TESTING.md). Bootstrap 5.3, Bootstrap Icons, Leaflet and exifr
 load from CDNs with subresource-integrity hashes; there is no build step.
 `opening_hours.js` loads the same way but **on demand**, the first time a proposal carries
 an hours key, so a run that never reaches step 6 never pays for it. There is no OAuth

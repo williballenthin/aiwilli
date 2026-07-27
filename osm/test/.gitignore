@@ -1,0 +1,7 @@
+# Recorded upstream responses: regenerated on the first run, refreshed with
+# RECORD=1. Several megabytes of somebody else's JSON.
+.upstream/
+node_modules/
+mirror.*.pid
+mirror.*.log
+*.png

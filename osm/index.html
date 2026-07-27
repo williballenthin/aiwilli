@@ -448,20 +448,22 @@
               <div id="phasePropose" class="accordion-collapse collapse" data-bs-parent="#phases">
                 <div class="accordion-body p-0">
 
-                  <div class="p-3 border-bottom">
-                    <label for="proposeNote" class="form-label fw-medium">
-                      Anything else you noticed?
-                    </label>
-                    <div class="form-text mt-0 mb-2">
+                  <!-- Optional, and used on a minority of runs, so it starts folded
+                       away: open, it pushed the run button and the proposals it
+                       produces below the fold on a phone. -->
+                  <details class="p-3 border-bottom" id="proposeNoteWrap">
+                    <summary class="fw-medium" id="proposeNoteSummary">Anything else you noticed?</summary>
+                    <div class="form-text mt-2 mb-2">
                       Optional. You were standing there and the model was not, so what you
                       write here counts as first-hand knowledge, not a hint — for example
                       <em>&ldquo;the name is misspelled, it should be Pavilion&rdquo;</em>
                       or <em>&ldquo;the side door is step-free&rdquo;</em>.
                       Edit it and propose again to try a different steer.
                     </div>
+                    <label for="proposeNote" class="visually-hidden">Anything else you noticed?</label>
                     <textarea class="form-control grow-text" id="proposeNote" rows="1"
                               placeholder="Corrections, context, things the photo does not show…"></textarea>
-                  </div>
+                  </details>
 
                   <div class="p-3 border-bottom" id="proposeControls"></div>
 
@@ -2252,24 +2254,63 @@ out center tags 250;`;
   function renderNearbyCta() {
     const host = $('nearbyCta');
     const sel = photo.place, locked = photo.entity;
+
+    /* Steps 4 to 6 are three presses that always come in the same order and
+       never take a decision from the mapper — read the schema, describe the
+       photo, turn that into tags. So there is a smaller button beside the
+       ordinary next step that does all of it and stops where judgement is
+       actually needed: the proposals. The step-at-a-time route keeps the solid
+       blue, because it is still the one to press if you have not watched this
+       work before. */
+    const auto = !!photo.autoRun;
+    const fastForward = `
+      <button class="btn btn-outline-primary flex-shrink-0" type="button" id="btnCtaAuto"
+              ${auto ? 'disabled' : ''}
+              title="Read the schema, describe the photo and propose tags without stopping, then wait for your review">
+        ${auto
+          ? '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Working&hellip;'
+          : '<i class="bi bi-fast-forward-fill me-1"></i>Straight to tags'}
+      </button>`;
+
     if (locked) {
-      // Extraction is the point of committing; the schema is reference material
-      // most runs never need to open, so it goes second and stays outlined.
+      // The schema is reference material most runs never open, so it goes last
+      // and stays outlined.
       host.innerHTML = `
-        <button class="btn btn-primary" type="button" id="btnCtaDescribe">
-          Next: describe the photo<i class="bi bi-arrow-right ms-1"></i>
-        </button>
+        <div class="d-flex gap-2 min-w-0">
+          <button class="btn btn-primary flex-grow-1 min-w-0" type="button" id="btnCtaDescribe" ${auto ? 'disabled' : ''}>
+            Next: describe<i class="bi bi-arrow-right ms-1"></i>
+          </button>
+          ${fastForward}
+        </div>
         <button class="btn btn-sm btn-outline-secondary" type="button" id="btnCtaSchema">
           <i class="bi bi-list-columns-reverse me-1"></i>Inspect the tag schema
         </button>`;
       $('btnCtaDescribe').addEventListener('click', () => openPhase('Vision'));
+      $('btnCtaAuto').addEventListener('click', startAuto);
       $('btnCtaSchema').addEventListener('click', () => openPhase('Schema'));
     } else if (sel) {
-      host.innerHTML = `<button class="btn btn-primary" type="button" id="btnCtaUse">
-        <i class="bi bi-check2-circle me-1"></i>Use ${esc(sel.name || sel.category)}</button>`;
+      // The moment the choice is made is the moment to offer both routes, and
+      // it is the last moment this step is on screen: committing collapses it
+      // and opens step 5.
+      host.innerHTML = `
+        <div class="d-flex gap-2 min-w-0">
+          <!-- min-w-0: a flex item will not shrink below its content's width
+               without it, so text-truncate alone let this row run 46 px off the
+               side of a phone. -->
+          <button class="btn btn-primary flex-grow-1 min-w-0 text-truncate" type="button" id="btnCtaUse">
+            <i class="bi bi-check2-circle me-1"></i>Use ${esc(sel.name || sel.category)}
+          </button>
+          ${fastForward}
+        </div>`;
       $('btnCtaUse').addEventListener('click', () => lockEntity(sel));
+      $('btnCtaAuto').addEventListener('click', async () => {
+        await lockEntity(sel);
+        startAuto();
+      });
     } else {
-      host.innerHTML = '<button class="btn btn-primary" type="button" disabled>'
+      // Not a disabled btn-primary: Bootstrap only fades it, so it still reads
+      // as the blue thing to press when there is nothing to press it for.
+      host.innerHTML = '<button class="btn btn-outline-secondary" type="button" disabled>'
         + 'Pick something from the list</button>';
     }
   }
@@ -2502,6 +2543,7 @@ out center tags 250;`;
   }
 
   function unlockEntity() {
+    photo.autoRun = false;
     photo.entity = null;
     photo.schema = null;
     photo.schemaPending = false;
@@ -2513,8 +2555,7 @@ out center tags 250;`;
     setPhase('Propose', { state: 'todo', summary: '', enabled: false });
     photo.facts = null; photo.examples = null; photo.surveyOn = undefined;
     proposeSaved = false;
-    $('proposeNote').value = '';       // it described the object just released
-    $('proposeNote').style.height = 'auto';
+    resetNote();   // it described the object just released
     renderNearbyCta();     // ...and goes back to offering the commit when released
     setPhase('Nearby', { state: 'done', summary: nearbySummary(nearbyMarkers.size) });
     collapse($('phaseSchema')).hide();
@@ -2558,7 +2599,10 @@ out center tags 250;`;
         </div>`;
       $('btnRetrySchema')?.addEventListener('click', () => loadSchema(f));
       // The schema only supplies subjects to look for; a description is still
-      // worth having without it, so step 5 stays usable.
+      // worth having without it, so step 5 stays usable — but an automatic run
+      // stops here, because it was set going on the promise that nothing would
+      // need looking at until the proposals.
+      stopAuto();
       photo.schemaPending = false;
       setPhase('Vision', { state: 'todo', summary: '', enabled: true });
       prepareVision();
@@ -2839,13 +2883,19 @@ out center tags 250;`;
       return;
     }
 
+    /* Solid blue is reserved for the one thing to press next, so it belongs to
+       this button only until it has been pressed. Once there is a description,
+       the way on is step 6 and this becomes the outlined "do it again". */
+    const ran = !!photo?.description;
     host.innerHTML = ready ? `
       <div class="small text-body-secondary text-truncate mb-2">
         <i class="bi bi-cpu me-1"></i>${esc(model ? model.name : settings.model)}
       </div>
       <div class="d-grid gap-2">
-        <button class="btn ${running ? 'btn-outline-danger' : 'btn-outline-primary'}" type="button" id="btnRunVision">
-          <i class="bi bi-${running ? 'stop-circle' : 'stars'} me-1"></i>${running ? 'Stop' : 'Describe this photo'}
+        <button class="btn ${running ? 'btn-outline-danger' : ran ? 'btn-outline-primary' : 'btn-primary'}"
+                type="button" id="btnRunVision">
+          <i class="bi bi-${running ? 'stop-circle' : ran ? 'arrow-clockwise' : 'stars'} me-1"></i>${
+            running ? 'Stop' : ran ? 'Describe it again' : 'Describe this photo'}
         </button>
       </div>
       <p class="small text-body-secondary mt-2 mb-0" id="visionStatus"
@@ -2862,6 +2912,42 @@ out center tags 250;`;
     $('btnRunVision')?.addEventListener('click', () => running ? visionAbort.abort() : runVision());
   }
 
+  /* ---------- running steps 4 to 6 without being asked three times ----------
+     Each stage hands to the next as it lands, rather than one function awaiting
+     three: the stages already run themselves off events (the schema finishes
+     into prepareVision, the vision call finishes into preparePropose), and
+     draining that through a single await would have meant two ways to reach
+     each stage and two places for a failure to be handled.
+
+     It stops at the proposals — the first point where the mapper has a decision
+     to make — and it stops at the first thing that goes wrong, leaving the
+     failure on screen with its own retry, exactly as if the step had been
+     pressed by hand. Each stage's own Stop button ends the run too. */
+
+  function startAuto() {
+    if (!photo?.entity) return;
+    photo.autoRun = true;
+    renderNearbyCta();
+    openPhase('Vision');
+    advanceAuto();
+  }
+
+  function stopAuto() {
+    if (!photo?.autoRun) return;
+    photo.autoRun = false;
+    renderNearbyCta();
+  }
+
+  /** Start whatever stage is next, if the run is still going. */
+  function advanceAuto() {
+    if (!photo?.autoRun) return;
+    // Still fetching the schema: prepareVision will call back here when it lands.
+    if (photo.schemaPending) return;
+    if (!photo.description) { if (!visionAbort) runVision(); return; }
+    if (!Array.isArray(photo.facts) && !proposeAbort) runPropose();
+  }
+
+
   function prepareVision() {
     $('visPromptText').textContent = buildPrompt();
     $('visImageNote').textContent =
@@ -2871,6 +2957,7 @@ out center tags 250;`;
     $('visionCta').replaceChildren();
     renderVisionControls();
     bootstrap.Tab.getOrCreateInstance($('visPromptTab')).show();
+    advanceAuto();          // the schema has landed; the description is next
   }
 
   const visStatus = html => { const el = $('visionStatus'); if (el) el.innerHTML = html; };
@@ -3003,7 +3090,7 @@ out center tags 250;`;
 
       photo.description = out.trim();
       setPhase('Propose', { state: 'todo', summary: '', enabled: true });
-      preparePropose();
+      const prep = preparePropose();
 
       const words = out.trim() ? out.trim().split(/\s+/).length : 0;
       const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
@@ -3013,7 +3100,14 @@ out center tags 250;`;
       $('visionCta').innerHTML = '<button class="btn btn-primary" type="button" id="btnCtaPropose">'
         + 'Next: propose OSM tags<i class="bi bi-arrow-right ms-1"></i></button>';
       $('btnCtaPropose').addEventListener('click', () => openPhase('Propose'));
+      if (photo.autoRun) {
+        // preparePropose is fetching the idiomatic examples the prompt needs;
+        // the tagging call cannot start before it returns.
+        openPhase('Propose');
+        prep.then(advanceAuto);
+      }
     } catch (e) {
+      stopAuto();
       if (e.name === 'AbortError') {
         finish('todo', 'Stopped', '<i class="bi bi-slash-circle me-1"></i>Stopped.');
         return;
@@ -3052,6 +3146,24 @@ out center tags 250;`;
   };
 
   const proposeNote = () => ($('proposeNote')?.value || '').trim();
+
+  /** Say on the closed fold whether there is anything inside it. */
+  function renderNoteSummary() {
+    const n = proposeNote().length;
+    $('proposeNoteSummary').innerHTML = n
+      ? 'Anything else you noticed? <span class="badge border fw-normal text-body-secondary'
+        + ' ms-1">your note is included</span>'
+      : 'Anything else you noticed?';
+  }
+
+  /** Empty the mapper's note and fold it away again. */
+  function resetNote() {
+    $('proposeNote').value = '';
+    $('proposeNote').style.height = 'auto';
+    $('proposeNoteWrap').open = false;
+    renderNoteSummary();
+  }
+
 
   function buildProposePrompt() {
     const f = photo.entity, s = photo.schema, ex = photo.examples || [];
@@ -3205,7 +3317,7 @@ out center tags 250;`;
           ? `<span class="ms-1">&middot; ${esc(settings.tagEffort)} reasoning effort</span>` : ''}
       </div>
       <div class="d-grid">
-        <button class="btn ${running ? 'btn-outline-danger' : 'btn-outline-primary'}"
+        <button class="btn ${running ? 'btn-outline-danger' : ran ? 'btn-outline-primary' : 'btn-primary'}"
                 type="button" id="btnRunPropose">
           <i class="bi bi-${running ? 'stop-circle' : ran ? 'arrow-clockwise' : 'magic'} me-1"></i>${
             running ? 'Stop' : ran ? 'Propose again' : 'Propose tags'}
@@ -3350,9 +3462,12 @@ out center tags 250;`;
 
       const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
       const cost = usage?.cost != null ? ` · $${Number(usage.cost).toFixed(4)}` : '';
+      // The proposals are where a human has to look, which is where this stops.
+      stopAuto();
       finish('done', `${photo.facts.length} proposed`,
         `<i class="bi bi-check-circle text-success me-1"></i>${photo.facts.length} facts${tokens}${cost}`);
     } catch (e) {
+      stopAuto();
       if (e.name === 'AbortError') { finish('todo', 'Stopped', '<i class="bi bi-slash-circle me-1"></i>Stopped.'); return; }
       finish('warn', 'Failed',
         `<span class="text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}</span>`);
@@ -3960,7 +4075,9 @@ out center tags 250;`;
   function renderProposeCta() {
     const host = $('proposeCta');
     const n = enabledFacts().length + (surveyStaged() ? 1 : 0);
-    const save = `<button class="btn ${proposeSaved ? 'btn-outline-secondary' : 'btn-primary'}"
+    // Nothing to save yet, or already saved: either way this is not the next
+    // thing to press, and a disabled `btn-primary` is still unmistakably blue.
+    const save = `<button class="btn ${n && !proposeSaved ? 'btn-primary' : 'btn-outline-secondary'}"
         type="button" id="btnSaveChangeset" ${n ? '' : 'disabled'}>
       <i class="bi bi-save me-1"></i>${!n ? 'Nothing selected'
         : proposeSaved ? `Save ${n} change${n === 1 ? '' : 's'} again`
@@ -4803,8 +4920,7 @@ out center tags 250;`;
     $('proposeCta').replaceChildren();
     proposeSaved = false;
     // The note is about one object seen on one visit; it does not carry over.
-    $('proposeNote').value = '';
-    $('proposeNote').style.height = 'auto';
+    resetNote();
     nearbyStatus('');
     setPhase('Photo', { state: 'todo', summary: '', enabled: true });
     setPhase('Gps', { state: 'todo', summary: '', enabled: false });
@@ -4937,6 +5053,12 @@ out center tags 250;`;
     el.addEventListener('input', () => growTextarea(el));
     growTextarea(el);                     // a value set in code never fires input
   }
+  // A note steers the model whether or not the fold it lives in is open, so a
+  // folded-away note has to announce itself — otherwise the proposals change
+  // for reasons nothing on screen explains.
+  $('proposeNote').addEventListener('input', renderNoteSummary);
+  // scrollHeight is 0 inside a closed <details> too, not just a closed phase.
+  $('proposeNoteWrap').addEventListener('toggle', () => growTextarea($('proposeNote')));
   // scrollHeight is 0 while an ancestor is display:none, so a box sized before
   // its phase opened comes out one line tall with its content clipped.
   for (const [phase, id] of [['phasePropose', 'proposeNote'], ['phaseUpload', 'uploadComment']]) {

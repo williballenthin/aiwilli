@@ -1,0 +1,8 @@
+{
+  "name": "snap-osm-test",
+  "private": true,
+  "type": "module",
+  "description": "Verification harness for osm/index.html. See TESTING.md.",
+  "scripts": { "test": "./run.sh" },
+  "dependencies": { "playwright": "^1.62.0" }
+}
