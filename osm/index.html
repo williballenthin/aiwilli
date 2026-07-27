@@ -524,9 +524,15 @@
 
                   <div class="p-3 border-top" id="uploadCommentWrap">
                     <label for="uploadComment" class="form-label fw-medium">Changeset comment</label>
-                    <textarea class="form-control" id="uploadComment" rows="2"
+                    <!-- maxlength is in UTF-16 units and the limit is in codepoints, so
+                         it is a backstop that can only ever be stricter than the server;
+                         the counter below does the counting properly. -->
+                    <textarea class="form-control" id="uploadComment" rows="2" maxlength="255"
                               placeholder="What you changed and how you know"></textarea>
-                    <div class="form-text" id="uploadTagsNote"></div>
+                    <div class="form-text d-flex gap-2">
+                      <span id="uploadTagsNote" class="flex-grow-1"></span>
+                      <span id="uploadCommentCount" class="flex-shrink-0 text-nowrap"></span>
+                    </div>
                   </div>
 
                   <!-- Exactly what will go on the wire, rebuilt on every toggle. -->
@@ -539,6 +545,7 @@
                   </details>
 
                   <div class="p-3 d-grid gap-2 border-top" id="uploadCta"></div>
+                  <div class="px-3 pt-3 d-none" id="uploadDangling" aria-live="polite"></div>
                   <div class="px-3 pb-3" id="uploadResult" aria-live="polite"></div>
 
                 </div>
@@ -3614,6 +3621,16 @@ out center tags 250;`;
                               ...(photo.schema?.id?.optional || [])]
     .find(f => f.keys.includes(key) || f.keys.some(k => k.endsWith(':') && key.startsWith(k)));
 
+  /* A tag key or value is at most 255 UTF-8 codepoints — the API v0.6 page is
+     explicit that the limit covers "object, changeset and user preference tags,
+     and relation member roles". Codepoints, not bytes and not UTF-16 units, so
+     it is counted by spreading the string rather than reading .length: an emoji
+     is one codepoint and two UTF-16 units, and a value of 200 emoji would
+     otherwise be rejected here and accepted by the server. */
+  const TAG_MAX = 255;
+  const codepoints = s => [...String(s ?? '')].length;
+  const tooLong = s => codepoints(s) > TAG_MAX;
+
   function reviewFact(rules, f) {
     const key = f.key;
 
@@ -3623,6 +3640,21 @@ out center tags 250;`;
     if (rules.discarded && key in rules.discarded) {
       return { level: 'block', label: 'discarded tag',
                why: 'OpenStreetMap strips this key on edit; it carries no meaning.' };
+    }
+
+    /* Length, after the policy rules rather than before them: a key that is
+       blocked anyway should say why it is blocked, not merely that it is long.
+       This is here for the value that would otherwise be fine.
+
+       Truncating is not on. Half a website address or half a name is worse than
+       no edit, and nothing in the value says where it was cut. */
+    if (tooLong(f.value) || tooLong(key)) {
+      const what = tooLong(key) ? 'key' : 'value';
+      const n = codepoints(tooLong(key) ? key : f.value);
+      return { level: 'block', label: 'too long',
+               why: `OpenStreetMap allows ${TAG_MAX} characters in a tag ${what} and this one `
+                  + `is ${n}. It is not shortened for you, because a value cut in half is `
+                  + 'worse than no edit at all.' };
     }
 
     const dep = deprecationFor(rules.deprecated || [], key, f.value, photo.entity?.tags || {});
@@ -4372,6 +4404,7 @@ out center tags 250;`;
     renderUploadList();
     renderUploadCta();
     renderUploadPreview();
+    renderDangling();
   }
 
   function renderUploadAccount() {
@@ -4527,16 +4560,24 @@ out center tags 250;`;
         lastUpload = null;                    // picking something new moves us on
         $('uploadComment').value = '';        // it described the previous object
         growTextarea($('uploadComment'));
+        renderCommentCount();
         renderUploadList(); renderUploadCta(); renderUploadPreview();
       });
     }
   }
 
+  /* A tag value is capped at 255, and an OSM name can be 255 on its own, so the
+     name is the part that gives way — the rest of the sentence is what makes
+     the comment useful to a reviewer. This is the one place the app shortens
+     anything, and it does so where the loss is visible and least costly. */
   const defaultComment = sel => {
     if (!sel.length) return '';
     const n = sel[0].keys.length;
-    return `Surveyed ${sel[0].entry.name || sel[0].id}: ${n} tag${n === 1 ? '' : 's'} `
-      + 'from my own photographs, checked on site';
+    const tail = `: ${n} tag${n === 1 ? '' : 's'} from my own photographs, checked on site`;
+    const room = TAG_MAX - codepoints(`Surveyed ${tail}`);
+    let name = sel[0].entry.name || sel[0].id;
+    if (codepoints(name) > room) name = [...name].slice(0, room - 1).join('') + '…';
+    return `Surveyed ${name}${tail}`;
   };
 
   /* Set by a successful upload and cleared the moment anything else is picked.
@@ -4591,6 +4632,7 @@ out center tags 250;`;
     if (!$('uploadComment').value.trim() && sel.length) {
       $('uploadComment').value = defaultComment(sel);
       growTextarea($('uploadComment'));
+      renderCommentCount();
     }
     $('uploadTagsNote').innerHTML =
       'The changeset also records <code>created_by</code>, <code>source=survey</code> and who '
@@ -4599,7 +4641,10 @@ out center tags 250;`;
 
     const name = sel.length ? (sel[0].entry.name || sel[0].id) : '';
     host.innerHTML = `
-      <button class="btn btn-primary" type="button" id="btnUpload" ${ready ? '' : 'disabled'}>
+      <!-- text-truncate, because the name is the object's and OSM allows 255
+           characters in one. Without it a long unbroken name stretched this
+           button to 3000 px and took the whole page sideways with it. -->
+      <button class="btn btn-primary text-truncate" type="button" id="btnUpload" ${ready ? '' : 'disabled'}>
         <i class="bi bi-cloud-upload me-1"></i>${uploadBusy ? 'Uploading…'
           : sel.length ? `Upload ${tags} tag${tags === 1 ? '' : 's'} on ${esc(name)}`
           : 'Nothing selected'}
@@ -4690,6 +4735,17 @@ out center tags 250;`;
       ...(settings.osmNameModels && models.length
         ? { [`${APP_NAME}:models`]: models.join(';') } : {}),
     };
+    /* The 255-codepoint limit covers changeset tags as well, and the provenance
+       string is 231 of them — close enough that a sentence added to it would
+       fail as a 400 from the server with nothing on screen to explain why. Fail
+       here instead, naming the tag, before a changeset has been opened. */
+    for (const [k, v] of Object.entries(tags)) {
+      if (tooLong(v)) {
+        throw new Error(`The changeset tag ${k} is ${codepoints(v)} characters and `
+          + `OpenStreetMap allows ${TAG_MAX}.`);
+      }
+    }
+
     const doc = document.implementation.createDocument('', 'osm');
     const cs = doc.createElement('changeset');
     for (const [k, v] of Object.entries(tags)) {
@@ -4881,14 +4937,114 @@ out center tags 250;`;
         + `${tags === 1 ? '' : 's'} on ${items.length} object${items.length === 1 ? '' : 's'} as `
         + `changeset ${esc(changesetId)}. They have been removed from this browser.`);
     } catch (e) {
+      /* A changeset was opened and the edit never went in. It cannot be
+         deleted — the API is explicit that "it is not possible to delete
+         changesets at the moment, even if they don't contain any changes" — so
+         the only tidying available is to close it, and the moment to do that is
+         now, without being asked. If the close fails too the id is remembered
+         and offered as a button; see renderDangling. */
+      const tidied = changesetId ? await closeChangeset(changesetId) : null;
+      renderDangling();
       done('warn', 'Failed',
         `<i class="bi bi-exclamation-triangle me-1"></i>${esc(e.message)}`
         + (changesetId
-          ? ` The changeset <a href="${esc(osmServer().web)}/changeset/${esc(changesetId)}" target="_blank"
-              rel="noopener">${esc(changesetId)}</a> was opened; nothing was removed from this browser.`
-          : ' Nothing was uploaded, and nothing has been removed from this browser.'),
+          ? ` Changeset <a href="${esc(osmServer().web)}/changeset/${esc(changesetId)}" target="_blank"
+              rel="noopener">${esc(changesetId)}</a> had already been opened, and was `
+            + (tidied ? 'closed again, empty.' : 'left open — see above.')
+          : ' Nothing was uploaded.')
+        + ' Nothing has been removed from this browser.',
         'warning-emphasis');
     }
+  }
+
+  /* ---------- a changeset left open by a failed upload ----------
+     There is no way to delete one. OpenStreetMap keeps every changeset ever
+     opened, empty or not, and offers only `close`. An empty open one is
+     harmless — the server closes it after an hour idle, or twenty-four hours,
+     whichever comes first — but until then it sits in the mapper's history
+     looking like an abandoned edit, and it is theirs to tidy up if they want to.
+
+     Remembered in localStorage rather than in a variable, because the failure
+     that leaves one behind is exactly the sort of moment somebody reloads. */
+
+  const DANGLING_PREFIX = APP_PREFIX + 'dangling:1:';
+  const danglingKey = id => `${settings.osmServer}:${id}`;
+
+  /** Close a changeset. True if it is now closed, false if it would not. */
+  async function closeChangeset(id) {
+    try {
+      await osmFetch(`/api/0.6/changeset/${id}/close`, { method: 'PUT' });
+      dropCache(DANGLING_PREFIX, danglingKey(id));
+      return true;
+    } catch {
+      writeCache(DANGLING_PREFIX, danglingKey(id), { id, server: settings.osmServer });
+      return false;
+    }
+  }
+
+  /** False when the server says it is closed, or will not say. */
+  async function changesetIsOpen(id) {
+    try {
+      const xml = await osmFetch(`/api/0.6/changeset/${id}`, { method: 'GET' }).then(r => r.text());
+      return /open="true"/.test(xml);
+    } catch { return false; }
+  }
+
+  const danglingHere = () => Object.keys(localStorage)
+    .filter(k => k.startsWith(DANGLING_PREFIX + settings.osmServer + ':'))
+    .map(k => readCache(DANGLING_PREFIX, k.slice(DANGLING_PREFIX.length), Infinity))
+    .filter(Boolean);
+
+  function renderDangling() {
+    const host = $('uploadDangling');
+    if (!host) return;
+    const open = osmToken() ? danglingHere() : [];
+    host.classList.toggle('d-none', !open.length);
+    if (!open.length) { host.replaceChildren(); return; }
+
+    host.innerHTML = open.map(d => `
+      <div class="alert alert-warning mb-0" role="alert">
+        <i class="bi bi-exclamation-triangle me-1"></i>
+        Changeset <a href="${esc(osmServer().web)}/changeset/${esc(d.id)}" target="_blank"
+           rel="noopener">${esc(d.id)}</a> was opened for an upload that then failed, and is
+        still open. Nothing went into it.
+        <div class="small mt-1">OpenStreetMap cannot delete a changeset, only close it. Left
+          alone it closes itself within the hour.</div>
+        <div class="d-grid mt-2">
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-close="${esc(d.id)}">
+            <i class="bi bi-x-circle me-1"></i>Close changeset ${esc(d.id)}
+          </button>
+        </div>
+      </div>`).join('');
+
+    for (const btn of host.querySelectorAll('button[data-close]')) {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.close;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Closing&hellip;';
+        // Already closed — by the server's own timeout, or in another tab —
+        // counts as success: the state the mapper wanted is the state they have.
+        const ok = await closeChangeset(id) || !(await changesetIsOpen(id));
+        if (ok) dropCache(DANGLING_PREFIX, danglingKey(id));
+        renderDangling();
+        flashAlert(ok
+          ? `Changeset ${id} is closed.`
+          : `Could not close changeset ${id}. OpenStreetMap will close it itself within the hour.`,
+          ok ? 'secondary' : 'warning', ok ? 'check2' : 'exclamation-triangle');
+      });
+    }
+  }
+
+  /* Anything remembered from a previous sitting may have closed itself since,
+     so it is checked once rather than nagging about a changeset the server has
+     already tidied up. */
+  async function reapDangling() {
+    if (!osmToken() || !danglingHere().length) return;
+    let changed = false;
+    for (const d of danglingHere()) {
+      if (!(await changesetIsOpen(d.id))) { dropCache(DANGLING_PREFIX, danglingKey(d.id)); changed = true; }
+    }
+    if (changed) renderDangling();
   }
 
   /* ---------- map-wide actions ---------- */
@@ -5028,8 +5184,21 @@ out center tags 250;`;
       setTimeout(() => { $(btn).innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy'; }, 1500);
     });
   }
+  /* The comment is a changeset tag like any other, so it is bounded at 255 too.
+     Counted only as it gets close: a character counter sitting under every text
+     box all the time is noise, and this one is only interesting near the end. */
+  function renderCommentCount() {
+    const n = codepoints($('uploadComment').value);
+    const left = TAG_MAX - n;
+    const el = $('uploadCommentCount');
+    el.className = `flex-shrink-0 text-nowrap ${left <= 0 ? 'text-danger-emphasis'
+      : left <= 40 ? 'text-warning-emphasis' : 'text-body-secondary'}`;
+    el.textContent = left <= 60 ? `${left} left` : '';
+  }
+
   let previewTimer = null;
   $('uploadComment').addEventListener('input', () => {
+    renderCommentCount();
     renderUploadCta();
     // Debounced: the comment lands in the changeset XML, but re-highlighting on
     // every keystroke is wasted work.
@@ -5080,6 +5249,7 @@ out center tags 250;`;
   // it is live on a cold page with no photo, and the OAuth redirect lands here.
   refreshUpload();
   completeOsmAuth();
+  reapDangling();
 
   $('dropzoneHint').textContent = coarse
     ? 'Tap to choose one from your library, or take a new one'

@@ -67,6 +67,19 @@ await driveToProposals(page);
     !!badge(access, /never used in OSM/), access?.badges.map(b => b.text).join(' | '));
   check('and the deprecation rule offers the spelling in use',
     /access=customers/.test(access?.text || ''));
+  /* Length. The limit is 255 UTF-8 codepoints and it is not negotiable, but the
+     interesting half is that it is codepoints: 200 emoji are 400 UTF-16 units,
+     so counting with .length would reject a legal value. */
+  const long = row(rows, 'operator:short');
+  check('a value over 255 characters cannot be staged',
+    long && !long.selectable && /allows 255 characters in a tag value and this one is 300/
+      .test(long.text), long?.text.slice(0, 90));
+  check('and it says why it was not simply shortened',
+    /worse than no edit at all/.test(long?.text || ''));
+  const emoji = row(rows, 'inscription');
+  check('200 emoji are 200 characters, not 400 — the count is codepoints',
+    emoji && emoji.selectable, emoji?.text.slice(0, 60));
+
   const site = row(rows, 'website');
   check('a value absent from the evidence is flagged but still the mapper\'s call',
     site && site.selectable && !site.checked && /not in the evidence/.test(site.text),

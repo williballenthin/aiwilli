@@ -576,6 +576,34 @@ else happens:
 `deprecated.min.json` and `discarded.min.json` are 6.7 kB together over the wire and are
 fetched once per session.
 
+### How long a tag may be
+
+255 UTF-8 codepoints, for both the key and the value. The
+[API page](https://wiki.openstreetmap.org/wiki/API_v0.6) is the precise
+statement — the limit covers *"object, changeset and user preference tags, and
+relation member roles"* — and codepoints is the operative word: 200 emoji are
+200 characters and 400 UTF-16 units, so a value counted with `.length` would be
+refused here and accepted by the server.
+
+Nothing is truncated. Half a website address or half a name is worse than no
+edit, and nothing in the value says where it was cut, so an over-long proposal
+is blocked outright and says so. The check sits *after* the policy rules, not
+before: a key that is blocked anyway should say why it is blocked rather than
+merely that it is long.
+
+Three other places write tags, and each is bounded:
+
+- the **changeset comment**, which is a tag like any other. `maxlength` is the
+  backstop and a counter appears in the last sixty characters; a comment that
+  somehow gets past both stops the upload *before* a changeset is opened, naming
+  the tag and both numbers, rather than arriving as a 400.
+- the **generated comment**, built from the object's name — and an OSM name can
+  be 255 on its own. This is the one place the app shortens anything: the name
+  gives way, because the rest of the sentence is what makes the comment useful.
+- the **provenance string** the app puts on every changeset, which is 231
+  characters. Close enough that a sentence added to it would fail as a 400 with
+  nothing on screen to explain why, so it is asserted at build time.
+
 ### The visit is itself a contribution
 
 Above the save button is a `check_date` row, ticked by default, dated **from the EXIF
@@ -826,6 +854,23 @@ your place, so the changeset is offered instead:
   action and the note says which changeset is away and how much is left;
 - with the queue empty, the link becomes the step's **primary** action, beside an outlined
   *Start again with another photo* that resets the page and scrolls back to the top.
+
+### A changeset left open by a failed upload
+
+Uploading is three calls — open a changeset, post the diff, close it — so a
+failure at the second leaves an empty changeset open on the mapper's account.
+
+**It cannot be deleted.** The API is explicit: *"it is not possible to delete
+changesets at the moment, even if they don't contain any changes."* The only
+operation is `PUT /api/0.6/changeset/#id/close`, and left alone the server
+closes it after an hour idle, or twenty-four hours, whichever comes first.
+
+So the page closes it itself, the moment the upload fails, without being asked —
+and says which changeset and that it went in empty. If that close *also* fails,
+the id is remembered in `localStorage` (a failed upload is exactly when somebody
+reloads) and step 7 grows a warning offering to close it, explaining why it
+cannot simply be deleted. Anything remembered from a previous sitting is checked
+once on load and forgotten silently if the server has already closed it.
 
 ### Throwing edits away
 

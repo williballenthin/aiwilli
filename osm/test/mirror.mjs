@@ -119,6 +119,7 @@ const mode = {
   osmFail: process.env.OSM_FAIL || '',
   osmDeny: !!process.env.OSM_DENY,
   osmMapFail: !!process.env.OSM_MAP_FAIL,
+  osmCloseFail: !!process.env.OSM_CLOSE_FAIL,
 };
 const DEFAULT_MODE = { ...mode };
 
@@ -265,6 +266,15 @@ http.createServer(async (req, res) => {
             evidence: 'the board carries the North Yorkshire Council logo', confidence: 'medium' },
           { key: 'wheelchair', value: 'probably',
             evidence: 'a ramp at the door', confidence: 'low' },
+          // A model that has run away with itself, on a key that is otherwise
+          // perfectly allowed — so the only thing wrong is the length.
+          { key: 'operator:short', value: 'A'.repeat(300),
+            evidence: 'the board', confidence: 'low' },
+          // Emoji, to prove the count is codepoints and not UTF-16 units: 200
+          // of these are 400 units and would fail a naive .length test while
+          // being perfectly legal.
+          { key: 'inscription', value: '🌳'.repeat(200),
+            evidence: 'carved into the bench', confidence: 'low' },
         ] : [];
         // VOCAB makes the model reach outside the reference editor's value list
         // in three different ways, so the provenance badges have all three to
@@ -496,10 +506,23 @@ http.createServer(async (req, res) => {
 
       m = rest.match(/^\/api\/0\.6\/changeset\/(\d+)\/close$/);
       if (m && req.method === 'PUT') {
-        console.log(`osm/changeset ${m[1]} close`);
+        console.log(`osm/changeset ${m[1]} close${mode.osmCloseFail ? ' (refused)' : ''}`);
+        // Refusing a close is how the dangling-changeset path gets exercised:
+        // the page can only remember one it could not tidy up.
+        if (mode.osmCloseFail) return xml(500, 'close exploded');
         const cs = osmState.changesets.find(c => c.id === Number(m[1]));
         if (cs) cs.closed = true;
         return res.writeHead(200).end('');
+      }
+
+      // Reading a changeset back, which is how the page tells whether one it
+      // remembers is still open or has since closed itself.
+      m = rest.match(/^\/api\/0\.6\/changeset\/(\d+)$/);
+      if (m && req.method === 'GET') {
+        const cs = osmState.changesets.find(c => c.id === Number(m[1]));
+        if (!cs) return xml(404, 'not found');
+        return xml(200, `<osm version="0.6"><changeset id="${cs.id}" user="test_mapper" uid="42" `
+          + `open="${cs.closed ? 'false' : 'true'}"/></osm>`);
       }
 
       // A suite reads back what the page actually sent.

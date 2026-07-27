@@ -9,7 +9,7 @@
 // a rejected upload each leave the store in a different state, and getting any
 // of them wrong loses a mapper's unsent work.
 import { devices } from 'playwright';
-import { launch, reporter, setMode, TARGET, settled, goReady } from './lib.mjs';
+import { launch, reporter, setMode, TARGET, settled, goReady, overflows } from './lib.mjs';
 
 /* Hard stop. This suite exercises changeset writes, and the only acceptable
    target is the local mirror, whose stand-in OpenStreetMap lives in memory.
@@ -307,6 +307,133 @@ for (const [when, expect] of [['create', /exploded|HTTP 500/], ['upload', /Versi
   check(`and nothing is removed from the browser when ${when} fails`,
     after.left === 2, `${after.left} left`);
   check(`no uncaught JS errors when ${when} fails`, errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  await ctx.close();
+}
+
+// ---- a changeset left open by a failed upload ---------------------------------
+// The API cannot delete changesets — "it is not possible to delete changesets at
+// the moment, even if they don't contain any changes" — so the only tidying is
+// to close them, and the page does that itself the moment an upload fails.
+{
+  await setMode({ osmFail: 'upload' });
+  const { ctx, page } = await fresh();
+  await openUpload(page);
+  await page.click('#btnUpload');
+  await page.waitForFunction(() => /mismatch|409/i.test(document.getElementById('uploadResult').textContent),
+    null, { timeout: 60000 });
+  await page.waitForTimeout(400);
+  const st = await mirrorState();
+  check('a changeset opened for a failed upload is closed again, unasked',
+    st.changesets.length === 1 && st.changesets[0].closed, JSON.stringify(st.changesets[0]?.closed));
+  check('and the result says so', /closed again, empty/.test(
+    await page.textContent('#uploadResult')),
+    (await page.textContent('#uploadResult')).replace(/\s+/g, ' ').slice(0, 120));
+  check('with nothing left dangling',
+    await page.evaluate(() =>
+      Object.keys(localStorage).filter(k => k.startsWith('photomap:dangling:')).length) === 0);
+  await ctx.close();
+}
+
+{
+  // Now the case that needs a button: the tidy-up close fails too.
+  await setMode({ osmFail: 'upload', osmCloseFail: true });
+  const { ctx, page, errors } = await fresh();
+  await openUpload(page);
+  await page.click('#btnUpload');
+  await page.waitForSelector('#uploadDangling .alert', { timeout: 60000 });
+  const left = await page.evaluate(() => ({
+    remembered: Object.keys(localStorage).filter(k => k.startsWith('photomap:dangling:')),
+    text: document.getElementById('uploadDangling').textContent.replace(/\s+/g, ' ').trim(),
+  }));
+  check('a changeset that would not close is remembered', left.remembered.length === 1,
+    left.remembered.join(','));
+  check('and offered with an explanation of why it cannot just be deleted',
+    /cannot delete a changeset, only close it/.test(left.text)
+    && /closes itself within the hour/.test(left.text), left.text.slice(0, 90));
+
+  // It has to survive a reload — a failed upload is exactly when people reload.
+  await goReady(page, true);
+  await openUpload(page);
+  check('and it survives a reload', await page.locator('#uploadDangling .alert').count() === 1);
+
+  // reset:false — switching mode clears the mirror's in-memory OpenStreetMap by
+  // default, which would wipe the very changeset this is about to check.
+  await setMode({ osmCloseFail: false, reset: false });
+  await page.click('#uploadDangling button[data-close]');
+  await page.waitForFunction(() =>
+    document.getElementById('uploadDangling').classList.contains('d-none'), null, { timeout: 20000 });
+  const after = await page.evaluate(() => ({
+    remembered: Object.keys(localStorage).filter(k => k.startsWith('photomap:dangling:')).length,
+    alert: document.getElementById('alertHost').textContent.replace(/\s+/g, ' ').trim(),
+  }));
+  const st = await mirrorState();
+  check('pressing the button closes it', st.changesets[0]?.closed);
+  check('the warning goes away and it is forgotten', after.remembered === 0);
+  check('and the mapper is told', /is closed/.test(after.alert), after.alert.slice(0, 60));
+  check('no uncaught JS errors tidying up', errors.length === 0, JSON.stringify(errors.slice(0, 2)));
+  await ctx.close();
+  await setMode();
+}
+
+// ---- the 255-character limit on tags ------------------------------------------
+{
+  const { ctx, page } = await fresh();
+  await openUpload(page);
+  const count = () => page.textContent('#uploadCommentCount');
+  await page.fill('#uploadComment', 'x'.repeat(180));
+  await page.waitForTimeout(150);
+  check('a comment well inside the limit is not nagged about', (await count()).trim() === '',
+    await count());
+  await page.fill('#uploadComment', 'x'.repeat(230));
+  await page.waitForTimeout(150);
+  check('one close to it counts down', /25 left/.test(await count()), await count());
+  await ctx.close();
+}
+
+{
+  // The comment nobody types: generated from the object's name, and an OSM name
+  // can be 255 characters on its own.
+  const long = 'Q'.repeat(240);
+  const { ctx, page } = await fresh({ staged: {
+    'photomap:changes:1:node/14040292373': {
+      osm: 'node/14040292373', name: long, pair: 'leisure=sports_centre',
+      tags: { operator: 'North Yorkshire Council' }, base: { operator: null },
+      sources: [{ photo: 'p.jpg', lat: 53.99, lon: -1.55, at: '2026-07-25T00:00:00Z' }],
+      fetchedAt: Date.now(),
+    },
+  } });
+  await openUpload(page);
+  const comment = await page.inputValue('#uploadComment');
+  check('a comment generated from a very long name still fits',
+    [...comment].length <= 255 && /^Surveyed Q+…: 1 tag from my own photographs/.test(comment),
+    `${[...comment].length} characters`);
+  // A 240-character unbroken name once stretched the upload button to 3000 px
+  // and took the page sideways with it.
+  check('and a very long name does not take the layout with it',
+    (await overflows(page)).length === 0, (await overflows(page)).join(' | '));
+
+  // And the last line of defence: a changeset tag over the limit stops before a
+  // changeset is opened, naming the tag, rather than arriving as a 400.
+  // Just over, not far over: only script can get past maxlength at all, and a
+  // 300-character comment grows the box and the XML preview enough that the
+  // button is still moving when Playwright aims at it.
+  await page.evaluate(() => {
+    const el = document.getElementById('uploadComment');
+    el.value = 'z'.repeat(256);
+    el.dispatchEvent(new Event('input'));
+  });
+  await page.waitForTimeout(700);
+  await page.locator('#btnUpload').scrollIntoViewIfNeeded();
+  await page.click('#btnUpload');
+  await page.waitForFunction(() => /characters/.test(document.getElementById('uploadResult').textContent),
+    null, { timeout: 30000 });
+  const st = await mirrorState();
+  check('an over-long changeset tag is refused before anything is opened',
+    st.changesets.length === 0, `${st.changesets.length} changesets`);
+  check('and the message names the tag and both numbers',
+    /changeset tag comment is 256 characters and OpenStreetMap allows 255/
+      .test(await page.textContent('#uploadResult')),
+    (await page.textContent('#uploadResult')).replace(/\s+/g, ' ').slice(0, 110));
   await ctx.close();
 }
 
