@@ -37,6 +37,10 @@ Secondary actions stay outlined so they never compete with it. Committing an ent
 **straight to extraction**: step 4 is reference material, offered as an outlined
 *Inspect the tag schema* beside the primary button, not the next stop.
 
+Stacked buttons sit in a `d-grid gap-2`, so the spacing between them is a property of the
+container rather than a margin each caller has to remember — which is how the *Save N
+changes again* button came to sit flush against the primary above it.
+
 Buttons follow one convention throughout, so their shape says what they do before the
 words are read:
 
@@ -602,6 +606,44 @@ The canonical form is offered, never applied for you: `Mo-Fr 9-5` prettifies to
 `Mo-Fr 09:00-05:00`, which is syntactically clean and factually wrong. Applying it
 re-validates the rewritten value, and only the value changes — the evidence quoted from
 the photo stays as transcribed.
+
+### Where each value came from
+
+"Is `sport=padel` a real OSM value, or did the model make it up?" is the question a mapper
+actually has reading these rows, and the page used to answer only its negation: a value
+outside a *closed* vocabulary was blocked, and everything else looked identical.
+
+Most OSM keys are open by design — you may coin `cuisine=georgian` and be right — so this
+is **provenance, not a verdict**, and every one of these is an outline pill rather than
+one of the solid badges the validators use. Three sources, in descending order of how much
+they settle the matter:
+
+| badge | what it means |
+| --- | --- |
+| **from a fixed list** | the field is closed and this value is one it accepts. Nothing else is legal, so the list settles it. |
+| **a suggested value** | the field is open, but the reference editor offers this value — idiomatic, even though others are legal. |
+| **used 17k× in OSM** | not on the editor's list, but taginfo says the wider database is full of it. Established practice iD merely does not enumerate. |
+| **used 3× in OSM** | neither offered nor much used. Amber, with a note naming the part of the value that is unusual. |
+| **never used in OSM** | no object anywhere carries this. The key is open so a new value is *allowed*, but the model may simply have coined it. |
+| **free text** | a name, a URL, a phone number, opening hours — there is no vocabulary to check against. |
+
+For a semicolon list like `sport=padel;kubb` each part stands on its own, and the weakest
+decides: one invented value among three is still an invented value. The note names which
+part it was.
+
+The editor's list is consulted first, so the ordinary case costs **no network at all** —
+taginfo is asked only about the values that are not on it, once each, cached for 30 days
+under `photomap:values:1:<key>=<value>`.
+
+A key the schema does not offer at all still gets its value checked, and that is where an
+invented term is most likely, since nothing upstream constrained the model. But only when
+the value *looks* enumerated — lowercase, snake_case, no spaces. Asking taginfo about a URL
+or a sentence would produce a frightening *never used in OSM* about something that was
+never a vocabulary in the first place.
+
+The worked example is `access=customer`. It is not obviously wrong; it is the singular of
+a value OSM really does use. Two million objects say `customers` and none say `customer`,
+and that is the only thing that gives it away.
 
 ### Reviewing and staging
 

@@ -347,7 +347,7 @@
                   <!-- Details of whichever entity is selected, in the list or on the map -->
                   <div class="border-top p-3 d-none" id="featureDetail"></div>
 
-                  <div class="p-3 d-grid" id="nearbyCta"></div>
+                  <div class="p-3 d-grid gap-2" id="nearbyCta"></div>
 
                   <p class="px-3 pt-2 mb-0" id="nearbySource"></p>
                   <p class="text-body-secondary small px-3 py-2 mb-0">
@@ -490,7 +490,7 @@
                   </div>
 
                   <div id="proposeList"></div>
-                  <div class="p-3 d-grid" id="proposeCta"></div>
+                  <div class="p-3 d-grid gap-2" id="proposeCta"></div>
 
                 </div>
               </div>
@@ -536,7 +536,7 @@
                     <div class="px-3 pb-3" id="uploadPreview" aria-live="polite"></div>
                   </details>
 
-                  <div class="p-3 d-grid border-top" id="uploadCta"></div>
+                  <div class="p-3 d-grid gap-2 border-top" id="uploadCta"></div>
                   <div class="px-3 pb-3" id="uploadResult" aria-live="polite"></div>
 
                 </div>
@@ -2259,7 +2259,7 @@ out center tags 250;`;
         <button class="btn btn-primary" type="button" id="btnCtaDescribe">
           Next: describe the photo<i class="bi bi-arrow-right ms-1"></i>
         </button>
-        <button class="btn btn-sm btn-outline-secondary mt-2" type="button" id="btnCtaSchema">
+        <button class="btn btn-sm btn-outline-secondary" type="button" id="btnCtaSchema">
           <i class="bi bi-list-columns-reverse me-1"></i>Inspect the tag schema
         </button>`;
       $('btnCtaDescribe').addEventListener('click', () => openPhase('Vision'));
@@ -3341,9 +3341,11 @@ out center tags 250;`;
         .filter(f => f && typeof f.key === 'string' && typeof f.value === 'string' && f.key && f.value)
         .map(f => ({ ...f, enabled: true }));
       renderProposals();
-      // Both run before the mapper can tick anything: a proposal that will be
-      // refused should never look acceptable, even briefly.
-      await Promise.all([reviewFacts(photo.facts), validateHours(photo.facts)]);
+      // All three run before the mapper can tick anything: a proposal that will
+      // be refused should never look acceptable, even briefly, and one resting
+      // on a value nobody else uses should say so from the first paint.
+      await Promise.all([reviewFacts(photo.facts), validateHours(photo.facts),
+                         describeVocabularies(photo.facts)]);
       renderProposals();
 
       const tokens = usage ? ` · ${usage.prompt_tokens ?? '?'} in / ${usage.completion_tokens ?? '?'} out` : '';
@@ -3550,6 +3552,156 @@ out center tags 250;`;
     return { level: 'ok' };
   }
 
+  /* ---------- where a proposed value came from ----------
+     "Is `sport=padel` a real OSM value or something the model made up?" is the
+     question a mapper actually has when reading these rows, and until now the
+     page only answered its negation: a value outside a *closed* vocabulary was
+     blocked, and everything else looked identical.
+
+     Most OSM keys are open by design — you may coin `cuisine=georgian` and be
+     right — so this is not a verdict, it is provenance. Three sources, in
+     descending order of how much they settle the matter:
+
+       1. the field's own value list, when the field is closed. Nothing else is
+          accepted, so a value that is in the list is simply correct;
+       2. the same list when the field is open. The reference editor offers it,
+          so it is idiomatic even though other values are legal;
+       3. failing both, how many objects in OpenStreetMap actually carry it,
+          from taginfo. A value used a hundred thousand times is established
+          practice that iD merely does not list; one used zero times was, in all
+          likelihood, invented a moment ago. */
+
+  const VALUES_PREFIX = APP_PREFIX + 'values:1:';
+  const VALUES_TTL_MS = 30 * 24 * 3600 * 1000;
+  const RARE_BELOW = 50;              // uses across the whole planet
+
+  /** How many objects carry key=value, per taginfo. Null when it cannot say. */
+  async function valueUsage(key, value) {
+    const id = `${key}=${value}`;
+    const hit = readCache(VALUES_PREFIX, id, VALUES_TTL_MS);
+    if (hit) return hit.count;
+    let count = null;
+    try {
+      // `query` is a substring match — `sport` alone has 24,000 distinct values,
+      // so the whole list is out of the question — which means the exact row has
+      // to be picked out of the page rather than assumed to be the only one.
+      const res = await fetch(`${TAGINFO}/key/values?key=${encodeURIComponent(key)}`
+        + `&query=${encodeURIComponent(value)}&page=1&rp=50&sortname=count_all&sortorder=desc`);
+      if (res.ok) count = ((await res.json()).data || []).find(r => r.value === value)?.count ?? 0;
+    } catch { /* taginfo informs this; it does not gate it */ }
+    if (count != null) writeCache(VALUES_PREFIX, id, { count });
+    return count;
+  }
+
+  /* An enumerated OSM value is lowercase snake_case and nothing else. Used to
+     decide whether a key the schema has never heard of is carrying a term worth
+     looking up at all: `nordic_fusion` is, a URL or a sentence is not, and
+     asking taginfo about a phone number would only produce a scary "never used
+     in OSM" about something that was never a vocabulary in the first place. */
+  const LOOKS_ENUMERATED = /^[a-z0-9][a-z0-9_]{1,40}$/;
+
+  async function describeVocabulary(f) {
+    const field = fieldForKey(f.key);
+    // A key the reference editor does not offer here still has a value, and
+    // "has anyone in OpenStreetMap ever written this?" is answerable without a
+    // field definition — it is also the case where an invented term is most
+    // likely, since nothing upstream constrained the model at all.
+    if (!field) {
+      const only = String(f.value).trim();
+      if (!LOOKS_ENUMERATED.test(only)) return { kind: 'unknown' };
+      const count = await valueUsage(f.key, only);
+      if (count == null) return { kind: 'unknown' };
+      return {
+        kind: count === 0 ? 'unseen' : count < RARE_BELOW ? 'rare' : 'common',
+        count, missing: [only], label: f.key, offSchema: true,
+      };
+    }
+    // semiCombo and friends hold several values in one semicolon-joined string,
+    // and each of them stands or falls on its own.
+    const multi = field.type === 'choices';
+    const parts = (multi ? String(f.value).split(';') : [String(f.value)])
+      .map(v => v.trim()).filter(Boolean);
+    if (!parts.length) return { kind: 'unknown' };
+    if (!field.options.length) return { kind: 'free', label: field.label };
+
+    const allowed = new Set(field.options.map(o => o.value));
+    const missing = parts.filter(v => !allowed.has(v));
+    if (!missing.length) return { kind: field.closed ? 'closed' : 'listed', label: field.label };
+    // A closed field with a value off the list is already blocked upstream; say
+    // nothing more about it here than the block already does.
+    if (field.closed) return { kind: 'unknown' };
+
+    const counts = (await Promise.all(missing.map(v => valueUsage(f.key, v))))
+      .filter(c => c != null);
+    if (counts.length < missing.length) return { kind: 'unlisted', missing, label: field.label };
+    // The weakest part decides: one invented value in a list of three is still
+    // an invented value.
+    const least = Math.min(...counts);
+    return {
+      kind: least === 0 ? 'unseen' : least < RARE_BELOW ? 'rare' : 'common',
+      count: least, missing, label: field.label,
+    };
+  }
+
+  const describeVocabularies = facts =>
+    Promise.all(facts.map(async f => { f.vocab = await describeVocabulary(f); }));
+
+  const fmtUses = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M`
+                     : n >= 1e4 ? `${Math.round(n / 1e3)}k`
+                     : n.toLocaleString();
+
+  /* Outline pills, never solid: this is where a value came from, not a ruling
+     on whether it is right. The two that deserve a second look borrow the
+     warning text colour without borrowing the badge that means "invalid". */
+  function vocabBadge(f) {
+    const v = f.vocab;
+    if (!v) return '';
+    const pill = (text, tone, title) =>
+      `<span class="badge border fw-normal ${tone}" title="${esc(title)}">${esc(text)}</span>`;
+    switch (v.kind) {
+      case 'closed': return pill('from a fixed list', 'text-body-secondary',
+        `${v.label} accepts a fixed set of values and this is one of them.`);
+      case 'listed': return pill('a suggested value', 'text-body-secondary',
+        `${v.label} is an open field, but this is one of the values the reference editor offers.`);
+      case 'common': return pill(`used ${fmtUses(v.count)}\u00d7 in OSM`, 'text-body-secondary',
+        `${v.offSchema ? 'Not a key the editor offers here' : 'An open field'}, and this value is `
+        + `not one it lists — but ${v.count.toLocaleString()} objects in OpenStreetMap carry it, `
+        + 'so it is established practice.');
+      case 'rare': return pill(`used ${v.count}\u00d7 in OSM`, 'text-warning-emphasis',
+        'This value is neither offered by the reference editor nor much used: '
+        + `${v.count} object${v.count === 1 ? '' : 's'} in the whole database carry it.`);
+      case 'unseen': return pill('never used in OSM', 'text-warning-emphasis',
+        'No object in OpenStreetMap carries this value. The key is open, so a new one is '
+        + 'allowed, but the model may simply have coined it.');
+      case 'unlisted': return pill('not a suggested value', 'text-body-secondary',
+        'An open field, and this value is not one the reference editor offers. How widely it is '
+        + 'used could not be checked.');
+      case 'free': return pill('free text', 'text-body-secondary',
+        `${v.label} has no vocabulary to check against — it is written out in full.`);
+      default: return '';
+    }
+  }
+
+  /** Spelled out under the row, for the two that want more than a pill. */
+  function vocabNote(f) {
+    const v = f.vocab;
+    if (!v || (v.kind !== 'unseen' && v.kind !== 'rare')) return '';
+    const which = v.missing.length > 1
+      ? `${v.missing.map(m => `\u201c${esc(m)}\u201d`).join(', ')} are`
+      : `\u201c${esc(v.missing[0])}\u201d is`;
+    // Off-schema keys have no suggestion list to be absent from; for those the
+    // usage count is the whole of what can be said.
+    const against = v.offSchema ? `not a value ${esc(v.label)} is usually given`
+                                : `not among the values ${esc(v.label)} suggests`;
+    return `<div class="small text-warning-emphasis text-break mt-1">
+      <i class="bi bi-question-circle me-1"></i>${which} ${against}${v.kind === 'unseen'
+        ? ', and nothing in OpenStreetMap uses it. This key is open, so a new value is allowed '
+          + '— but check the wording is what a mapper here would use.'
+        : `, and only ${v.count} object${v.count === 1 ? '' : 's'} in OpenStreetMap use it. `
+          + 'That is allowed, but an established value is usually better.'}
+    </div>`;
+  }
+
   async function reviewFacts(facts) {
     const rules = await loadTagRules();
     for (const f of facts) {
@@ -3719,7 +3871,7 @@ out center tags 250;`;
               <span class="min-w-0 flex-grow-1">
                 <span class="d-flex flex-wrap align-items-baseline gap-1">
                   <code class="small">${esc(f.key)}</code>
-                  ${reviewBadge(f)}${hoursBadge(f)}${confBadge(f)}
+                  ${reviewBadge(f)}${hoursBadge(f)}${vocabBadge(f)}${confBadge(f)}
                 </span>
                 <div class="text-break"><code class="small">${esc(f.value)}</code></div>
                 ${kind === 'update' ? `<div class="small text-body-secondary text-break">
@@ -3729,7 +3881,7 @@ out center tags 250;`;
                   ? `<div class="small text-body-secondary mt-1">
                       <i class="bi bi-info-circle me-1"></i>Another proposal offers a different
                       <code>${esc(f.key)}</code>; only one can be sent.</div>` : ''}
-                ${reviewNote(f, i)}${hoursNote(f, i)}
+                ${reviewNote(f, i)}${hoursNote(f, i)}${vocabNote(f)}
               </span>
             </label>`).join('')}
         </div>`;
@@ -3771,7 +3923,8 @@ out center tags 250;`;
           photo.facts.push({ key: k, value: v, evidence: fact.evidence,
                              confidence: fact.confidence, enabled: true });
         }
-        await Promise.all([reviewFacts(photo.facts), validateHours(photo.facts)]);
+        await Promise.all([reviewFacts(photo.facts), validateHours(photo.facts),
+                           describeVocabularies(photo.facts)]);
         renderProposals();
       });
     }
@@ -3816,7 +3969,7 @@ out center tags 250;`;
     const onward = proposeSaved ? `<button class="btn btn-primary" type="button" id="btnCtaUpload">
         Next: upload to OpenStreetMap<i class="bi bi-arrow-right ms-1"></i></button>` : '';
     host.innerHTML = `${onward}${save}
-      <p class="small text-body-secondary text-center mt-2 mb-0" id="saveNote">
+      <p class="small text-body-secondary text-center mb-0" id="saveNote">
         Kept in this browser. Nothing is sent to OpenStreetMap yet.</p>`;
     $('btnSaveChangeset').addEventListener('click', saveChangeset);
     $('btnCtaUpload')?.addEventListener('click', () => openPhase('Upload'));
@@ -4284,9 +4437,13 @@ out center tags 250;`;
     // changeset, not what to send. The link is offered rather than flung into a
     // new tab, which on a phone means losing your place mid-survey.
     const link = lastUpload ? `
-      <a class="btn ${uploadRemaining() ? 'btn-outline-secondary mt-2' : 'btn-primary'}"
+      <a class="btn ${uploadRemaining() ? 'btn-outline-secondary' : 'btn-primary'}"
          href="${esc(lastUpload.url)}" target="_blank" rel="noopener" id="lnkChangeset">
-        View changeset ${esc(lastUpload.id)} on OpenStreetMap<i class="bi bi-arrow-right ms-1"></i>
+        <!-- Short enough to stay on one line on a phone, and the arrow is tied
+             to the last word so it can never be orphaned on a line of its own.
+             Where it goes is in the note below, not in the label. -->
+        View <span class="text-nowrap">changeset ${esc(lastUpload.id)}<i
+          class="bi bi-arrow-right ms-1"></i></span>
       </a>` : '';
 
     // Nothing staged and nothing to send: the changeset link leads, and the only
@@ -4294,12 +4451,12 @@ out center tags 250;`;
     if (lastUpload && !uploadRemaining()) {
       $('uploadTagsNote').textContent = '';
       host.innerHTML = link + `
-        <button class="btn btn-outline-secondary mt-2" type="button" id="btnUploadAgain">
+        <button class="btn btn-outline-secondary" type="button" id="btnUploadAgain">
           <i class="bi bi-images me-1"></i>Start again with another photo
         </button>
-        <p class="small text-body-secondary text-center mt-2 mb-0" id="uploadNote">
-          Opens in a new tab. Give it a day before judging how it looks — the map renders
-          on its own schedule.
+        <p class="small text-body-secondary text-center mb-0" id="uploadNote">
+          Opens openstreetmap.org in a new tab. Give it a day before judging how it looks —
+          the map renders on its own schedule.
         </p>`;
       $('btnUploadAgain').addEventListener('click', () => {
         lastUpload = null;
@@ -4331,7 +4488,7 @@ out center tags 250;`;
           : 'Nothing selected'}
       </button>
       ${link}
-      <p class="small text-body-secondary text-center mt-2 mb-0" id="uploadNote">
+      <p class="small text-body-secondary text-center mb-0" id="uploadNote">
         ${lastUpload ? `Changeset ${esc(lastUpload.id)} is away. Still staged below: `
                        + `${uploadRemaining()} object${uploadRemaining() === 1 ? '' : 's'}.`
           : osmToken() ? `One changeset, one object, to the ${esc(osmServer().label)}. `
