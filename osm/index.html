@@ -260,7 +260,6 @@
                       <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar"
                            style="width:100%"></div>
                     </div>
-                    <div class="mt-3" id="locStatus"></div>
                   </div>
 
                   <div id="photoPane" class="d-none">
@@ -1615,148 +1614,114 @@ out center tags 250;`;
     return best;
   }
 
-  /* ---------- keeping a location fix warm ----------
+  /* ---------- your location, only ever on request ----------
      A photo taken through the picker's Take Photo never carries GPS, and one
-     taken from the camera app before the phone has a fix does not either. In
-     both cases the mapper is standing right there, so the device knows what the
-     photo does not.
+     taken before the phone has a fix does not either. In both cases the mapper
+     is standing right there, so the device knows what the photograph does not.
 
-     The catch is that a cold getCurrentPosition on an iPhone can take twenty
-     seconds — long enough that the answer arrives after the moment has passed.
-     So a watch is started as early as permission allows and left running: by
-     the time a photo is chosen the fix is already warm and current.
+     Two rules, and they are the whole design:
 
-     A device fix is never silently substituted for an old photo. Using "where
-     the phone is now" for a picture taken last week would put an edit in the
-     wrong place, so it is applied automatically only when the photograph was
-     taken minutes ago, and offered as a button otherwise. */
+     - **Nothing is asked for until a button is pressed.** No prompt on load, no
+       permission query on load, no watch running in the background. A page that
+       asks for your position before you have shown it anything has not earned
+       the question, and on iOS a refused prompt is expensive to undo.
+     - **Nothing is applied without a press either.** "Where the phone is now"
+       is a guess about where a photograph was taken, and a wrong one puts an
+       edit somewhere the mapper never went. It is offered; it is never assumed.
 
-  const LOC_FRESH_MS = 60 * 1000;          // a fix older than this is stale
-  const LOC_AUTO_WINDOW_MS = 10 * 60 * 1000; // "just taken", so the fix applies itself
-  const LOC_MAX_ACCURACY_M = 200;          // beyond this it cannot pick the right entity
+     One reading, not a watch: the first good fix is kept for the rest of the
+     session and reused. Holding the GPS open past that costs battery to answer
+     a question nobody asked again. */
 
-  const geo = { state: 'idle', fix: null, error: null, watchId: null };
+  const LOC_MAX_ACCURACY_M = 200;   // beyond this it cannot pick the right entity
 
-  const fixAge = () => geo.fix ? Date.now() - geo.fix.at : Infinity;
+  const geo = { state: 'idle', fix: null, error: null, asking: null };
+
   const fixUsable = () => !!geo.fix && geo.fix.accuracy <= LOC_MAX_ACCURACY_M;
 
-  function startWatching() {
-    if (!navigator.geolocation || geo.watchId != null) return;
+  /**
+   * Read the device position, once. Resolves to the fix or null; never throws.
+   * A fix already in hand is returned as-is rather than asking the GPS again.
+   */
+  function requestFix() {
+    if (fixUsable()) return Promise.resolve(geo.fix);
+    if (geo.asking) return geo.asking;             // a press while one is in flight
+    if (!navigator.geolocation) {
+      geo.state = 'unsupported';
+      geo.error = 'This browser cannot report a location.';
+      return Promise.resolve(null);
+    }
     geo.state = 'asking';
-    renderLocStatus();
-    geo.watchId = navigator.geolocation.watchPosition(
-      pos => {
-        geo.state = 'on';
-        geo.error = null;
-        geo.fix = {
-          lat: pos.coords.latitude, lon: pos.coords.longitude,
-          accuracy: pos.coords.accuracy ?? Infinity,
-          alt: Number.isFinite(pos.coords.altitude) ? pos.coords.altitude : null,
-          at: pos.timestamp || Date.now(),
-        };
-        renderLocStatus();
-        scheduleAreaPrefetch();
-      },
-      err => {
-        geo.state = err.code === err.PERMISSION_DENIED ? 'denied' : 'error';
-        geo.error = err.message || 'Location unavailable';
-        renderLocStatus();
-      },
-      { enableHighAccuracy: true, maximumAge: 15000, timeout: 30000 },
-    );
+    geo.error = null;
+    geo.asking = new Promise(resolve => {
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          geo.state = 'on';
+          geo.error = null;
+          geo.fix = {
+            lat: pos.coords.latitude, lon: pos.coords.longitude,
+            accuracy: pos.coords.accuracy ?? Infinity,
+            alt: Number.isFinite(pos.coords.altitude) ? pos.coords.altitude : null,
+            at: pos.timestamp || Date.now(),
+          };
+          geo.asking = null;
+          resolve(geo.fix);
+        },
+        err => {
+          geo.state = err.code === err.PERMISSION_DENIED ? 'denied' : 'error';
+          geo.error = err.code === err.PERMISSION_DENIED
+            ? 'Location is turned off for this page.'
+            : (err.message || 'Location unavailable');
+          geo.asking = null;
+          resolve(null);
+        },
+        // A cold fix on a phone genuinely takes tens of seconds, and this is the
+        // one moment the reader is waiting on it — but a spinner with no end is
+        // worse than an error, so it gives up at thirty and says so.
+        { enableHighAccuracy: true, maximumAge: 30000, timeout: 30000 },
+      );
+    });
+    return geo.asking;
   }
 
-  /* ---------- warming the map around you ----------
-     The same reasoning as priming the fix itself, one step further out: when a
-     photo is chosen the app is going to want the map around it, and the answer
-     is worth having before it is asked for. A survey happens where you are
-     standing, so the fix says which areas those will be.
+  /* ---------- warming the map around the photo ----------
+     Once a photo has a position, step 3 is going to want the map around it. The
+     reader is usually still looking at step 2 when that becomes knowable, so it
+     is fetched then rather than when the button is pressed.
+
+     Keyed on the photograph, not on the device: this must not depend on a
+     location the reader has not offered.
 
      Quiet on purpose. It never reports, never blocks, runs once per area per
      session, and stands down entirely when the connection asks it to. */
 
-  const PREFETCH_RADIUS = 500;      // metres around the fix worth having in hand
-  const PREFETCH_IDLE_MS = 4000;    // let the page finish loading first
+  const PREFETCH_RADIUS = 500;      // metres around the photo worth having in hand
+  const PREFETCH_IDLE_MS = 1500;    // let the photo's own rendering finish first
   const prefetched = new Set();
   let prefetchTimer = null;
 
   function scheduleAreaPrefetch() {
-    if (prefetchTimer || !fixUsable()) return;
+    clearTimeout(prefetchTimer);
+    if (!photo || photo.lat == null) return;
     // Data saver, or a metered connection: this is a convenience, not a need.
     if (navigator.connection?.saveData) return;
-    prefetchTimer = setTimeout(() => { prefetchTimer = null; prefetchArea(); }, PREFETCH_IDLE_MS);
+    const { lat, lon } = photo;
+    prefetchTimer = setTimeout(() => prefetchArea(lat, lon), PREFETCH_IDLE_MS);
   }
 
-  async function prefetchArea() {
-    if (!fixUsable()) return;
-    // Never compete with a search the user is actually waiting on.
-    if (photo && !photo.nearby && photo.lat != null) return;
-    const keys = tilesFor(geo.fix.lat, geo.fix.lon, PREFETCH_RADIUS)
+  async function prefetchArea(lat, lon) {
+    // Never compete with a search the reader is actually waiting on.
+    if (photo?.nearbyBusy) return;
+    const keys = tilesFor(lat, lon, PREFETCH_RADIUS)
       .filter(k => !prefetched.has(k) && !readCache(TILE_PREFIX, k, TILE_TTL_MS));
     if (!keys.length) return;
     keys.forEach(k => prefetched.add(k));
     try { await fillTiles(keys); } catch { /* it was only ever an optimisation */ }
   }
 
-  /* Asked for on load, because the answer is needed the instant a photo is
-     chosen and a prompt at that moment would arrive too late to be useful. If
-     permission was granted before, this is silent. */
-  async function primeLocation() {
-    if (!navigator.geolocation) { geo.state = 'unsupported'; renderLocStatus(); return; }
-    try {
-      const p = await navigator.permissions?.query({ name: 'geolocation' });
-      if (p) {
-        if (p.state === 'denied') { geo.state = 'denied'; renderLocStatus(); }
-        else startWatching();
-        p.addEventListener?.('change', () => {
-          if (p.state === 'granted') startWatching();
-          else if (p.state === 'denied') { geo.state = 'denied'; renderLocStatus(); }
-        });
-        return;
-      }
-    } catch { /* Permissions API is not everywhere; fall through and just ask */ }
-    startWatching();
-  }
-
   const fmtAccuracy = m => m == null || !Number.isFinite(m) ? 'unknown accuracy'
     : m < 1000 ? `±${Math.round(m)} m` : `±${(m / 1000).toFixed(1)} km`;
 
-  function renderLocStatus() {
-    const host = $('locStatus');
-    if (!host) return;
-    const line = (icon, tone, text, button = '') => `
-      <p class="small text-${tone} mb-0 d-flex align-items-start gap-2">
-        <i class="bi bi-${icon} mt-1 flex-shrink-0"></i><span>${text}</span>
-      </p>${button}`;
-
-    if (geo.state === 'on' && geo.fix) {
-      host.innerHTML = line('geo-alt-fill', 'success-emphasis',
-        `Your location is ready, ${esc(fmtAccuracy(geo.fix.accuracy))}. A photo with no `
-        + 'GPS of its own can use it.');
-      return;
-    }
-    if (geo.state === 'asking') {
-      host.innerHTML = line('geo-alt', 'body-secondary',
-        'Getting your location, so a photo without GPS can still be placed…');
-      return;
-    }
-    if (geo.state === 'denied' || geo.state === 'error') {
-      host.innerHTML = line('geo-alt-slash', 'body-secondary',
-        geo.state === 'denied'
-          ? 'Location is turned off for this page. Photos will need GPS of their own'
-            + (onIOS ? ' — in the iPhone picker, tap <em>Options</em> and turn '
-                       + '<em>Location</em> on.' : '.')
-          : `Could not get your location: ${esc(geo.error || '')}`,
-        `<div class="d-grid mt-2"><button class="btn btn-sm btn-outline-secondary" type="button"
-           id="btnRetryLoc"><i class="bi bi-geo-alt me-1"></i>Try again</button></div>`);
-      $('btnRetryLoc')?.addEventListener('click', () => {
-        geo.watchId = null;                 // the failed watch is spent
-        startWatching();
-      });
-      return;
-    }
-    host.innerHTML = '';
-  }
 
   /* ---------- state: exactly one photo ---------- */
   let photo = null;                      // {name, size, lat, lon, alt, taken, make, model, thumb,
@@ -1856,14 +1821,8 @@ out center tags 250;`;
       thumb: await thumbFor(file),
     };
 
-    // Just taken, no GPS of its own, and a good fix in hand: the mapper is
-    // standing where the photo was taken, so use it without making them ask.
-    if (!hasExifGps && fixUsable() && fixAge() < LOC_FRESH_MS) {
-      const takenAgo = photo.taken instanceof Date && !isNaN(photo.taken)
-        ? Date.now() - photo.taken.getTime() : null;
-      if (takenAgo != null && takenAgo >= 0 && takenAgo < LOC_AUTO_WINDOW_MS) useDeviceFix();
-    }
-
+    // Nothing is inferred here. A photo with no GPS of its own stays without
+    // one until the reader presses the button in step 2 — see requestFix.
     $('progressWrap').classList.add('d-none');
 
     // The upload pane has done its job — swap it for a summary of what was loaded.
@@ -1879,6 +1838,7 @@ out center tags 250;`;
     renderGps();
     if (photo.lat != null) {
       plotPhoto();
+      scheduleAreaPrefetch();
     }
     openPhase('Gps');
   }
@@ -1906,40 +1866,55 @@ out center tags 250;`;
     if (photo.lat == null) {
       setPhase('Gps', { state: 'warn', summary: 'No location yet', enabled: true });
       setPhase('Nearby', { state: 'todo', summary: '', enabled: false });
-      // Not a dead end. If the device has a fix, that is the fastest way out;
-      // otherwise the two remaining routes are named with buttons, not prose
-      // pointing at a control in a collapsed step above.
-      const canUseFix = fixUsable();
+      /* Not a dead end, and not a decision made for the reader either. This is
+         the only place the app ever reaches for the device position, and it
+         does so only when this button is pressed: the reader is the one who
+         knows whether they are still standing where the photo was taken. */
+      const asking = geo.state === 'asking';
+      const refused = geo.state === 'denied' || geo.state === 'error' || geo.state === 'unsupported';
       body.innerHTML = `
         <div class="alert alert-warning" role="alert">
           <i class="bi bi-exclamation-triangle me-1"></i>
           <strong>This photo carries no GPS coordinates.</strong>
-          ${canUseFix
-            ? `Your device knows where you are now, ${esc(fmtAccuracy(geo.fix.accuracy))}. If you are
-               standing where the photo was taken, use that.`
-            : 'It cannot be placed on the map until it has a position.'}
+          It cannot be placed on the map until it has a position.
         </div>
+        ${refused ? `<p class="small text-body-secondary d-flex align-items-start gap-2">
+          <i class="bi bi-geo-alt-slash mt-1 flex-shrink-0"></i>
+          <span>${esc(geo.error || 'Location unavailable')}${geo.state === 'denied' && onIOS
+            ? ' Turn it back on for this site in Settings → Safari → Location.' : ''}</span>
+        </p>` : ''}
         <div class="d-grid gap-2">
-          ${canUseFix ? `<button class="btn btn-primary" type="button" id="btnUseFix">
-              <i class="bi bi-geo-alt-fill me-1"></i>Use my current location
-            </button>` : ''}
+          <button class="btn btn-primary" type="button" id="btnUseFix" ${asking ? 'disabled' : ''}>
+            ${asking
+              ? '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>'
+                + 'Getting your location — this can take a moment&hellip;'
+              : `<i class="bi bi-geo-alt-fill me-1"></i>${refused ? 'Try my location again'
+                                                                 : 'Use my current location'}`}
+          </button>
           <button class="btn btn-sm btn-outline-secondary" type="button" id="btnRetakeGps">
             <i class="bi bi-images me-1"></i>Choose a different photo
           </button>
         </div>
-        ${onIOS ? `<p class="small text-body-secondary mt-3 mb-0">
-          To keep the photo's own GPS on iPhone: in the picker tap <em>Options</em> at the
-          bottom-left and turn <em>Location</em> on before choosing. A photo taken with
-          <em>Take Photo</em> never carries GPS — use your current location instead.
-        </p>` : `<p class="small text-body-secondary mt-3 mb-0">
-          Most cameras only write GPS into a photo when they have a fix at the moment of
-          the shot, and many strip it on export. Your device's own location is the
-          reliable way in.
-        </p>`}`;
-      $('btnUseFix')?.addEventListener('click', () => {
-        if (!useDeviceFix()) return;
+        <p class="small text-body-secondary mt-3 mb-0">
+          Only pressed, never assumed: your position is read when you ask for it and not
+          before, and it is right only if you are standing where the photo was taken.
+          ${onIOS
+            ? 'To keep a photo\u2019s own GPS on iPhone, tap <em>Options</em> at the bottom-left '
+              + 'of the picker and turn <em>Location</em> on before choosing. A photo taken with '
+              + '<em>Take Photo</em> never carries GPS.'
+            : 'Most cameras write GPS only when they have a fix at the moment of the shot, and '
+              + 'many strip it on export.'}
+        </p>`;
+      $('btnUseFix').addEventListener('click', async () => {
+        // requestFix sets the asking state synchronously, so redrawing here
+        // puts the spinner on the button that was just pressed.
+        const pending = requestFix();
+        renderGps();
+        const fix = await pending;
+        if (!fix || !useDeviceFix()) { renderGps(); return; }
         renderGps();
         plotPhoto();
+        scheduleAreaPrefetch();
       });
       $('btnRetakeGps').addEventListener('click', () => { startOver(); fileInput.click(); });
       return;
@@ -2025,6 +2000,7 @@ out center tags 250;`;
     $('phaseNearbySpinner').classList.remove('d-none');
     $('phaseNearbySummary').classList.add('d-none');
     setPhase('Nearby', { state: 'busy' });
+    photo.nearbyBusy = true;               // the prefetch must not compete with this
 
     // Say which of the two it is: a cached area answers instantly and a cold one
     // takes a second, and a spinner that means both explains neither.
@@ -2033,6 +2009,7 @@ out center tags 250;`;
       : `Downloading the map around you&hellip;`));
 
     const done = () => {
+      photo.nearbyBusy = false;
       $('phaseNearbySpinner').classList.add('d-none');
       $('phaseNearbySummary').classList.remove('d-none');
     };
@@ -4752,10 +4729,6 @@ out center tags 250;`;
   // it is live on a cold page with no photo, and the OAuth redirect lands here.
   refreshUpload();
   completeOsmAuth();
-
-  // Asked for straight away: the answer is needed the moment a photo is chosen,
-  // and a cold fix takes long enough that prompting then would be too late.
-  primeLocation();
 
   $('dropzoneHint').textContent = coarse
     ? 'Tap to choose one from your library, or take a new one'

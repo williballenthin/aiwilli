@@ -113,8 +113,9 @@ date, camera and size, and the flow moves on. *Use a different photo* starts ove
 **2 · GPS location.** Latitude, longitude, altitude, accuracy, capture time and camera,
 plus a deep link to the same spot on openstreetmap.org. The photo appears on the map as a
 red camera pin, and the pane says **where the position came from** — the photograph's own
-GPS, or your device. If neither can supply one the phase turns amber and phase 3 stays
-locked. See *Where the position comes from*, below.
+GPS, or your device. A photo without GPS turns the phase amber and keeps phase 3 locked
+until you press **Use my current location**; that button is the only thing in the app that
+ever reads your position. See *Where the position comes from*, below.
 
 **3 · Nearby entities.** The 10 nearest things OpenStreetMap knows about, businesses and
 street furniture alike. See below.
@@ -257,15 +258,19 @@ Ways are collapsed to the centroid of their nodes rather than a bounding-box mid
 the real centre is available. Relations are skipped: they carry no geometry of their own
 in a `/map` response.
 
-### Warming the area around you
+### Warming the area around the photo
 
-The same reasoning as priming the GPS fix, one step further out. When a fix lands and the
-page has been idle for a few seconds, the areas covering a **500 m radius** around it are
-fetched quietly in the background — so by the time a photo is taken there, step 3 has
-nothing left to ask.
+Once a photo has a position — from its own EXIF, or from the button in step 2 — step 3 is
+going to want the map around it, and you are usually still looking at step 2 when that
+becomes knowable. So the areas covering a **500 m radius** are fetched then, quietly,
+rather than when *Find what's nearby* is pressed. In practice step 3 opens with nothing
+left to fetch.
+
+Keyed on the **photograph**, never on the device: the warm-up must not depend on a
+location you have not offered.
 
 It is deliberately unobtrusive: it never reports, never blocks, never competes with a
-search the user is actually waiting on, runs once per area per session, and stands down
+search you are actually waiting on, runs once per area per session, and stands down
 entirely when `navigator.connection.saveData` is set.
 
 ### What is disposable, and what is not
@@ -768,29 +773,39 @@ of that setting. Neither does one taken while the phone has no recent fix — th
 writes GPS only if it has a position at the moment of the shot, which after a cold start,
 indoors, or straight out of a pocket it often does not.
 
-### Priming the device fix
+### Your location, only ever on request
 
-That last case is common enough on a survey that the page **asks for location on load**,
-before you have chosen anything, and keeps a fix warm:
+Two rules, and they are the whole design:
 
-- `navigator.permissions.query` is consulted first, so a browser that has already granted
-  or denied does not get prompted again;
-- when it may, the page opens a `watchPosition` with `enableHighAccuracy` and leaves it
-  running, so the position is already there when it is needed rather than being asked for
-  at the moment of use — a cold `getCurrentPosition` on an iPhone can take twenty seconds,
-  which is far too late;
-- step 1 shows the state in a line under the dropzone: *getting your location…*, *your
-  location is ready, ±12 m*, or *location is turned off for this page* with a **Try
-  again** button.
+- **Nothing is asked for until a button is pressed.** No prompt on load, no permission
+  query on load, no watch running in the background. A page that asks for your position
+  before you have shown it anything has not earned the question, and on iOS a refused
+  prompt is expensive to undo.
+- **Nothing is applied without a press either.** *Where the phone is now* is a guess about
+  where a photograph was taken, and a wrong one puts an edit somewhere you never went. It
+  is offered; it is never assumed — not even for a photo taken sixty seconds ago.
+
+One reading, not a watch. `getCurrentPosition` runs once, and the first good fix
+(accurate to 200 m or better) is kept for the rest of the session and reused. Holding the
+GPS open past that costs battery to answer a question nobody asked again. A second photo
+needing a position gets the fix already in hand, with no second read.
+
+The only place in the app that reaches for the device position is the **Use my current
+location** button in step 2, and only when the photo it is looking at has no GPS of its
+own.
 
 ### How a photo gets a position
 
 | the photo | what happens |
 | --- | --- |
 | has EXIF GPS | that is used, always. A device fix never overrides the photograph. |
-| has none, was taken **within the last 10 minutes**, and there is a fix newer than 60 s and accurate to better than 200 m | the fix is **applied automatically** — you took the picture just now, standing here |
-| has none, and a usable fix exists | step 2 offers a primary **Use my current location** |
-| has none, and no fix | step 2 is amber; the way out is *Choose a different photo*, or granting location and retrying |
+| has none | step 2 turns amber, step 3 stays locked, and the way forward is a primary **Use my current location** — pressed, never assumed |
+| has none, and you press it | the position is read once, applied, and step 3 unlocks |
+| has none, and location is refused or times out | the reason is shown, the button becomes **Try my location again**, and *Choose a different photo* is still there |
+
+The request gives up after **30 seconds**. A cold fix on a phone genuinely takes tens of
+seconds and this is the one moment you are waiting on it, but a spinner with no end is
+worse than an error.
 
 Whenever a position came from the device rather than the photograph, step 2 says so in as
 many words, the header summary is suffixed *(device)*, an **Accuracy** row appears, and
