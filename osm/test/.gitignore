@@ -1,7 +1,9 @@
 # Recorded upstream responses: regenerated on the first run, refreshed with
 # RECORD=1. Several megabytes of somebody else's JSON.
 .upstream/
-node_modules/
+# No trailing slash: in this container it is a symlink into a shared install,
+# and `node_modules/` matches only real directories.
+node_modules
 mirror.*.pid
 mirror.*.log
 *.png
