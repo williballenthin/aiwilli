@@ -3631,72 +3631,85 @@ out center tags 250;`;
   const codepoints = s => [...String(s ?? '')].length;
   const tooLong = s => codepoints(s) > TAG_MAX;
 
+  /**
+   * Everything wrong with one proposal, not merely the first thing. A value can
+   * be both a key the editor does not offer *and* absent from the description,
+   * and being told only about the first leaves the mapper to discover the
+   * second after they have already decided.
+   *
+   * One exception, at the end: a proposal that cannot be staged at all has no
+   * use for advice about how to improve it.
+   */
   function reviewFact(rules, f) {
     const key = f.key;
+    const found = [];
+    const add = (level, label, why, extra) => found.push({ level, label, why, ...extra });
 
     for (const r of TAG_RULES) {
-      if (r.re.test(key)) return { level: 'block', label: 'not from a photo', why: r.why };
+      if (r.re.test(key)) { add('block', 'not from a photo', r.why); break; }
     }
     if (rules.discarded && key in rules.discarded) {
-      return { level: 'block', label: 'discarded tag',
-               why: 'OpenStreetMap strips this key on edit; it carries no meaning.' };
+      add('block', 'discarded tag',
+          'OpenStreetMap strips this key on edit; it carries no meaning.');
     }
 
-    /* Length, after the policy rules rather than before them: a key that is
-       blocked anyway should say why it is blocked, not merely that it is long.
-       This is here for the value that would otherwise be fine.
-
-       Truncating is not on. Half a website address or half a name is worse than
+    /* Truncating is not on. Half a website address or half a name is worse than
        no edit, and nothing in the value says where it was cut. */
     if (tooLong(f.value) || tooLong(key)) {
       const what = tooLong(key) ? 'key' : 'value';
       const n = codepoints(tooLong(key) ? key : f.value);
-      return { level: 'block', label: 'too long',
-               why: `OpenStreetMap allows ${TAG_MAX} characters in a tag ${what} and this one `
-                  + `is ${n}. It is not shortened for you, because a value cut in half is `
-                  + 'worse than no edit at all.' };
-    }
-
-    const dep = deprecationFor(rules.deprecated || [], key, f.value, photo.entity?.tags || {});
-    if (dep) {
-      const asText = dep.replace
-        ? Object.entries(dep.replace).map(([k, v]) => `${k}=${v}`).join(', ') : null;
-      return { level: 'warn', label: 'deprecated',
-               why: asText ? `OpenStreetMap has replaced this with ${asText}.`
-                           : 'OpenStreetMap has deprecated this tag with no direct replacement.',
-               replace: dep.replace };
+      add('block', 'too long',
+          `OpenStreetMap allows ${TAG_MAX} characters in a tag ${what} and this one is ${n}. `
+          + 'It is not shortened for you, because a value cut in half is worse than no edit '
+          + 'at all.');
     }
 
     const field = fieldForKey(key);
     // A closed vocabulary is closed: the reference editor will not accept
     // anything else and data consumers ignore it, so this is not a judgement
     // call the mapper can usefully make — the value is simply wrong.
-    if (field?.closed && field.options.length
-        && !field.options.some(o => o.value === f.value)) {
-      return { level: 'block', label: 'not an allowed value',
-               why: `${key} takes a fixed list of values and “${f.value}” is not one of them. `
-                  + `Allowed: ${field.options.slice(0, 8).map(o => o.value).join(', ')}`
-                  + `${field.optionCount > 8 ? `, and ${field.optionCount - 8} more` : ''}.` };
+    if (field?.closed && field.options.length && !field.options.some(o => o.value === f.value)) {
+      add('block', 'not an allowed value',
+          `${key} takes a fixed list of values and “${f.value}” is not one of them. `
+          + `Allowed: ${field.options.slice(0, 8).map(o => o.value).join(', ')}`
+          + `${field.optionCount > 8 ? `, and ${field.optionCount - 8} more` : ''}.`);
     }
 
+    const dep = deprecationFor(rules.deprecated || [], key, f.value, photo.entity?.tags || {});
+    if (dep) {
+      const asText = dep.replace
+        ? Object.entries(dep.replace).map(([k, v]) => `${k}=${v}`).join(', ') : null;
+      add('warn', 'deprecated',
+          asText ? `OpenStreetMap has replaced this with ${asText}.`
+                 : 'OpenStreetMap has deprecated this tag with no direct replacement.',
+          { replace: dep.replace });
+    }
+
+    /* Absent from the description. Worth saying, but not an accusation: the
+       description is a summary and a mapper who was standing there often knows
+       exactly why the value is right. Phrased and coloured accordingly. */
     if (VERBATIM_KEYS.test(key)) {
       const hay = loosely(`${f.evidence || ''} ${proposeNote()} ${photo.description || ''}`);
       const needle = key.toLowerCase().includes('phone')
         ? String(f.value).replace(/\D+/g, '') : loosely(f.value);
       if (needle && !hay.includes(needle)) {
-        return { level: 'warn', label: 'not in the evidence',
-                 why: 'This value does not appear in the description of the photograph, so it '
-                    + 'may be something the model knows rather than something it saw. Check it '
-                    + 'against the photo before sending.' };
+        add('warn', 'not in the description',
+            'The description of the photograph does not contain this value, so it may be '
+            + 'something the model knew rather than something it read. Often there is a good '
+            + 'reason — it is worth a glance at the photo before sending.');
       }
     }
 
     if (!field && !(key in (photo.entity?.tags || {}))) {
-      return { level: 'warn', label: 'off-schema',
-               why: 'The reference editor does not offer this key for this kind of object. That '
-                  + 'is allowed, but worth a second look.' };
+      add('warn', 'off-schema',
+          'The reference editor does not offer this key for this kind of object. That is '
+          + 'allowed, but worth a second look.');
     }
-    return { level: 'ok' };
+
+    // Nothing here is going anywhere, so advice about improving it is noise.
+    const blocks = found.filter(x => x.level === 'block');
+    const findings = blocks.length ? blocks : found;
+    return { level: blocks.length ? 'block' : findings.length ? 'warn' : 'ok', findings };
   }
 
   /* ---------- where a proposed value came from ----------
@@ -3830,23 +3843,23 @@ out center tags 250;`;
   }
 
   /** Spelled out under the row, for the two that want more than a pill. */
-  function vocabNote(f) {
+  /** A [label, prose] pair for the fold, or null when there is nothing to say. */
+  function vocabWhy(f) {
     const v = f.vocab;
-    if (!v || (v.kind !== 'unseen' && v.kind !== 'rare')) return '';
+    if (!v || (v.kind !== 'unseen' && v.kind !== 'rare')) return null;
     const which = v.missing.length > 1
-      ? `${v.missing.map(m => `\u201c${esc(m)}\u201d`).join(', ')} are`
-      : `\u201c${esc(v.missing[0])}\u201d is`;
+      ? `${v.missing.map(x => `\u201c${x}\u201d`).join(', ')} are`
+      : `\u201c${v.missing[0]}\u201d is`;
     // Off-schema keys have no suggestion list to be absent from; for those the
     // usage count is the whole of what can be said.
-    const against = v.offSchema ? `not a value ${esc(v.label)} is usually given`
-                                : `not among the values ${esc(v.label)} suggests`;
-    return `<div class="small text-warning-emphasis text-break mt-1">
-      <i class="bi bi-question-circle me-1"></i>${which} ${against}${v.kind === 'unseen'
+    const against = v.offSchema ? `not a value ${v.label} is usually given`
+                                : `not among the values ${v.label} suggests`;
+    return [v.kind === 'unseen' ? 'never used in OSM' : `used ${v.count}\u00d7 in OSM`,
+      `${which} ${against}${v.kind === 'unseen'
         ? ', and nothing in OpenStreetMap uses it. This key is open, so a new value is allowed '
-          + '— but check the wording is what a mapper here would use.'
+          + '\u2014 but check the wording is what a mapper here would use.'
         : `, and only ${v.count} object${v.count === 1 ? '' : 's'} in OpenStreetMap use it. `
-          + 'That is allowed, but an established value is usually better.'}
-    </div>`;
+          + 'That is allowed, but an established value is usually better.'}`];
   }
 
   async function reviewFacts(facts) {
@@ -3864,66 +3877,99 @@ out center tags 250;`;
     return current === f.value ? 'same' : 'update';
   };
 
-  /* Confidence and correctness are different axes, and giving them the same
-     palette made two amber pills sit side by side on one row meaning "the model
-     is fairly sure" and "the model may have invented this". Confidence is now a
-     quiet outline; solid green/amber/red is reserved for validation verdicts. */
-  const CONF_CLASS = {
-    high: 'border text-success-emphasis',
-    medium: 'border text-warning-emphasis',
-    low: 'border text-body-secondary',
-  };
-  const confBadge = f => `<span class="badge fw-normal ${CONF_CLASS[f.confidence] || 'border text-body-secondary'}"
-      title="How sure the model was">${esc(f.confidence || '?')} confidence</span>`;
+  /* Confidence is the model's, about itself: the least important thing on the
+     row, and previously the widest badge on it at "medium confidence". Now a
+     word in the margin, with the meaning in its tooltip. */
+  /* A runaway value is the thing being rejected, not something to read: three
+     hundred characters of it pushed every other row off the screen. Shortened
+     for display only — the value itself is untouched, and the whole of it is in
+     the tooltip and in the XML preview. */
+  const VALUE_SHOW = 80;
+  const shortValue = v => codepoints(v) > VALUE_SHOW
+    ? [...String(v)].slice(0, VALUE_SHOW).join('') + '…' : String(v ?? '');
 
-  const reviewBadge = f => {
-    const r = f.review;
-    if (!r || r.level === 'ok') return '';
-    return `<span class="badge text-bg-${r.level === 'block' ? 'danger' : 'warning'}">${esc(r.label)}</span>`;
+  const CONF_SHORT = { high: 'high', medium: 'med', low: 'low' };
+  const confMark = f => f.confidence
+    ? `<span class="small text-body-tertiary flex-shrink-0" title="How sure the model was"
+         >${esc(CONF_SHORT[f.confidence] || f.confidence)}</span>` : '';
+
+  /* Two weights for a flag, and only two. Solid red is "this cannot go"; an
+     amber outline is "look at this". Everything advisory used to be solid amber
+     as well, so a key the editor merely does not list shouted as loudly as a
+     value that will not parse. */
+  const flag = (level, text) => `<span class="badge fw-normal ${level === 'block'
+    ? 'text-bg-danger' : 'border text-warning-emphasis'}">${esc(text)}</span>`;
+
+  const reviewBadges = f => (f.review?.findings || []).map(x => flag(x.level, x.label)).join('');
+
+  /* Every flag on one line of its own. Mixed in beside the key they wrapped
+     differently on every row, which is what made the list hard to read down. */
+  const flagRow = f => {
+    const flags = `${reviewBadges(f)}${hoursBadge(f)}${vocabBadge(f)}`;
+    return flags ? `<span class="d-flex flex-wrap gap-1 mt-1">${flags}</span>` : '';
   };
 
-  const reviewNote = (f, i) => {
-    const r = f.review;
-    if (!r || r.level === 'ok') return '';
-    const swap = r.replace
-      ? `<span class="d-block mt-1">Use instead:
-          <code>${esc(Object.entries(r.replace).map(([k, v]) => `${k}=${v}`).join(' '))}</code>
-          <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button"
-                  data-replace="${i}">use it</button></span>` : '';
-    return `<div class="small text-${r.level === 'block' ? 'danger' : 'warning'}-emphasis text-break mt-1">
-      <i class="bi bi-${r.level === 'block' ? 'x-octagon' : 'exclamation-triangle'} me-1"></i>${esc(r.why)}
-      ${r.level === 'block' ? '<span class="d-block">Cannot be staged.</span>' : ''}${swap}
-    </div>`;
+  /* The badge names the problem in two words; the paragraph explaining it is
+     what made these rows tall and ragged, and there can now be several. So the
+     paragraphs fold away and the badges stay — with two things deliberately
+     held out of the fold, because neither is explanation: the fact that a row
+     cannot be sent, and the button that fixes it. Reading why is one tap;
+     acting, and knowing the consequence, are not. */
+
+  /** The fix, when there is one. Always inline. */
+  const fixLine = (code, attr, i) => `
+    <div class="small text-break mt-1">Use instead:
+      <code>${esc(code)}</code>
+      <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button"
+              data-${attr}="${i}">use it</button></div>`;
+
+  const rowActions = (f, i) => {
+    const swap = (f.review?.findings || []).find(x => x.replace);
+    const h = f.hours;
+    return (swap
+        ? fixLine(Object.entries(swap.replace).map(([k, v]) => `${k}=${v}`).join(' '), 'replace', i)
+        : '')
+      + (h && h.ok && h.canonical ? fixLine(h.canonical, 'canonical', i) : '');
+  };
+
+  /** The one consequence that must never be behind a disclosure. */
+  const blockedLine = f =>
+    f.review?.level === 'block' || f.hours?.ok === false
+      ? '<div class="small text-danger-emphasis mt-1">Cannot be staged.</div>' : '';
+
+  /** Everything that merely explains, gathered into one disclosure. */
+  const whyFold = f => {
+    const parts = (f.review?.findings || []).map(x => [x.label, x.why]);
+    const h = f.hours;
+    if (h && !h.unavailable) {
+      if (!h.ok) {
+        parts.push(['invalid syntax', `opening_hours will not parse: ${h.error || ''}. `
+          + 'Re-run, or fix it in an OpenStreetMap editor.']);
+      } else if (h.warnings.length) parts.push(['check syntax', h.warnings[0]]);
+    }
+    const v = vocabWhy(f);
+    if (v) parts.push(v);
+    if (!parts.length) return '';
+    return `<details class="small mt-1">
+      <summary class="text-body-secondary">Why ${parts.length === 1 ? 'this is flagged'
+        : `these ${parts.length} flags`}</summary>
+      <div class="mt-1">${parts.map(([label, why]) => `
+        <p class="text-body-secondary text-break mb-1"><span class="fw-medium">${esc(label)}:</span>
+          ${esc(why)}</p>`).join('')}</div>
+    </details>`;
   };
 
   const hoursBadge = f => {
     const h = f.hours;
     if (!h || h.unavailable) return '';
-    if (!h.ok) return '<span class="badge text-bg-danger">invalid syntax</span>';
-    if (h.warnings.length) return '<span class="badge text-bg-warning">check syntax</span>';
-    return '<span class="badge text-bg-success"><i class="bi bi-check2 me-1"></i>valid</span>';
+    if (!h.ok) return flag('block', 'invalid syntax');
+    if (h.warnings.length) return flag('warn', 'check syntax');
+    // Outline, not solid: this is a good result, and a solid green pill on
+    // every hours row shouts as loudly as the things that are wrong.
+    return '<span class="badge border fw-normal text-success-emphasis">'
+      + '<i class="bi bi-check2 me-1"></i>valid</span>';
   };
 
-  /* The validator's own message, and the value it would rather have. Applying
-     the canonical form is offered, never done for you: "Mo-Fr 9-5" prettifies
-     to 09:00-05:00, which is syntactically clean and factually wrong. */
-  const hoursNote = (f, i) => {
-    const h = f.hours;
-    if (!h || h.unavailable) return '';
-    if (!h.ok) {
-      return `<div class="small text-danger-emphasis text-break mt-1">
-        <i class="bi bi-x-octagon me-1"></i>opening_hours will not parse: ${esc(h.error || '')}
-        <span class="d-block">Cannot be staged. Re-run, or fix it in an OSM editor.</span></div>`;
-    }
-    if (!h.warnings.length && !h.canonical) return '';
-    return `<div class="small text-warning-emphasis text-break mt-1">
-      ${h.warnings.length ? `<i class="bi bi-exclamation-triangle me-1"></i>${esc(h.warnings[0])}` : ''}
-      ${h.canonical ? `<span class="d-block mt-1">Use instead:
-          <code>${esc(h.canonical)}</code>
-          <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" type="button"
-                  data-canonical="${i}">use it</button></span>` : ''}
-    </div>`;
-  };
 
   /* ---------- the survey itself is a contribution ----------
      Walking to a place and confirming its tags are still right is the most
@@ -3957,11 +4003,15 @@ out center tags 250;`;
           <input class="form-check-input mt-1 flex-shrink-0" type="checkbox"
                  id="surveyCheck" ${on ? 'checked' : ''}>
           <span class="min-w-0 flex-grow-1">
-            <span class="d-flex flex-wrap align-items-baseline gap-1">
-              <code class="small">check_date</code>
+            <span class="d-flex align-items-baseline gap-2">
+              <span class="min-w-0 flex-grow-1 text-break">
+                <code class="small">check_date</code><span
+                  class="text-body-tertiary">=</span><code class="small">${esc(surveyDate())}</code>
+              </span>
+            </span>
+            <span class="d-flex flex-wrap gap-1 mt-1">
               <span class="badge border text-body-secondary fw-normal">from your visit</span>
             </span>
-            <div class="text-break"><code class="small">${esc(surveyDate())}</code></div>
             <div class="small text-body-secondary text-break">
               ${was ? `replaces <code>${esc(was)}</code>` : 'records that you checked this object in person'}
               ${photo.taken instanceof Date ? '' : ' &middot; the photo carries no date, so today is used'}
@@ -4016,19 +4066,28 @@ out center tags 250;`;
                 : `<input class="form-check-input mt-1 flex-shrink-0" type="checkbox" data-fact="${i}"
                      ${f.enabled ? 'checked' : ''}>`}
               <span class="min-w-0 flex-grow-1">
-                <span class="d-flex flex-wrap align-items-baseline gap-1">
-                  <code class="small">${esc(f.key)}</code>
-                  ${reviewBadge(f)}${hoursBadge(f)}${vocabBadge(f)}${confBadge(f)}
+                <!-- The tag, as a tag. Key and value used to sit on separate lines
+                     with the badges wedged between them, so the two halves of the
+                     one thing being proposed were the two things furthest apart. -->
+                <span class="d-flex align-items-baseline gap-2">
+                  <span class="min-w-0 flex-grow-1 text-break">
+                    <code class="small">${esc(f.key)}</code><span
+                      class="text-body-tertiary">=</span><code class="small"
+                      ${codepoints(f.value) > VALUE_SHOW ? `title="${esc(f.value)}"` : ''}
+                      >${esc(shortValue(f.value))}</code>
+                  </span>
+                  ${confMark(f)}
                 </span>
-                <div class="text-break"><code class="small">${esc(f.value)}</code></div>
-                ${kind === 'update' ? `<div class="small text-body-secondary text-break">
+                ${flagRow(f)}
+                ${kind === 'update' ? `<div class="small text-body-secondary text-break mt-1">
                     replaces <code>${esc(photo.entity.tags[f.key])}</code></div>` : ''}
-                ${f.evidence ? `<div class="small text-body-secondary fst-italic text-break">“${esc(f.evidence)}”</div>` : ''}
+                ${f.evidence ? `<div class="small text-body-secondary fst-italic text-break mt-1"
+                    >“${esc(f.evidence)}”</div>` : ''}
                 ${(photo.facts || []).some((o, j) => j !== i && o.key === f.key)
                   ? `<div class="small text-body-secondary mt-1">
                       <i class="bi bi-info-circle me-1"></i>Another proposal offers a different
                       <code>${esc(f.key)}</code>; only one can be sent.</div>` : ''}
-                ${reviewNote(f, i)}${hoursNote(f, i)}${vocabNote(f)}
+                ${blockedLine(f)}${rowActions(f, i)}${whyFold(f)}
               </span>
             </label>`).join('')}
         </div>`;
@@ -4063,7 +4122,10 @@ out center tags 250;`;
         e.preventDefault();
         const idx = Number(btn.dataset.replace);
         const fact = photo.facts[idx];
-        const pairs = Object.entries(fact.review.replace);
+        // The deprecation rule is one finding among possibly several now.
+        const swap = (fact.review?.findings || []).find(x => x.replace);
+        if (!swap) return;
+        const pairs = Object.entries(swap.replace);
         const [firstKey, firstValue] = pairs[0];
         Object.assign(fact, { key: firstKey, value: firstValue });
         for (const [k, v] of pairs.slice(1)) {

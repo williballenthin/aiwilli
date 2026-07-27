@@ -647,6 +647,12 @@ implementation the OSM tooling uses. It is 146 kB brotli, most of it holiday tab
 is **loaded lazily** — only when a proposal carries such a key — with an SRI hash. Three
 outcomes:
 
+Every flag is shown, not merely the first. A value can be both a key the editor
+does not offer *and* absent from the description; being told only about the first
+leaves the second to be discovered after the decision is made. The one exception
+is at the end of the check: a proposal that cannot be staged at all has no use
+for advice about how to improve it, so blocks suppress the advisories.
+
 | verdict | badge | what happens |
 | --- | --- | --- |
 | parses cleanly | green **valid** | ticked, stageable, nothing else to do |
@@ -695,6 +701,45 @@ never a vocabulary in the first place.
 The worked example is `access=customer`. It is not obviously wrong; it is the singular of
 a value OSM really does use. Two million objects say `customers` and none say `customer`,
 and that is the only thing that gives it away.
+
+### How a proposal reads
+
+One row is one tag, and it is laid out as one:
+
+```
+[x] addr:city=Harrogate                                       high
+    off-schema   not in the description
+    “Below the legend, in smaller black text: 'Valley Gardens |
+     Harlow Moor Drive | Harrogate | HG2 0JT'.”
+    ▸ Why these 2 flags
+```
+
+Four decisions, each fixing something that made the list hard to read down:
+
+- **Key and value are adjacent**, as `key=value`. They used to sit on separate
+  lines with the badges wedged between them, so the two halves of the one thing
+  being proposed were the two things furthest apart on the row.
+- **Flags get a line of their own.** Mixed in beside the key they wrapped
+  differently on every row.
+- **Confidence is a word in the margin** — `high`, `med`, `low`, with the meaning
+  in its tooltip. It is the model's opinion of itself, the least important thing
+  on the row, and at "medium confidence" it was the widest badge on it.
+- **The prose folds away.** The badge already names the problem in two words; the
+  paragraph explaining it is what made rows tall and ragged, and there can now be
+  several. Two things stay out of the fold because neither is explanation: the
+  fact that a row **cannot be staged**, and the **button that fixes it**. Reading
+  why is one tap; acting, and knowing the consequence, are not.
+
+A value longer than 80 characters is shortened *for display*, with the whole of
+it in the tooltip and in the XML preview. Three hundred characters of a value
+that is being rejected anyway pushed every other row off the screen.
+
+Two badge weights, and only two: **solid red** is *this cannot go*, an **amber
+outline** is *look at this*. Advice used to be solid amber as well, so a key the
+editor merely does not list shouted as loudly as a value that will not parse.
+*Not in the description* is the softest of these on purpose — the description is
+a summary, and a mapper who was standing there often knows exactly why the value
+is right, so it says so and asks for a glance rather than an alibi.
 
 ### Reviewing and staging
 

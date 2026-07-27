@@ -537,21 +537,25 @@ http.createServer(async (req, res) => {
        build output, and the first run records them once. The rewrite table
        above is the list of what may be asked for, so an unknown path is a
        mistake rather than something to go and fetch. */
+    /* Bootstrap Icons' stylesheet asks for its font files by relative path, so
+       they arrive as /vendor/fonts/*. Getting this wrong is quiet and costly:
+       every icon falls back to a "¿" and every screenshot looks broken in a way
+       that has nothing to do with the page. */
+    if (path.startsWith('/vendor/fonts/')) {
+      const body = await curl('https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font'
+        + path.slice('/vendor'.length), true);
+      return res.writeHead(200, { 'content-type': path.endsWith('.woff2') ? 'font/woff2' : 'font/woff' })
+        .end(body);
+    }
+
     if (path.startsWith('/vendor/')) {
-      const upstream = REWRITES.find(([, to]) => to === path)?.[0];
+      const upstream = REWRITES.find(([, to]) => to === path.replace(/\?.*$/, ''))?.[0];
       if (!upstream) { res.writeHead(404).end('not a vendored file'); return; }
       const ext = path.slice(path.lastIndexOf('.'));
       const binary = ext === '.woff2';
       const body = await curl(upstream, binary);
       res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream' }).end(body);
       return;
-    }
-
-    /* Bootstrap Icons' stylesheet asks for its font files by relative path. */
-    if (path.startsWith('/font/')) {
-      const body = await curl('https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3'
-        + path.replace(/\?.*$/, ''), true);
-      return res.writeHead(200, { 'content-type': 'font/woff2' }).end(body);
     }
 
     console.log('404 ->', path); res.writeHead(404).end('not found');

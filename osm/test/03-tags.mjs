@@ -80,10 +80,29 @@ await driveToProposals(page);
   check('200 emoji are 200 characters, not 400 — the count is codepoints',
     emoji && emoji.selectable, emoji?.text.slice(0, 60));
 
+  /* Absent from the description. Worth saying, but not an accusation — the
+     description is a summary, and a mapper who was standing there often knows
+     exactly why the value is right. So it is an amber outline rather than a
+     solid badge, and it still unticks rather than blocks. */
   const site = row(rows, 'website');
-  check('a value absent from the evidence is flagged but still the mapper\'s call',
-    site && site.selectable && !site.checked && /not in the evidence/.test(site.text),
+  check('a value absent from the description is flagged but still the mapper\'s call',
+    site && site.selectable && !site.checked && !!badge(site, /not in the description/),
     site?.badges.map(b => b.text).join(' | '));
+  check('and it is worded as something to glance at, not an accusation',
+    /Often there is a good reason/.test(site?.text || ''), site?.text.slice(0, 90));
+
+  /* Every flag, not merely the first. A value can be both a key the editor does
+     not offer and absent from the description, and being told only about the
+     first leaves the second to be discovered after the decision is made. */
+  const many = rows.find(r => r.badges.filter(b => /deprecated|never used|not in the description/
+    .test(b.text)).length > 1);
+  check('a proposal with two things wrong shows both',
+    !!many, rows.map(r => `${r.key}[${r.badges.map(b => b.text).join(',')}]`).join(' ').slice(0, 120));
+
+  // Solid red is reserved for "this cannot go"; advice is an amber outline.
+  const solids = rows.flatMap(r => r.badges).filter(b => /text-bg-warning/.test(b.cls));
+  check('nothing advisory shouts in solid amber', solids.length === 0,
+    solids.map(b => b.text).join(' | '));
 }
 
 // ---- opening_hours, in its three shapes ------------------------------------
