@@ -229,6 +229,22 @@ first. The source line under the results says how many areas were read, whether 
 from this browser and how old they are, and offers a **refresh** that drops every area
 covering the widest search at that position.
 
+### Forgetting it
+
+Areas are held for a day, which is right for *the same photo again* and wrong for *I just
+added this in Every Door and want to tag it here*. Two ways out:
+
+- step 3's **refresh** link, which drops every area covering the widest search at that
+  photo's position — in context, but only once a search has run;
+- **Settings → Cached map → Forget the cached map**, which drops the lot from anywhere.
+  It is second in the dialog, above Models, because it is the one control there you reach
+  for mid-survey rather than while configuring. It reports what is held (*1 area and 10
+  objects held, 46 kB*), acts on the press rather than on *Save*, clears the session's
+  record of which areas have been warmed — without that the warm-up would decline to
+  re-fetch them — and **re-runs the current search by itself**, since the reason for
+  pressing it is almost always "show me the thing I just added". Staged edits and the
+  OAuth token are not touched.
+
 ### An index, not the objects
 
 A tile stores six fields per element — type, id, latitude, longitude, the one tag that
@@ -374,8 +390,8 @@ key/value output.
 The **Settings** button holds the OpenRouter API key and the model. Both live in
 `localStorage` under `photomap:settings:1`.
 
-The dialog is three named sections — **Appearance**, **Models**, **OpenStreetMap
-account** — and within each one every field reads the same way: label, then control, then
+The dialog is four named sections — **Appearance**, **Cached map**, **Models**,
+**OpenStreetMap account** — and within each one every field reads the same way: label, then control, then
 the help text explaining it. Nothing is a hint you have to read before you can see what it
 is hinting about. Section headings are visually distinct from the field labels beneath
 them, every control has a real `<label>` bound to it, and every button carries visible

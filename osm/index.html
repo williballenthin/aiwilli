@@ -583,6 +583,26 @@
 
         <hr class="my-4">
 
+        <!-- Second, not buried: this is the one thing in here you reach for
+             mid-survey, when you have just added something in another editor
+             and want this app to see it. -->
+        <h3 class="set-section">Cached map</h3>
+
+        <div class="mb-3">
+          <div class="d-grid">
+            <button class="btn btn-outline-secondary" type="button" id="btnForgetMap">
+              <i class="bi bi-trash me-1"></i>Forget the cached map
+            </button>
+          </div>
+          <div class="form-text" id="mapCacheNote"></div>
+          <div class="form-text">Areas are held for a day so a second photo in the same
+            place needs no download. Drop them when you have just added or changed
+            something in another editor — StreetComplete, Every Door, iD — and want it to
+            show up here. Takes effect at once; nothing staged for upload is touched.</div>
+        </div>
+
+        <hr class="my-4">
+
         <h3 class="set-section">Models</h3>
         <p class="form-text mt-0">Used by steps 5 and 6, through your own OpenRouter account.
           Everything else on the page works without them.</p>
@@ -1548,6 +1568,55 @@ out center tags 250;`;
     themeOnOpen = null;
   });
 
+  /* ---------- forgetting the cached map ----------
+     The areas are held for a day, which is right for "the same photo again" and
+     wrong for "I just added this in Every Door and want to tag it here". Step
+     3's own refresh link covers the second case for one photo, but only once a
+     search has run and only for that photo's area; this drops the lot, from
+     anywhere, mid-survey. */
+
+  const mapCacheSize = () => {
+    const keys = Object.keys(localStorage)
+      .filter(k => k.startsWith(TILE_PREFIX) || k.startsWith(ELEM_PREFIX));
+    return {
+      areas: keys.filter(k => k.startsWith(TILE_PREFIX)).length,
+      objects: keys.filter(k => k.startsWith(ELEM_PREFIX)).length,
+      bytes: keys.reduce((n, k) => n + (localStorage.getItem(k)?.length || 0), 0),
+    };
+  };
+
+  function renderMapCache(justCleared) {
+    const { areas, objects, bytes } = mapCacheSize();
+    const note = $('mapCacheNote');
+    if (justCleared) {
+      note.innerHTML = '<span class="text-success-emphasis">'
+        + '<i class="bi bi-check2 me-1"></i>Forgotten. The next search downloads it again.</span>';
+    } else {
+      note.textContent = areas
+        ? `${areas} area${areas === 1 ? '' : 's'} and ${objects} object`
+          + `${objects === 1 ? '' : 's'} held, ${Math.round(bytes / 1024)} kB.`
+        : 'Nothing held right now.';
+    }
+    $('btnForgetMap').disabled = !areas && !objects;
+  }
+
+  function forgetMapCache() {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith(TILE_PREFIX) || k.startsWith(ELEM_PREFIX)) localStorage.removeItem(k);
+    }
+    // Without this the warm-up would decline to re-fetch areas it believes it
+    // has already handled this session, and the drop would look like it failed.
+    prefetched.clear();
+    renderMapCache(true);
+
+    // The reason for pressing this is almost always "show me the thing I just
+    // added", so re-ask rather than making them find the way back to step 3.
+    if (photo?.lat != null && photo.nearby) {
+      photo.nearby = null;
+      loadNearby(RADII[0]);
+    }
+  }
+
   function openSettings() {
     themeOnOpen = localStorage.getItem(THEME_KEY) || 'auto';
     $('setApiKey').value = settings.apiKey || '';
@@ -1558,6 +1627,7 @@ out center tags 250;`;
     $('setTagEffort').value = settings.tagEffort;
     $('setTheme').value = localStorage.getItem(THEME_KEY) || 'auto';
     renderOsmSettings();
+    renderMapCache(false);
     settingsModal.show();
     populateModels(false);
   }
@@ -4641,6 +4711,8 @@ out center tags 250;`;
   $('modelFilter').addEventListener('input', () => renderModelOptions('setModel'));
   $('tagModelFilter').addEventListener('input', () => renderModelOptions('setTagModel'));
   $('btnReloadModels').addEventListener('click', () => populateModels(true));
+  // An action, not a setting: it happens on the press, not on Save.
+  $('btnForgetMap').addEventListener('click', forgetMapCache);
   $('btnRevealKey').addEventListener('click', () => {
     const el = $('setApiKey');
     el.type = el.type === 'password' ? 'text' : 'password';
