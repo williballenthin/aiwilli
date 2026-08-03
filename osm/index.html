@@ -120,6 +120,16 @@
   .set-section { font-size: .8125rem; font-weight: 600; letter-spacing: .06em;
                  text-transform: uppercase; color: var(--bs-secondary-color); margin-bottom: .75rem; }
 
+  /* A tag that leads somewhere. Underlined faintly rather than coloured: the
+     code is already pink, and a blue link inside it would read as a second
+     thing. Inherits colour so the key and value still look like the tag they
+     are. */
+  .wiki-link { text-decoration: none; color: inherit; }
+  .wiki-link code { text-decoration: underline dotted;
+                    text-decoration-color: var(--bs-secondary-color);
+                    text-underline-offset: .2em; }
+  .wiki-link:hover code, .wiki-link:focus-visible code { text-decoration-style: solid; }
+
   label.list-group-item { cursor: pointer; }
   label.list-group-item .form-check-input { cursor: pointer; }
 
@@ -447,6 +457,12 @@
               </h2>
               <div id="phasePropose" class="accordion-collapse collapse" data-bs-parent="#phases">
                 <div class="accordion-body p-0">
+
+                  <!-- What is being tagged, and where its modelling is written down.
+                       Reviewing proposals means knowing how this kind of object is
+                       meant to be described, and step 4 is collapsed by the time
+                       anyone gets here. -->
+                  <div class="px-3 pt-3 small" id="proposeEntity"></div>
 
                   <!-- Optional, and used on a minority of runs, so it starts folded
                        away: open, it pushed the run button and the proposals it
@@ -3357,6 +3373,7 @@ out center tags 250;`;
     proposeSaved = false;           // these are different facts now
     $('propJsonText').textContent = '';
     $('proposeList').replaceChildren();
+    $('proposeEntity').replaceChildren();
     $('proposeCta').replaceChildren();
 
     const finish = (state, summary, status) => {
@@ -3880,6 +3897,33 @@ out center tags 250;`;
   /* Confidence is the model's, about itself: the least important thing on the
      row, and previously the widest badge on it at "medium confidence". Now a
      word in the margin, with the meaning in its tooltip. */
+  /* Reviewing a proposal means knowing how the thing is meant to be modelled,
+     and nobody carries the whole schema in their head. So the key and, where
+     there is a page for it, the value link straight to their wiki articles.
+
+     Two page shapes: Key:<key> documents what a key means and Tag:<key>=<value>
+     documents one particular value of it. A Tag: page only reliably exists for
+     values the reference editor offers or the database widely uses, which is
+     exactly what the vocabulary check has already worked out — so the value is
+     linked only when that says a page is likely, rather than sending the reader
+     to a "this page does not exist" for a value the model just coined. */
+  const WIKI = 'https://wiki.openstreetmap.org/wiki/';
+  // A colon is part of a wiki title, not something to escape: Key:name:de is a
+  // real page, and Key:name%3Ade is an ugly way to ask for it.
+  const wikiPart = x => encodeURIComponent(x).replace(/%3A/g, ':');
+  const wikiKey = k => WIKI + 'Key:' + wikiPart(k);
+  const wikiTag = (k, v) => WIKI + 'Tag:' + wikiPart(k) + '%3D' + wikiPart(v);
+
+  const wikiLink = (href, inner, title) =>
+    `<a class="wiki-link" href="${esc(href)}" target="_blank" rel="noopener"
+        title="${esc(title)} — opens the OpenStreetMap wiki in a new tab">${inner}</a>`;
+
+  /** True when a Tag: page is likely to exist for this exact value. */
+  const valueHasPage = f =>
+    ['closed', 'listed', 'common'].includes(f.vocab?.kind)
+    // A semicolon list is several values; no one page documents the combination.
+    && !String(f.value).includes(';');
+
   /* A runaway value is the thing being rejected, not something to read: three
      hundred characters of it pushed every other row off the screen. Shortened
      for display only — the value itself is untouched, and the whole of it is in
@@ -4005,7 +4049,8 @@ out center tags 250;`;
           <span class="min-w-0 flex-grow-1">
             <span class="d-flex align-items-baseline gap-2">
               <span class="min-w-0 flex-grow-1 text-break">
-                <code class="small">check_date</code><span
+                ${wikiLink(wikiKey('check_date'), '<code class="small">check_date</code>',
+                           'What check_date means')}<span
                   class="text-body-tertiary">=</span><code class="small">${esc(surveyDate())}</code>
               </span>
             </span>
@@ -4021,7 +4066,30 @@ out center tags 250;`;
       </div>`;
   };
 
+  function renderProposeEntity() {
+    const host = $('proposeEntity');
+    if (!host) return;
+    const e = photo?.entity;
+    if (!e) { host.replaceChildren(); return; }
+    host.innerHTML = `
+      <span class="text-body-secondary">Tagging</span>
+      <span class="fw-medium">${esc(e.name || e.category)}</span>
+      <span class="text-body-secondary">&middot;</span>
+      ${(() => {
+        // Split on the first "=" only: a value may contain one of its own.
+        const at = e.pair.indexOf('=');
+        return wikiLink(wikiTag(e.pair.slice(0, at), e.pair.slice(at + 1)),
+                        `<code class="small">${esc(e.pair)}</code>`,
+                        `How ${e.pair} is modelled`);
+      })()}
+      <a class="link-secondary ms-1" href="https://www.openstreetmap.org/${esc(e.id)}"
+         target="_blank" rel="noopener" title="This object on openstreetmap.org — opens in a new tab"
+        ><i class="bi bi-box-arrow-up-right"></i><span class="visually-hidden">Open ${esc(e.id)}
+         on OpenStreetMap</span></a>`;
+  }
+
   function renderProposals() {
+    renderProposeEntity();
     const host = $('proposeList');
     const facts = photo.facts || [];
     if (!facts.length) {
@@ -4071,10 +4139,16 @@ out center tags 250;`;
                      one thing being proposed were the two things furthest apart. -->
                 <span class="d-flex align-items-baseline gap-2">
                   <span class="min-w-0 flex-grow-1 text-break">
-                    <code class="small">${esc(f.key)}</code><span
-                      class="text-body-tertiary">=</span><code class="small"
-                      ${codepoints(f.value) > VALUE_SHOW ? `title="${esc(f.value)}"` : ''}
-                      >${esc(shortValue(f.value))}</code>
+                    ${wikiLink(wikiKey(f.key), `<code class="small">${esc(f.key)}</code>`,
+                               `What ${f.key} means`)}<span
+                      class="text-body-tertiary">=</span>${(() => {
+                      const shown = `<code class="small"
+                        ${codepoints(f.value) > VALUE_SHOW ? `title="${esc(f.value)}"` : ''}
+                        >${esc(shortValue(f.value))}</code>`;
+                      return valueHasPage(f)
+                        ? wikiLink(wikiTag(f.key, f.value), shown, `What ${f.key}=${f.value} means`)
+                        : shown;
+                    })()}
                   </span>
                   ${confMark(f)}
                 </span>
@@ -5135,6 +5209,7 @@ out center tags 250;`;
     $('propJsonText').textContent = '';
     $('proposeControls').replaceChildren();
     $('proposeList').replaceChildren();
+    $('proposeEntity').replaceChildren();
     $('proposeCta').replaceChildren();
     proposeSaved = false;
     // The note is about one object seen on one visit; it does not carry over.

@@ -105,6 +105,61 @@ await driveToProposals(page);
     solids.map(b => b.text).join(' | '));
 }
 
+// ---- the wiki, one tap from every tag ---------------------------------------
+// Reviewing a proposal means knowing how the thing is meant to be modelled, and
+// nobody carries the schema in their head.
+{
+  await setMode({ vocab: true });
+  await propose(page);
+  const links = await page.evaluate(() => ({
+    entity: [...document.querySelectorAll('#proposeEntity a')]
+      .map(a => `${a.getAttribute('href')}|${a.target}`),
+    rows: [...document.querySelectorAll('#proposeList .list-group-item')].map(el => ({
+      key: el.querySelector('code')?.textContent,
+      hrefs: [...el.querySelectorAll('a.wiki-link')].map(a => a.getAttribute('href')),
+      targets: [...el.querySelectorAll('a.wiki-link')].map(a => a.target),
+    })),
+  }));
+  check('the object under review names its own wiki page',
+    links.entity.some(l => /wiki\/Tag:leisure%3Dsports_centre\|_blank/.test(l)),
+    links.entity.join(' '));
+  check('every proposal links its key to the wiki',
+    links.rows.length > 0 && links.rows.every(r => r.hrefs.some(h => /\/wiki\/Key:/.test(h))),
+    links.rows.filter(r => !r.hrefs.some(h => /Key:/.test(h))).map(r => r.key).join(','));
+  check('and all of them open in a new tab',
+    links.rows.every(r => r.targets.every(t => t === '_blank')));
+  // A Tag: page reliably exists only for a value the editor offers or the
+  // database widely uses — otherwise the link would land on "no such page".
+  const chair = links.rows.find(r => r.key === 'wheelchair');
+  check('a value from a fixed list links to its own page too',
+    chair?.hrefs.some(h => /\/wiki\/Tag:wheelchair%3Dlimited/.test(h)), chair?.hrefs.join(' '));
+  const coined = links.rows.find(r => r.key === 'cuisine');
+  check('a value the model coined links only the key, not a page that does not exist',
+    coined && !coined.hrefs.some(h => /\/wiki\/Tag:/.test(h)), coined?.hrefs.join(' '));
+  // A colon belongs in a wiki title; Key:name%3Ade is an ugly way to ask for it.
+  await setMode({ badTags: true });
+  await propose(page);
+  const de = await page.evaluate(() =>
+    [...document.querySelectorAll('#proposeList a.wiki-link')]
+      .map(a => a.getAttribute('href')).find(h => /name/.test(h)));
+  check('a key with a colon in it is not over-escaped', /\/wiki\/Key:name:de$/.test(de || ''), de);
+
+  // The rows are labels, so a link inside one must not tick the box it sits in.
+  await setMode({ vocab: true });
+  await propose(page);
+  const toggled = await page.evaluate(() => {
+    const el = [...document.querySelectorAll('#proposeList .list-group-item')]
+      .find(x => x.querySelector('input') && x.querySelector('a.wiki-link'));
+    const box = el.querySelector('input');
+    const was = box.checked;
+    el.querySelector('a.wiki-link').dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return was !== box.checked;
+  });
+  check('following a link does not tick the row it is in', !toggled);
+  await setMode();
+}
+
 // ---- opening_hours, in its three shapes ------------------------------------
 {
   await setMode({ oh: 'clean' });

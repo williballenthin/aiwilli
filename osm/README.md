@@ -714,6 +714,26 @@ One row is one tag, and it is laid out as one:
     ▸ Why these 2 flags
 ```
 
+The key is a link, and so is the value when there is a page for it. Reviewing a
+proposal means knowing how the thing is meant to be modelled, and nobody carries
+the schema in their head — step 4 has all of it but is collapsed by the time
+anyone reaches here. Above the list, a line names the object being tagged and
+links its preset. Everything opens in a new tab.
+
+Two page shapes exist: `Key:<key>` documents what a key means, `Tag:<key>=<value>`
+documents one particular value. A `Tag:` page reliably exists only for a value
+the reference editor offers or the database widely uses — which the vocabulary
+check has already worked out — so the value is linked only when a page is likely,
+rather than sending the reader to *this page does not exist* for a value the
+model coined. A colon is left unescaped: `Key:name:de` is a real page and
+`Key:name%3Ade` is an ugly way to ask for it.
+
+The links are underlined faintly rather than coloured. The code is already pink,
+and a blue link inside it would read as a second thing. The rows are `<label>`s,
+so a link inside one would be expected to tick its checkbox — it does not: the
+HTML spec skips a label's activation behaviour when the click lands on
+interactive content, which is checked rather than assumed.
+
 Four decisions, each fixing something that made the list hard to read down:
 
 - **Key and value are adjacent**, as `key=value`. They used to sit on separate
