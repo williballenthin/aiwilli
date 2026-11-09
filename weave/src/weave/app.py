@@ -11,7 +11,7 @@ import re
 import signal
 import subprocess
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -146,6 +146,13 @@ WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 SUMMARY_MODEL = "openai-codex/gpt-6-luna"
 SUMMARY_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (("reasoning_effort", "low"),)
 SUMMARY_INPUT_MAX_CHARS = 200_000
+SUMMARY_RETRY_INTERVAL = timedelta(hours=1)
+IMAGE_OMITTED = "*(image omitted)*"
+BASE64_IMAGE_DEFINITION = re.compile(
+    r"^\[(?P<label>[^\]\n]+)\]:[ \t]*<?data:image/[^\s>]*>?[ \t]*\n?", re.MULTILINE
+)
+BASE64_INLINE_IMAGE = re.compile(r"!\[[^\]\n]*\]\(data:image/[^)]*\)")
+TRANSCRIPT_HEADING = re.compile(r"^# .*Transcript", re.MULTILINE)
 SUMMARY_PROMPT = (
     "Summarize this document in exactly one sentence."
     " This summary will appear in a daily index of notes and events."
@@ -762,6 +769,36 @@ def get_summary_input(content: str, limit: int = SUMMARY_INPUT_MAX_CHARS) -> str
     return content[:head] + marker + content[len(content) - tail :]
 
 
+def strip_base64_images(markdown: str) -> str:
+    """Replace base64-embedded images with a short marker.
+
+    Google Docs markdown exports embed each image as a reference definition like
+    `[image1]: <data:image/png;base64,...>`, which can be megabytes per note.
+    """
+    labels = {match.group("label") for match in BASE64_IMAGE_DEFINITION.finditer(markdown)}
+    result = BASE64_IMAGE_DEFINITION.sub("", markdown)
+    result = BASE64_INLINE_IMAGE.sub(IMAGE_OMITTED, result)
+    if labels:
+        references = re.compile(
+            r"!\[[^\]\n]*\]\[(?:" + "|".join(re.escape(label) for label in labels) + r")\]"
+        )
+        result = references.sub(IMAGE_OMITTED, result)
+    return result
+
+
+def get_note_summary_input(content: str) -> str:
+    """Return the part of a note to send to the summary model.
+
+    Drops base64 images and everything from a top-level `Transcript` heading on,
+    because Gemini meeting docs put their own notes above the verbatim transcript.
+    """
+    text = strip_base64_images(content)
+    match = TRANSCRIPT_HEADING.search(text)
+    if match:
+        text = text[: match.start()]
+    return text
+
+
 class SubprocessLlmInvoker:
     def run(self, model: str, prompt: str, content: str) -> str:
         """Run `llm` and return its stripped output, which may be empty.
@@ -1287,15 +1324,14 @@ class CalendarScraper:
                     logger.warning("calendar doc not accessible: %s", out_path.name)
                     continue
 
-                content = md_bytes
+                text = md_bytes.decode("utf-8", errors="replace")
                 if is_shared_notes(att_title):
-                    section = extract_section_for_date(
-                        md_bytes.decode("utf-8", errors="replace"), start_dt.date()
-                    )
+                    section = extract_section_for_date(text, start_dt.date())
                     if section is None:
                         logger.warning("no section for %s in %s", start_dt.date(), out_path.name)
                         continue
-                    content = section.encode("utf-8")
+                    text = section
+                content = strip_base64_images(text).encode("utf-8")
 
                 doc_url = f"https://docs.google.com/document/d/{file_id}"
                 front_matter = CALENDAR_TEMPLATE.render(
@@ -1751,6 +1787,11 @@ def get_session_message_count(session: SessionData) -> int:
     )
 
 
+def render_tool_names(tool_names: list[str]) -> str:
+    counts = Counter(tool_names)
+    return ", ".join(name if count == 1 else f"{name} ×{count}" for name, count in counts.items())
+
+
 def render_session_turns(session: SessionData) -> str:
     parts: list[str] = []
     for turn in session.turns:
@@ -1765,7 +1806,7 @@ def render_session_turns(session: SessionData) -> str:
             parts.append("")
         assistant_prefix = ""
         if turn.tool_names:
-            assistant_prefix = f"tools: {', '.join(turn.tool_names)}\n\n"
+            assistant_prefix = f"tools: {render_tool_names(turn.tool_names)}\n\n"
         assistant_texts = turn.assistant_texts or [""]
         for index, text in enumerate(assistant_texts):
             body = text
@@ -2546,10 +2587,17 @@ class DailyIndexEntry:
 
 
 class DailyNoteWriter:
-    def __init__(self, vault_root: Path, summarizer: NoteSummarizer | None = None):
+    def __init__(
+        self,
+        vault_root: Path,
+        summarizer: NoteSummarizer | None = None,
+        summary_retry_interval: timedelta = SUMMARY_RETRY_INTERVAL,
+    ):
         self.vault_root = vault_root
         self.layout = VaultLayout(vault_root)
         self.summarizer = summarizer
+        self.summary_retry_interval = summary_retry_interval
+        self._summary_failures: dict[Path, datetime] = {}
         self._lock = threading.RLock()
 
     def append_note_entry(self, received: datetime, note_path: Path, entry_type: str) -> Path:
@@ -3111,11 +3159,17 @@ class DailyNoteWriter:
             return existing_summary
         if self.summarizer is None:
             return ""
+        failed_at = self._summary_failures.get(note_path)
+        now = datetime.now(tz=UTC)
+        if failed_at is not None and now - failed_at < self.summary_retry_interval:
+            return ""
         try:
-            summary = self.summarizer.summarize(content)
+            summary = self.summarizer.summarize(get_note_summary_input(content))
         except SummarizationError as exc:
+            self._summary_failures[note_path] = now
             logger.warning("summarization failed for %s: %s", note_path, exc)
             return ""
+        self._summary_failures.pop(note_path, None)
         if not summary:
             note_path.write_text(
                 set_note_summary(content, self.SUMMARY_UNAVAILABLE)

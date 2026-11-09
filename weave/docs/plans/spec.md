@@ -58,6 +58,8 @@ Note summaries also require:
 - each host needs its own `codex login`, because refresh tokens rotate and a copied `auth.json` stops working on one of the hosts
 - when a summary call fails, the note gets an empty summary and the import continues
 - text longer than 200,000 characters is summarized from its start and its end; the middle is not sent to the model
+- note summaries leave out base64 images and everything from a top-level `# … Transcript` heading on, so a Gemini meeting doc is summarized from Gemini's own notes and not from the verbatim transcript
+- after a failed summary call, the daily-note rebuild waits one hour before it tries that note again
 
 GitHub import also requires:
 - `gh` CLI installed and authenticated
@@ -131,13 +133,14 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 - frontmatter includes `summary`, `source`, `type`, calendar/event metadata, and attendees
 - `import calendar --days N` controls the backfill window
 - file existence still acts as the cache key
+- base64-embedded images in the exported doc are replaced with `*(image omitted)*`; Google Docs exports embed slides and screenshots as base64 PNGs, which made single notes several megabytes
 
 6.5 Agent session scraper output
 - note path: `daily/YYYY/MM/DD/agent sessions/<session-id>.md`
 - frontmatter: `type`, compact `summary`, `agent`, `project`, `session_id`, `session_sha256`
 - the body summary lives inside a managed `weave:summary` region
 - the note body also includes metrics and the full conversation rendered as callouts
-- the conversation shows user messages, assistant text, and the names of the tools each assistant reply called; it omits tool arguments, tool results, and thinking
+- the conversation shows user messages, assistant text, and the names of the tools each assistant reply called, with repeats counted (`tools: Bash ×3, Read`); it omits tool arguments, tool results, and thinking
 - a context compaction shows as a `[!info] Compaction · HH:MM:SS` callout; the compaction summary text is not shown and is not sent to the summary model, because it repeats earlier conversation and can be most of a long session's text
 - the `User turns` and `Messages` metrics do not count compactions
 - frontmatter `summary` is intended for dense daily-note rendering and targets about 12 words

@@ -36,6 +36,7 @@ from weave.app import (
     get_args,
     get_github_activity_manifest_path,
     get_llm_command,
+    get_note_summary_input,
     get_summary_input,
     get_variant_address,
     get_weave_cache_dir,
@@ -48,6 +49,7 @@ from weave.app import (
     render_session_turns,
     resolve_vault_root,
     sanitize_filename,
+    strip_base64_images,
 )
 
 
@@ -508,6 +510,117 @@ class StaticSummarizer:
 class UnavailableSummarizer:
     def summarize(self, content: str) -> str:
         raise SummarizationError("llm command failed: credits depleted")
+
+
+class RecordingSummarizer:
+    def __init__(self) -> None:
+        self.contents: list[str] = []
+
+    def summarize(self, content: str) -> str:
+        self.contents.append(content)
+        return "Recorded summary."
+
+
+class CountingUnavailableSummarizer:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def summarize(self, content: str) -> str:
+        self.call_count += 1
+        raise SummarizationError("llm command failed: usage limit")
+
+
+MEETING_NOTE_WITH_IMAGES = """---
+summary: ""
+type: meeting_notes
+---
+# **📝 Notes**
+Decisions made about the release.
+
+![][image1]
+
+![slide](data:image/png;base64,AAAA)
+
+![][logo]
+
+# **📖 Transcript**
+Speaker: hello everyone
+
+[image1]: <data:image/png;base64,iVBORw0KGgo>
+
+[logo]: https://example.com/logo.png
+"""
+
+
+def test_strip_base64_images_removes_embedded_images_only() -> None:
+    result = strip_base64_images(MEETING_NOTE_WITH_IMAGES)
+
+    assert "base64" not in result
+    assert "![][image1]" not in result
+    assert result.count("*(image omitted)*") == 2
+    assert "![][logo]" in result
+    assert "[logo]: https://example.com/logo.png" in result
+    assert "Speaker: hello everyone" in result
+
+
+def test_note_summary_input_drops_images_and_transcript() -> None:
+    result = get_note_summary_input(MEETING_NOTE_WITH_IMAGES)
+
+    assert "Decisions made about the release." in result
+    assert "Speaker: hello everyone" not in result
+    assert "base64" not in result
+
+
+def test_daily_note_writer_sends_cleaned_note_to_summarizer(tmp_path: Path) -> None:
+    note_path = tmp_path / "daily" / "2026/03/01" / "meeting notes" / "1000 - Sync.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(MEETING_NOTE_WITH_IMAGES)
+    summarizer = RecordingSummarizer()
+
+    DailyNoteWriter(vault_root=tmp_path, summarizer=summarizer)._get_or_create_summary(note_path)
+
+    assert summarizer.contents == [get_note_summary_input(MEETING_NOTE_WITH_IMAGES)]
+
+
+def test_daily_note_writer_waits_before_retrying_failed_summary(tmp_path: Path) -> None:
+    note_path = tmp_path / "daily" / "2026/03/01" / "transcriptions" / "note.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("Some content without frontmatter.")
+
+    waiting_summarizer = CountingUnavailableSummarizer()
+    waiting = DailyNoteWriter(vault_root=tmp_path, summarizer=waiting_summarizer)
+    waiting._get_or_create_summary(note_path)
+    waiting._get_or_create_summary(note_path)
+
+    eager_summarizer = CountingUnavailableSummarizer()
+    eager = DailyNoteWriter(
+        vault_root=tmp_path,
+        summarizer=eager_summarizer,
+        summary_retry_interval=timedelta(0),
+    )
+    eager._get_or_create_summary(note_path)
+    eager._get_or_create_summary(note_path)
+
+    assert waiting_summarizer.call_count == 1
+    assert eager_summarizer.call_count == 2
+
+
+def test_render_session_turns_counts_repeated_tools() -> None:
+    session = SessionData(
+        agent="claude",
+        session_id="x",
+        project="proj",
+        cwd="/x",
+        turns=[
+            SessionTurn(
+                user_text="run the checks",
+                assistant_texts=["done."],
+                tool_names=["Bash", "Bash", "Read", "Bash"],
+            )
+        ],
+    )
+
+    assert "tools: Bash ×3, Read\n" in render_session_turns(session)
 
 
 def test_summary_input_keeps_short_content_unchanged() -> None:

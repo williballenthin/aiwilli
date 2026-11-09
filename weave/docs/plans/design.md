@@ -76,6 +76,7 @@ For one-shot commands:
 5.4 `CalendarScraper`
 - writes notes/chats into `meeting notes/`
 - `scrape_once(days_back=N)` controls the import/backfill window
+- exported doc markdown passes through `strip_base64_images()`, which removes `[label]: <data:image/...>` definitions and replaces their `![][label]` references and inline `![](data:image/...)` images with `*(image omitted)*`
 - `scrape_once` only returns newly created notes; cached/existing notes are skipped so that `run_calendar_scrape` does not trigger redundant daily-note refreshes
 - the daemon still uses a short recurring window; manual CLI use can backfill farther back
 
@@ -84,6 +85,7 @@ For one-shot commands:
 - still uses a manifest for incremental sync
 - all sync manifests live in `$XDG_CACHE_HOME/wballenthin/weave/`; `get_weave_cache_dir()` renames a misspelled legacy `wballethin/weave` directory into place when the current directory does not exist, so an upgrade does not re-import or re-summarize sessions
 - `parse_claude_session()` and `parse_pi_session()` turn each context compaction into a `SessionTurn` with `compaction=True` and empty `user_text`; Claude marks these records `isCompactSummary`, Pi writes `type: compaction` entries; assistant replies after a compaction attach to that turn
+- `render_tool_names()` collapses repeated tool names into counts in first-use order, e.g. `Bash ×3, Read`
 - `render_session_turns()` builds both the note conversation and the summarizer input, so the summary model sees the same text as the note
 - when summarization raises `SummarizationError`, the session note is still written but gets no manifest entry, so the next run summarizes it again
 - summarizers run `llm` as a subprocess; `get_llm_command()` builds `llm -m openai-codex/gpt-6-luna --no-log -o reasoning_effort low <prompt>` and the content goes on stdin
@@ -121,7 +123,7 @@ Rebuild strategy:
   - reads GitHub content from `_weave/github activity.md` when present
   - collects imported note entries from the day category directories
   - also reads legacy `sink/YYYY/MM/DD/*.md` files during migration compatibility
-  - backfills missing frontmatter summaries when a summarizer is configured; when the model answers with empty output (e.g. a safety filter blocks the response), writes `summary: "-"` as a sentinel so the note is never re-summarized; when `llm` itself fails (`SummarizationError`: missing binary, auth, quota), leaves the note untouched so the next run retries
+  - backfills missing frontmatter summaries when a summarizer is configured; the summarizer gets `get_note_summary_input(content)`, which strips base64 images and cuts the text at the first `# … Transcript` heading; a note whose summary call raised `SummarizationError` is skipped for `summary_retry_interval` (default one hour, tracked in memory per note path); when the model answers with empty output (e.g. a safety filter blocks the response), writes `summary: "-"` as a sentinel so the note is never re-summarized; when `llm` itself fails (`SummarizationError`: missing binary, auth, quota), leaves the note untouched so the next run retries
   - renders the generated daily note with deterministic section markers
   - writes the generated daily note only if content changed
   - removes legacy inline `#weave` content from the personal daily note
