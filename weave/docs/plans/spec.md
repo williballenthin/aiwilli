@@ -57,6 +57,7 @@ Note summaries also require:
 - summaries use `openai-codex/gpt-6-luna` through the `llm-openai-via-codex` plugin, so they count against the ChatGPT subscription instead of a prepaid API key; Luna is OpenAI's low-cost model for short summarization work
 - each host needs its own `codex login`, because refresh tokens rotate and a copied `auth.json` stops working on one of the hosts
 - when a summary call fails, the note gets an empty summary and the import continues
+- text longer than 200,000 characters is summarized from its start and its end; the middle is not sent to the model
 
 GitHub import also requires:
 - `gh` CLI installed and authenticated

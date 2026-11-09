@@ -17,6 +17,7 @@ from weave.app import (
     DailyNoteWriter,
     GitHubActivitySyncer,
     IncomingMessage,
+    LlmNoteSummarizer,
     RemarkableSnapshotHandler,
     RouteConfig,
     RouteResolver,
@@ -35,6 +36,7 @@ from weave.app import (
     get_args,
     get_github_activity_manifest_path,
     get_llm_command,
+    get_summary_input,
     get_variant_address,
     get_weave_cache_dir,
     is_gemini_notes,
@@ -506,6 +508,43 @@ class StaticSummarizer:
 class UnavailableSummarizer:
     def summarize(self, content: str) -> str:
         raise SummarizationError("llm command failed: credits depleted")
+
+
+def test_summary_input_keeps_short_content_unchanged() -> None:
+    assert get_summary_input("short note", limit=100) == "short note"
+
+
+def test_summary_input_keeps_start_and_end_of_long_content() -> None:
+    content = "START" + "x" * 1000 + "END"
+
+    result = get_summary_input(content, limit=100)
+
+    assert len(result) <= 100
+    assert result.startswith("START")
+    assert result.endswith("END")
+    assert "characters omitted" in result
+
+
+def test_note_summarizer_sends_limited_input_to_model() -> None:
+    invoker = SequentialLlmInvoker(["summary"])
+    summarizer = LlmNoteSummarizer(invoker=invoker)
+    content = "START" + "x" * 1_000_000 + "END"
+
+    summarizer.summarize(content)
+
+    sent = invoker.calls[0][2]
+    assert sent == get_summary_input(content)
+    assert len(sent) < len(content)
+
+
+def test_agent_session_index_summarizer_sends_limited_input_to_model() -> None:
+    invoker = SequentialLlmInvoker(["Trim oversized session transcripts before summarizing"])
+    summarizer = AgentSessionIndexSummarizer(invoker=invoker)
+    content = "START" + "x" * 1_000_000 + "END"
+
+    summarizer.summarize(content)
+
+    assert invoker.calls[0][2] == get_summary_input(content)
 
 
 def test_agent_session_index_summarizer_accepts_compact_output() -> None:

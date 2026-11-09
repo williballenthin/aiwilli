@@ -145,6 +145,7 @@ WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 
 SUMMARY_MODEL = "openai-codex/gpt-6-luna"
 SUMMARY_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (("reasoning_effort", "low"),)
+SUMMARY_INPUT_MAX_CHARS = 200_000
 SUMMARY_PROMPT = (
     "Summarize this document in exactly one sentence."
     " This summary will appear in a daily index of notes and events."
@@ -746,6 +747,21 @@ def get_llm_command(
     return command
 
 
+def get_summary_input(content: str, limit: int = SUMMARY_INPUT_MAX_CHARS) -> str:
+    """Return `content` cut to at most `limit` characters for a summary prompt.
+
+    Long content keeps its first three quarters and its last quarter, because the
+    start of a meeting or session states its goal and the end states its outcome.
+    """
+    if len(content) <= limit:
+        return content
+    marker = f"\n\n[... {len(content) - limit} characters omitted ...]\n\n"
+    budget = limit - len(marker)
+    head = budget * 3 // 4
+    tail = budget - head
+    return content[:head] + marker + content[len(content) - tail :]
+
+
 class SubprocessLlmInvoker:
     def run(self, model: str, prompt: str, content: str) -> str:
         """Run `llm` and return its stripped output, which may be empty.
@@ -780,7 +796,7 @@ class LlmNoteSummarizer:
         self.invoker = invoker or SubprocessLlmInvoker()
 
     def summarize(self, content: str) -> str:
-        return self.invoker.run(self.model, self.prompt, content)
+        return self.invoker.run(self.model, self.prompt, get_summary_input(content))
 
 
 class AgentSessionIndexSummarizer:
@@ -794,7 +810,9 @@ class AgentSessionIndexSummarizer:
 
     def summarize(self, content: str) -> str:
         summary = self._normalize_summary(
-            self.invoker.run(self.model, AGENT_SESSION_INDEX_SUMMARY_PROMPT, content)
+            self.invoker.run(
+                self.model, AGENT_SESSION_INDEX_SUMMARY_PROMPT, get_summary_input(content)
+            )
         )
         if self._is_valid_summary(summary):
             return summary

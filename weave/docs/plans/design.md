@@ -85,6 +85,7 @@ For one-shot commands:
 - all sync manifests live in `$XDG_CACHE_HOME/wballenthin/weave/`; `get_weave_cache_dir()` renames a misspelled legacy `wballethin/weave` directory into place when the current directory does not exist, so an upgrade does not re-import or re-summarize sessions
 - when summarization raises `SummarizationError`, the session note is still written but gets no manifest entry, so the next run summarizes it again
 - summarizers run `llm` as a subprocess; `get_llm_command()` builds `llm -m openai-codex/gpt-6-luna --no-log -o reasoning_effort low <prompt>` and the content goes on stdin
+- both summarizers pass content through `get_summary_input()`, which cuts it to `SUMMARY_INPUT_MAX_CHARS` (200,000) characters by keeping the first three quarters and the last quarter around an omission marker; meeting transcripts and session logs can be tens of megabytes, and Luna rejects input larger than its context window
 - `llm` and `llm-openai-via-codex` are project dependencies, so `uv run weave` puts the pinned `llm` first on `PATH`
 - keeps two summarizers:
   - structured body summary for the note body
