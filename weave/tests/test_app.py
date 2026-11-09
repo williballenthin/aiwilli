@@ -33,6 +33,7 @@ from weave.app import (
     get_agent_session_manifest_path,
     get_args,
     get_github_activity_manifest_path,
+    get_llm_command,
     get_variant_address,
     get_weave_cache_dir,
     is_gemini_notes,
@@ -1865,3 +1866,16 @@ def test_weave_cache_dir_prefers_existing_dir_over_legacy(tmp_path: Path) -> Non
     assert cache_dir == current
     assert (current / "agent-session-manifest.json").read_text() == "current"
     assert (legacy / "agent-session-manifest.json").read_text() == "legacy"
+
+
+def test_llm_command_uses_luna_with_low_effort_and_no_logging() -> None:
+    assert get_llm_command("openai-codex/gpt-6-luna", "summarize") == [
+        "llm",
+        "-m",
+        "openai-codex/gpt-6-luna",
+        "--no-log",
+        "-o",
+        "reasoning_effort",
+        "low",
+        "summarize",
+    ]

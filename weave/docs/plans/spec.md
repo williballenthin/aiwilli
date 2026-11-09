@@ -52,6 +52,12 @@ Calendar import also requires:
 Agent-session import also requires:
 - `WEAVE_AGENT_SESSIONS_DIR` or `--agent-sessions` pointing to a directory with `claude/` and/or `pi/` JSONL files
 
+Note summaries also require:
+- a ChatGPT login for the Codex CLI on the host (`codex login`, ChatGPT option), stored in `~/.codex/auth.json`
+- summaries use `openai-codex/gpt-6-luna` through the `llm-openai-via-codex` plugin, so they count against the ChatGPT subscription instead of a prepaid API key; Luna is OpenAI's low-cost model for short summarization work
+- each host needs its own `codex login`, because refresh tokens rotate and a copied `auth.json` stops working on one of the hosts
+- when a summary call fails, the note gets an empty summary and the import continues
+
 GitHub import also requires:
 - `gh` CLI installed and authenticated
 - optional `WEAVE_GITHUB_USER` / `--github-user`

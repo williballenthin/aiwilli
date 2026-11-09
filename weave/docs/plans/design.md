@@ -82,6 +82,8 @@ For one-shot commands:
 - writes notes into `agent sessions/`
 - still uses a manifest for incremental sync
 - all sync manifests live in `$XDG_CACHE_HOME/wballenthin/weave/`; `get_weave_cache_dir()` renames a misspelled legacy `wballethin/weave` directory into place when the current directory does not exist, so an upgrade does not re-import or re-summarize sessions
+- summarizers run `llm` as a subprocess; `get_llm_command()` builds `llm -m openai-codex/gpt-6-luna --no-log -o reasoning_effort low <prompt>` and the content goes on stdin
+- `llm` and `llm-openai-via-codex` are project dependencies, so `uv run weave` puts the pinned `llm` first on `PATH`
 - keeps two summarizers:
   - structured body summary for the note body
   - compact frontmatter summary for daily-note rendering

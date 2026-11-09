@@ -143,7 +143,8 @@ WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("drive-activity", "Google Workspace activity"),
 )
 
-SUMMARY_MODEL = "gemini/gemini-3-flash-preview"
+SUMMARY_MODEL = "openai-codex/gpt-6-luna"
+SUMMARY_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (("reasoning_effort", "low"),)
 SUMMARY_PROMPT = (
     "Summarize this document in exactly one sentence."
     " This summary will appear in a daily index of notes and events."
@@ -729,11 +730,23 @@ class LlmInvoker(Protocol):
         """Return an LLM response for the given prompt and content."""
 
 
+def get_llm_command(
+    model: str,
+    prompt: str,
+    options: tuple[tuple[str, str], ...] = SUMMARY_MODEL_OPTIONS,
+) -> list[str]:
+    command = ["llm", "-m", model, "--no-log"]
+    for name, value in options:
+        command.extend(["-o", name, value])
+    command.append(prompt)
+    return command
+
+
 class SubprocessLlmInvoker:
     def run(self, model: str, prompt: str, content: str) -> str:
         try:
             result = subprocess.run(
-                ["llm", "-m", model, prompt],
+                get_llm_command(model, prompt),
                 input=content,
                 capture_output=True,
                 text=True,
