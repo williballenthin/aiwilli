@@ -1354,6 +1354,7 @@ class SessionTurn:
     assistant_texts: list[str]
     tool_names: list[str]
     timestamp: datetime | None = None
+    compaction: bool = False
 
 
 @dataclass
@@ -1480,9 +1481,11 @@ def _build_claude_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
     current_user_ts: datetime | None = None
     current_assistant_texts: list[str] = []
     current_tool_names: list[str] = []
+    current_compaction = False
 
     for obj in messages:
-        if _is_human_user_msg(obj):
+        is_compaction = obj.get("type") == "user" and bool(obj.get("isCompactSummary"))
+        if is_compaction or _is_human_user_msg(obj):
             if current_user_text is not None:
                 turns.append(
                     SessionTurn(
@@ -1490,9 +1493,11 @@ def _build_claude_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                         assistant_texts=current_assistant_texts,
                         tool_names=current_tool_names,
                         timestamp=current_user_ts,
+                        compaction=current_compaction,
                     )
                 )
-            current_user_text = obj.get("message", {}).get("content", "")
+            current_user_text = "" if is_compaction else obj.get("message", {}).get("content", "")
+            current_compaction = is_compaction
             ts_str = obj.get("timestamp")
             current_user_ts = _parse_session_timestamp(ts_str) if ts_str else None
             current_assistant_texts = []
@@ -1514,6 +1519,7 @@ def _build_claude_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                 assistant_texts=current_assistant_texts,
                 tool_names=current_tool_names,
                 timestamp=current_user_ts,
+                compaction=current_compaction,
             )
         )
     return turns
@@ -1525,11 +1531,13 @@ def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
     current_user_ts: datetime | None = None
     current_assistant_texts: list[str] = []
     current_tool_names: list[str] = []
+    current_compaction = False
 
     for obj in messages:
         msg = obj.get("message", {})
         role = msg.get("role")
-        if role == "user":
+        is_compaction = obj.get("type") == "compaction"
+        if is_compaction or role == "user":
             if current_user_text is not None:
                 turns.append(
                     SessionTurn(
@@ -1537,6 +1545,7 @@ def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                         assistant_texts=current_assistant_texts,
                         tool_names=current_tool_names,
                         timestamp=current_user_ts,
+                        compaction=current_compaction,
                     )
                 )
             text_parts = []
@@ -1544,6 +1553,7 @@ def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text_parts.append(block["text"])
             current_user_text = "\n".join(text_parts)
+            current_compaction = is_compaction
             ts_str = obj.get("timestamp")
             current_user_ts = _parse_session_timestamp(ts_str) if ts_str else None
             current_assistant_texts = []
@@ -1566,6 +1576,7 @@ def _build_pi_turns(messages: list[dict[str, Any]]) -> list[SessionTurn]:
                 assistant_texts=current_assistant_texts,
                 tool_names=current_tool_names,
                 timestamp=current_user_ts,
+                compaction=current_compaction,
             )
         )
     return turns
@@ -1668,6 +1679,8 @@ def parse_pi_session(path: Path) -> SessionData:
             provider = obj.get("provider", "")
             if model_id:
                 models.add(f"{provider}/{model_id}" if provider else model_id)
+        elif entry_type == "compaction":
+            ordered_messages.append(obj)
         elif entry_type == "message":
             ordered_messages.append(obj)
             msg = obj.get("message", {})
@@ -1728,16 +1741,28 @@ def render_callout(callout_type: str, title: str, body: str) -> str:
     return "\n".join(lines)
 
 
+def get_session_user_turn_count(session: SessionData) -> int:
+    return sum(1 for turn in session.turns if not turn.compaction)
+
+
 def get_session_message_count(session: SessionData) -> int:
-    return len(session.turns) + sum(len(turn.assistant_texts) for turn in session.turns)
+    return get_session_user_turn_count(session) + sum(
+        len(turn.assistant_texts) for turn in session.turns
+    )
 
 
 def render_session_turns(session: SessionData) -> str:
     parts: list[str] = []
     for turn in session.turns:
         ts = turn.timestamp.strftime("%H:%M:%S") if turn.timestamp else "??:??"
-        parts.append(render_callout("note", f"User · {ts}", turn.user_text))
-        parts.append("")
+        if turn.compaction:
+            parts.append(render_callout("info", f"Compaction · {ts}", ""))
+            parts.append("")
+            if not turn.assistant_texts and not turn.tool_names:
+                continue
+        else:
+            parts.append(render_callout("note", f"User · {ts}", turn.user_text))
+            parts.append("")
         assistant_prefix = ""
         if turn.tool_names:
             assistant_prefix = f"tools: {', '.join(turn.tool_names)}\n\n"
@@ -1831,7 +1856,7 @@ def render_session_note(
         cache_write_fmt=f"{usage.cache_write_tokens:,}",
         total_tokens_fmt=f"{total:,}",
         cost=f"{usage.cost:.4f}" if usage.cost else None,
-        user_turns=len(session.turns),
+        user_turns=get_session_user_turn_count(session),
         tool_calls=session.total_tool_calls,
         body_summary=body_summary,
         conversation=render_session_turns(session),

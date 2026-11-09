@@ -1640,6 +1640,89 @@ def test_parse_session_auto_detects(claude_session_file: Path, pi_session_file: 
     assert pi.agent == "pi"
 
 
+def _write_jsonl(path: Path, records: list[dict[str, object]]) -> Path:
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    return path
+
+
+def test_parse_claude_session_replaces_compaction_summary_with_event(tmp_path: Path) -> None:
+    base = {"cwd": "/Users/user/code/myproject", "sessionId": "abc-123"}
+    path = _write_jsonl(
+        tmp_path / "abc-123.jsonl",
+        [
+            dict(base, type="user", timestamp="2026-03-04T10:00:00Z",
+                 message={"role": "user", "content": "start the refactor"}),
+            dict(base, type="assistant", timestamp="2026-03-04T10:00:05Z",
+                 message={"role": "assistant", "content": [{"type": "text", "text": "started"}]}),
+            dict(base, type="user", timestamp="2026-03-04T11:00:00Z", isCompactSummary=True,
+                 message={"role": "user",
+                          "content": "This session is being continued... long summary text"}),
+            dict(base, type="assistant", timestamp="2026-03-04T11:00:05Z",
+                 message={"role": "assistant", "content": [{"type": "text", "text": "resuming"}]}),
+            dict(base, type="user", timestamp="2026-03-04T11:10:00Z",
+                 message={"role": "user", "content": "ship it"}),
+        ],
+    )
+
+    session = parse_claude_session(path)
+
+    assert [turn.compaction for turn in session.turns] == [False, True, False]
+    assert session.turns[1].user_text == ""
+    assert session.turns[1].assistant_texts == ["resuming"]
+    assert session.turns[2].user_text == "ship it"
+
+
+def test_parse_pi_session_records_compaction_event(tmp_path: Path) -> None:
+    path = _write_jsonl(
+        tmp_path / "2026-03-03T16-00-00-000Z_pi-1.jsonl",
+        [
+            {"type": "session", "version": 3, "id": "pi-1",
+             "timestamp": "2026-03-03T16:00:00.000Z", "cwd": "/Users/user/code/myproject"},
+            {"type": "message", "id": "m1", "timestamp": "2026-03-03T16:00:10.000Z",
+             "message": {"role": "user", "content": [{"type": "text", "text": "explore"}]}},
+            {"type": "compaction", "id": "c1", "timestamp": "2026-03-03T17:00:00.000Z",
+             "summary": "long summary text", "tokensBefore": 265238},
+            {"type": "message", "id": "m2", "timestamp": "2026-03-03T17:00:05.000Z",
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "resuming"}]}},
+        ],
+    )
+
+    session = parse_pi_session(path)
+
+    assert [turn.compaction for turn in session.turns] == [False, True]
+    assert session.turns[1].assistant_texts == ["resuming"]
+
+
+def test_render_session_shows_compaction_as_event_without_summary() -> None:
+    session = SessionData(
+        agent="claude",
+        session_id="x",
+        project="proj",
+        cwd="/x",
+        start_time=datetime(2026, 3, 4, 10, 0, tzinfo=UTC),
+        end_time=datetime(2026, 3, 4, 11, 0, tzinfo=UTC),
+        turns=[
+            SessionTurn(user_text="do the thing", assistant_texts=["done."], tool_names=[]),
+            SessionTurn(
+                user_text="",
+                assistant_texts=["resuming"],
+                tool_names=[],
+                timestamp=datetime(2026, 3, 4, 11, 0, tzinfo=UTC),
+                compaction=True,
+            ),
+        ],
+    )
+
+    rendered = render_session_turns(session)
+    note = render_session_note(session, "", "sha")
+
+    assert "> [!info] Compaction · 11:00:00" in rendered
+    assert "[!note] User · 11:00:00" not in rendered
+    assert "> resuming" in rendered
+    assert "| User turns | 1 |" in note
+    assert "| Messages | 3 |" in note
+
+
 def test_render_session_turns_includes_user_and_assistant() -> None:
     session = SessionData(
         agent="claude",

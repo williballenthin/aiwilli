@@ -83,6 +83,8 @@ For one-shot commands:
 - writes notes into `agent sessions/`
 - still uses a manifest for incremental sync
 - all sync manifests live in `$XDG_CACHE_HOME/wballenthin/weave/`; `get_weave_cache_dir()` renames a misspelled legacy `wballethin/weave` directory into place when the current directory does not exist, so an upgrade does not re-import or re-summarize sessions
+- `parse_claude_session()` and `parse_pi_session()` turn each context compaction into a `SessionTurn` with `compaction=True` and empty `user_text`; Claude marks these records `isCompactSummary`, Pi writes `type: compaction` entries; assistant replies after a compaction attach to that turn
+- `render_session_turns()` builds both the note conversation and the summarizer input, so the summary model sees the same text as the note
 - when summarization raises `SummarizationError`, the session note is still written but gets no manifest entry, so the next run summarizes it again
 - summarizers run `llm` as a subprocess; `get_llm_command()` builds `llm -m openai-codex/gpt-6-luna --no-log -o reasoning_effort low <prompt>` and the content goes on stdin
 - both summarizers pass content through `get_summary_input()`, which cuts it to `SUMMARY_INPUT_MAX_CHARS` (200,000) characters by keeping the first three quarters and the last quarter around an omission marker; meeting transcripts and session logs can be tens of megabytes, and Luna rejects input larger than its context window

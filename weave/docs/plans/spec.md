@@ -137,6 +137,9 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 - frontmatter: `type`, compact `summary`, `agent`, `project`, `session_id`, `session_sha256`
 - the body summary lives inside a managed `weave:summary` region
 - the note body also includes metrics and the full conversation rendered as callouts
+- the conversation shows user messages, assistant text, and the names of the tools each assistant reply called; it omits tool arguments, tool results, and thinking
+- a context compaction shows as a `[!info] Compaction · HH:MM:SS` callout; the compaction summary text is not shown and is not sent to the summary model, because it repeats earlier conversation and can be most of a long session's text
+- the `User turns` and `Messages` metrics do not count compactions
 - frontmatter `summary` is intended for dense daily-note rendering and targets about 12 words
 - sync state is tracked in `$XDG_CACHE_HOME/wballenthin/weave/agent-session-manifest.json`
 
