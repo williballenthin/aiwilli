@@ -27,7 +27,7 @@ Storage model:
 
 Email routes:
 - `+vnote` — saves a transcription note plus attachments under `transcriptions/`
-- `+rm2` — saves a PDF under `_attachments/`, writes a note under `scans/`, and stores the OCR/transcription inside a managed `weave:transcription` region
+- `+rm2` — saves a PDF under `_attachments/` and writes a note under `scans/` that embeds it
 - `+todo` — saves a note with subject/body/attachments under `todo/`
 
 Agent session notes:

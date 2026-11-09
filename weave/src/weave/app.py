@@ -95,30 +95,9 @@ subject: \"{{ subject }}\"
 summary: ""
 attachment: \"{{ attachment_filename }}\"
 received: {{ received }}
-transcribed: {{ transcribed }}
 ---
 
 {{ attachment_link }}
-
-<!-- weave:transcription:start -->
-{{ content }}
-<!-- weave:transcription:end -->
-"""
-)
-
-RM2_ERROR_TEMPLATE = Environment(trim_blocks=True, lstrip_blocks=True).from_string(
-    """---
-type: handwriting
-subject: \"{{ subject }}\"
-summary: ""
-attachment: \"{{ attachment_filename }}\"
-received: {{ received }}
-error: \"{{ error }}\"
----
-
-{{ attachment_link }}
-
-<!-- TRANSCRIPTION_FAILED: {{ error }} -->
 """
 )
 
@@ -163,18 +142,6 @@ WEAVE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("vault-activity", "Vault activity"),
     ("drive-activity", "Google Workspace activity"),
 )
-
-RM2_MODEL = "gemini/gemini-3-flash-preview"
-RM2_PROMPT = """Transcribe this handwritten note verbatim. Output ONLY a single markdown
-code block containing the transcription. Preserve the structure including:
-- Bullet points and indentation
-- Tables (as markdown tables)
-- Paragraphs
-
-Its ok to rejoin/wrap lines if it appears the original text was wrapping, but
-maintain line breaks if they indicate structure or format.
-
-Do not add any commentary, analysis, or text outside the code block."""
 
 SUMMARY_MODEL = "gemini/gemini-3-flash-preview"
 SUMMARY_PROMPT = (
@@ -312,10 +279,6 @@ attendees:
 
 class ConfigError(Exception):
     """Raised when startup configuration is invalid."""
-
-
-class TranscriptionError(Exception):
-    """Raised when PDF transcription fails."""
 
 
 def get_variant_address(base_email: str, variant: str) -> str:
@@ -756,40 +719,6 @@ class MailboxMonitor:
         return datetime.now(tz=UTC)
 
 
-class PdfTranscriber(Protocol):
-    def get_transcription(self, pdf_path: Path) -> str:
-        """Return markdown content extracted from a PDF.
-
-        Raises:
-            TranscriptionError: If transcription fails.
-        """
-
-
-class LlmPdfTranscriber:
-    def __init__(self, model: str = RM2_MODEL):
-        self.model = model
-
-    def get_transcription(self, pdf_path: Path) -> str:
-        try:
-            result = subprocess.run(
-                ["llm", "-m", self.model, "-a", str(pdf_path), RM2_PROMPT],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            raise TranscriptionError(f"llm command failed: {exc.stderr}") from exc
-        except FileNotFoundError as exc:
-            raise TranscriptionError("llm command not found") from exc
-        return self.get_markdown_block(result.stdout)
-
-    def get_markdown_block(self, value: str) -> str:
-        match = re.search(r"```(?:markdown)?\n(.*?)```", value, re.DOTALL)
-        if not match:
-            raise TranscriptionError("No markdown code block found in response")
-        return match.group(1).strip()
-
-
 class NoteSummarizer(Protocol):
     def summarize(self, content: str) -> str:
         """Return a brief summary of the given content."""
@@ -1060,7 +989,6 @@ class TodoHandler:
 class RemarkableSnapshotHandler:
     def __init__(
         self,
-        transcriber: PdfTranscriber,
         layout: VaultLayout | None = None,
         output_dir: Path | None = None,
     ):
@@ -1069,7 +997,6 @@ class RemarkableSnapshotHandler:
                 raise ConfigError("remarkable handler requires a vault layout or output directory")
             layout = VaultLayout(output_dir)
         self.layout = layout
-        self.transcriber = transcriber
 
     def handle_message(self, message: IncomingMessage) -> HandlerResult:
         parsed = email.message_from_bytes(message.raw_email)
@@ -1090,15 +1017,8 @@ class RemarkableSnapshotHandler:
             if not pdf_path.exists():
                 pdf_path.write_bytes(attachment.content)
                 created_paths.append(pdf_path)
-            with show_spinner(f"Transcribing {pdf_filename}"):
-                try:
-                    content = self.transcriber.get_transcription(pdf_path)
-                    error = None
-                except TranscriptionError as exc:
-                    content = None
-                    error = str(exc)
             md_path = note_dir / f"{timestamp} - {stem}.md"
-            rendered = self.get_markdown(message, md_path, pdf_filename, pdf_path, content, error)
+            rendered = self.get_markdown(message, md_path, pdf_filename, pdf_path)
             md_path.write_text(rendered)
             created_paths.append(md_path)
             note_paths.append(md_path)
@@ -1138,25 +1058,12 @@ class RemarkableSnapshotHandler:
         note_path: Path,
         pdf_filename: str,
         pdf_path: Path,
-        content: str | None,
-        error: str | None,
     ) -> str:
-        attachment_link = render_note_embed(note_path, pdf_path)
-        if content is not None:
-            return RM2_TEMPLATE.render(
-                subject=message.subject,
-                attachment_filename=pdf_filename,
-                attachment_link=attachment_link,
-                received=message.received.isoformat(timespec="seconds"),
-                transcribed=datetime.now(tz=UTC).isoformat(timespec="seconds"),
-                content=content,
-            )
-        return RM2_ERROR_TEMPLATE.render(
+        return RM2_TEMPLATE.render(
             subject=message.subject,
             attachment_filename=pdf_filename,
-            attachment_link=attachment_link,
+            attachment_link=render_note_embed(note_path, pdf_path),
             received=message.received.isoformat(timespec="seconds"),
-            error=error or "Unknown error",
         )
 
 
@@ -3215,10 +3122,7 @@ class WeaveService:
             if route.handler_key == "voice":
                 handlers[route.name] = VoiceNoteHandler(layout=layout)
             elif route.handler_key == "rm2":
-                handlers[route.name] = RemarkableSnapshotHandler(
-                    layout=layout,
-                    transcriber=LlmPdfTranscriber(),
-                )
+                handlers[route.name] = RemarkableSnapshotHandler(layout=layout)
             elif route.handler_key == "todo":
                 handlers[route.name] = TodoHandler(layout=layout)
             else:

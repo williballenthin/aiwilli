@@ -67,7 +67,7 @@ For one-shot commands:
 5.2 `RemarkableSnapshotHandler`
 - writes notes into `scans/`
 - writes PDFs into `_attachments/`
-- wraps the OCR/transcription body in `weave:transcription` markers so it can be replaced later without rewriting unrelated note content
+- the note body is only an embed of the PDF; there is no transcription step
 
 5.3 `TodoHandler`
 - writes notes into `todo/`

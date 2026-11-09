@@ -109,11 +109,8 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 6.2 reMarkable handler output
 - pdf path: `daily/YYYY/MM/DD/_attachments/<HHMM> - <stem>.pdf`
 - note path: `daily/YYYY/MM/DD/scans/<HHMM> - <stem>.md`
-- the note includes frontmatter `type: handwriting`, `summary`, and `attachment`
-- the OCR/transcription body is wrapped in:
-  - `<!-- weave:transcription:start -->`
-  - `<!-- weave:transcription:end -->`
-- on transcription failure, Weave still writes an error note and marks the message as seen
+- the note includes frontmatter `type: handwriting`, `summary`, and `attachment`, and its body embeds the PDF
+- Weave does not transcribe the PDF; the handwriting stays an image in the vault, and no LLM is called for this route
 
 6.3 TODO handler output
 - note path: `daily/YYYY/MM/DD/todo/<HHMM> - <sanitized-subject>.md`

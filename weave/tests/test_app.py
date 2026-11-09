@@ -24,7 +24,6 @@ from weave.app import (
     SessionTokenUsage,
     SessionTurn,
     TodoHandler,
-    TranscriptionError,
     VoiceNoteHandler,
     WeaveConfig,
     WeaveService,
@@ -46,19 +45,6 @@ from weave.app import (
     resolve_vault_root,
     sanitize_filename,
 )
-
-
-class StaticTranscriber:
-    def __init__(self, text: str):
-        self.text = text
-
-    def get_transcription(self, pdf_path: Path) -> str:
-        return self.text
-
-
-class FailingTranscriber:
-    def get_transcription(self, pdf_path: Path) -> str:
-        raise TranscriptionError("failed")
 
 
 class StaticGitHubTimelineClient:
@@ -395,11 +381,8 @@ def test_voice_handler_writes_markdown_and_attachment(tmp_path: Path) -> None:
     assert "![[../_attachments/1345 - clip.png]]" in content
 
 
-def test_remarkable_handler_writes_pdf_and_markdown(tmp_path: Path) -> None:
-    handler = RemarkableSnapshotHandler(
-        output_dir=tmp_path,
-        transcriber=StaticTranscriber("line one"),
-    )
+def test_remarkable_handler_saves_pdf_and_embedding_note(tmp_path: Path) -> None:
+    handler = RemarkableSnapshotHandler(output_dir=tmp_path)
     message = build_incoming(build_message_with_pdf(), subject="Snapshot")
 
     result = handler.handle_message(message)
@@ -407,27 +390,24 @@ def test_remarkable_handler_writes_pdf_and_markdown(tmp_path: Path) -> None:
     assert result.handled is True
     pdf_path = tmp_path / "daily" / "2026/03/01" / "_attachments" / "1345 - page.pdf"
     note_path = tmp_path / "daily" / "2026/03/01" / "scans" / "1345 - page.md"
-    assert pdf_path.exists()
-    assert note_path.exists()
+    assert pdf_path.read_bytes() == b"%PDF-1.4 data"
     assert result.note_paths == [note_path]
+    assert result.created_paths == [pdf_path, note_path]
     content = note_path.read_text()
-    assert "line one" in content
+    assert "type: handwriting" in content
+    assert 'attachment: "1345 - page.pdf"' in content
     assert "![[../_attachments/1345 - page.pdf]]" in content
-    assert "<!-- weave:transcription:start -->" in content
-    assert "<!-- weave:transcription:end -->" in content
+    assert "transcription" not in content
 
 
-def test_remarkable_handler_writes_error_note_on_transcription_failure(tmp_path: Path) -> None:
-    handler = RemarkableSnapshotHandler(output_dir=tmp_path, transcriber=FailingTranscriber())
-    message = build_incoming(build_message_with_pdf(), subject="Snapshot")
+def test_remarkable_handler_ignores_message_without_pdf(tmp_path: Path) -> None:
+    handler = RemarkableSnapshotHandler(output_dir=tmp_path)
+    message = build_incoming(build_message_with_body_and_attachment(), subject="Clip")
 
     result = handler.handle_message(message)
 
-    assert result.handled is True
-    note_path = tmp_path / "daily" / "2026/03/01" / "scans" / "1345 - page.md"
-    assert result.note_paths == [note_path]
-    content = note_path.read_text()
-    assert "TRANSCRIPTION_FAILED" in content
+    assert result.handled is False
+    assert not (tmp_path / "daily").exists()
 
 
 def test_sanitize_filename_strips_unsafe_chars() -> None:

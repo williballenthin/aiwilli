@@ -46,7 +46,7 @@ Important classes and functions
 - `MailboxMonitor`: IMAP connection lifecycle, unread fetch, envelope decoding, mark-seen.
 - `RouteResolver`: recipient-plus-sender matching.
 - `VoiceNoteHandler`: saves plain-text body plus attachments.
-- `RemarkableSnapshotHandler`: saves PDFs and transcribes them through `llm`.
+- `RemarkableSnapshotHandler`: saves PDFs and writes a note that embeds each one.
 - `TodoHandler`: turns email into a TODO note and daily-note checkbox entry.
 - `CalendarScraper`: exports Google Docs and chat attachments from recent calendar events.
 - `AgentSessionScraper`: imports Claude/Pi session logs, uses a manifest for incremental sync, and renders session notes.
