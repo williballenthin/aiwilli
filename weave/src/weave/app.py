@@ -1251,7 +1251,6 @@ class CalendarScraper:
                 out_path = note_dir / f"{name}.md"
                 if out_path.exists():
                     logger.debug("calendar note cached: %s", out_path)
-                    results.append((start_dt, out_path, "meeting notes"))
                     continue
 
                 try:
@@ -1292,7 +1291,6 @@ class CalendarScraper:
 
                 if out_path.exists():
                     logger.debug("calendar chat cached: %s", out_path)
-                    results.append((start_dt, out_path, "meeting chat"))
                     continue
 
                 try:
@@ -3038,6 +3036,8 @@ class DailyNoteWriter:
         path.write_text(content)
         return True
 
+    SUMMARY_UNAVAILABLE = "-"
+
     def _get_or_create_summary(self, note_path: Path) -> str:
         try:
             content = note_path.read_text()
@@ -3045,11 +3045,16 @@ class DailyNoteWriter:
             return ""
         existing_summary = get_note_summary(content)
         if existing_summary:
+            if existing_summary == self.SUMMARY_UNAVAILABLE:
+                return ""
             return existing_summary
         if self.summarizer is None:
             return ""
         summary = self.summarizer.summarize(content)
         if not summary:
+            note_path.write_text(
+                set_note_summary(content, self.SUMMARY_UNAVAILABLE)
+            )
             return ""
         note_path.write_text(set_note_summary(content, summary))
         return summary

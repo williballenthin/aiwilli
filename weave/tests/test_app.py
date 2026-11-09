@@ -652,6 +652,59 @@ def test_daily_note_writer_uses_stored_frontmatter_summary(tmp_path: Path) -> No
     assert summarizer.call_count == 0
 
 
+class FailingSummarizer:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def summarize(self, content: str) -> str:
+        self.call_count += 1
+        return ""
+
+
+def test_get_or_create_summary_writes_sentinel_on_empty_response(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "transcriptions" / "note.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("Some content without frontmatter.")
+
+    summarizer = FailingSummarizer()
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=summarizer)
+
+    result = writer._get_or_create_summary(note_path)
+    assert result == ""
+    assert summarizer.call_count == 1
+    assert 'summary: "-"' in note_path.read_text()
+
+    result2 = writer._get_or_create_summary(note_path)
+    assert result2 == ""
+    assert summarizer.call_count == 1
+
+
+def test_get_or_create_summary_sentinel_prevents_resummarization(tmp_path: Path) -> None:
+    vault_root = tmp_path
+    config_dir = vault_root / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = vault_root / "sink" / "2026/03/01" / "transcriptions" / "note.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(
+        "---\n"
+        'summary: "-"\n'
+        "---\n"
+        "Some content.\n"
+    )
+
+    summarizer = FailingSummarizer()
+    writer = DailyNoteWriter(vault_root=vault_root, summarizer=summarizer)
+
+    result = writer._get_or_create_summary(note_path)
+    assert result == ""
+    assert summarizer.call_count == 0
+
+
 def test_daily_note_writer_syncs_managed_lines_from_note_summary(tmp_path: Path) -> None:
     vault_root = tmp_path
     config_dir = vault_root / ".obsidian"

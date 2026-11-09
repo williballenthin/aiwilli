@@ -76,6 +76,7 @@ For one-shot commands:
 5.4 `CalendarScraper`
 - writes notes/chats into `meeting notes/`
 - `scrape_once(days_back=N)` controls the import/backfill window
+- `scrape_once` only returns newly created notes; cached/existing notes are skipped so that `run_calendar_scrape` does not trigger redundant daily-note refreshes
 - the daemon still uses a short recurring window; manual CLI use can backfill farther back
 
 5.5 `AgentSessionScraper`
@@ -116,7 +117,7 @@ Rebuild strategy:
   - reads GitHub content from `_weave/github activity.md` when present
   - collects imported note entries from the day category directories
   - also reads legacy `sink/YYYY/MM/DD/*.md` files during migration compatibility
-  - backfills missing frontmatter summaries when a summarizer is configured
+  - backfills missing frontmatter summaries when a summarizer is configured; when the summarizer returns empty (e.g. safety filter blocks the response), writes `summary: "-"` as a sentinel so the note is never re-summarized
   - renders the generated daily note with deterministic section markers
   - writes the generated daily note only if content changed
   - removes legacy inline `#weave` content from the personal daily note
