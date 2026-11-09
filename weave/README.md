@@ -34,25 +34,25 @@ Agent session notes:
 - stored in `daily/YYYY/MM/DD/agent sessions/<session-id>.md`
 - frontmatter: `type`, `summary`, `agent`, `project`, `session_id`, `session_sha256`
 - body contains a managed `weave:summary` region, metrics table, and callout-rendered conversation
-- sync state lives at `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`
+- sync state lives at `$XDG_CACHE_HOME/wballenthin/weave/agent-session-manifest.json`
 
 GitHub activity:
 - imported into `_weave/github activity.md`
 - copied verbatim into the managed `## GitHub activity` section of the generated Weave daily note
-- finalized days are tracked in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json`
+- finalized days are tracked in `$XDG_CACHE_HOME/wballenthin/weave/github-activity-manifest.json`
 
 Vault file activity:
 - scans markdown files outside `daily/`, `sink/`, `.obsidian/`, `.trash/`, and other hidden/dotfile dirs
 - buckets each file by both filesystem birth/ctime and mtime into a rolling window of days
 - renders one `## Vault activity` section per day listing entries as `created: [[…]]` then `modified: [[…]]`
-- snapshot written to `_weave/vault activity.md`; finalized days tracked in `$XDG_CACHE_HOME/wballethin/weave/vault-activity-manifest.json`
+- snapshot written to `_weave/vault activity.md`; finalized days tracked in `$XDG_CACHE_HOME/wballenthin/weave/vault-activity-manifest.json`
 - today is omitted; days finalize after a 6-hour stabilization window in the configured local timezone
 - `birthtime` is preferred when available (macOS, Linux 4.11+ ext4/btrfs/xfs via `statx`); falls back to `ctime`, which on Unix can bump on chmod/rename — best-effort
 
 Google Workspace activity:
 - queries Drive v3 for Docs, Slides, and Sheets touched by you: `createdTime` (when you own the file), `modifiedByMeTime`, and `viewedByMeTime`
 - renders one `## Google Workspace activity` section per day; each bullet is one file with its statuses joined: `- [title](url) — created, modified, viewed`
-- snapshot written to `_weave/google workspace activity.md`; sync state tracked at `$XDG_CACHE_HOME/wballethin/weave/drive-activity-manifest.json`
+- snapshot written to `_weave/google workspace activity.md`; sync state tracked at `$XDG_CACHE_HOME/wballenthin/weave/drive-activity-manifest.json`
 - today is included and the snapshot is rewritten as a union of previously-recorded entries plus new findings — important because Drive only stores the most recent `viewedByMeTime`/`modifiedByMeTime` per file
 - a day is finalized 24 hours after it ends in the configured local timezone; finalized days are skipped on subsequent runs
 - requires the existing `drive.readonly` OAuth scope (already granted by the calendar setup); no extra credentials needed

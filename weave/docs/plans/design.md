@@ -81,6 +81,7 @@ For one-shot commands:
 5.5 `AgentSessionScraper`
 - writes notes into `agent sessions/`
 - still uses a manifest for incremental sync
+- all sync manifests live in `$XDG_CACHE_HOME/wballenthin/weave/`; `get_weave_cache_dir()` renames a misspelled legacy `wballethin/weave` directory into place when the current directory does not exist, so an upgrade does not re-import or re-summarize sessions
 - keeps two summarizers:
   - structured body summary for the note body
   - compact frontmatter summary for daily-note rendering
@@ -94,7 +95,7 @@ For one-shot commands:
 
 5.7 `VaultActivitySyncer`
 - determines eligible days inside the configured window using the same 06:00-next-day stabilization rule as GitHub
-- skips days already finalized in `$XDG_CACHE_HOME/wballethin/weave/vault-activity-manifest.json` whose snapshots still exist
+- skips days already finalized in `$XDG_CACHE_HOME/wballenthin/weave/vault-activity-manifest.json` whose snapshots still exist
 - walks the vault once via `weave.vault_index.iter_markdown_files`, pruning `daily/`, `sink/`, `_weave/`, `_attachments/`, and any hidden/dotfile directory
 - buckets each file's `(birthtime/ctime, mtime)` pair into the eligible-day map; a file shows up as `created` on its creation day and `modified` on later edit days within the window
 - writes the body through `DailyNoteWriter.upsert_vault_activity_section()`, storing a per-day snapshot file at `_weave/vault activity.md` and refreshing the daily note

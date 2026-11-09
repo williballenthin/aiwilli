@@ -134,7 +134,7 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 - the body summary lives inside a managed `weave:summary` region
 - the note body also includes metrics and the full conversation rendered as callouts
 - frontmatter `summary` is intended for dense daily-note rendering and targets about 12 words
-- sync state is tracked in `$XDG_CACHE_HOME/wballethin/weave/agent-session-manifest.json`
+- sync state is tracked in `$XDG_CACHE_HOME/wballenthin/weave/agent-session-manifest.json`
 
 6.6 GitHub activity import
 - GitHub import writes a snapshot file at `daily/YYYY/MM/DD/_weave/github activity.md`
@@ -142,7 +142,7 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 - the imported body is the compact repository-summary format
 - Weave never imports the current local day
 - Weave only imports a completed day after the 6-hour stabilization window in the configured local timezone
-- once imported, the day is tracked in `$XDG_CACHE_HOME/wballethin/weave/github-activity-manifest.json`
+- once imported, the day is tracked in `$XDG_CACHE_HOME/wballenthin/weave/github-activity-manifest.json`
 - import is still best-effort and limited by the recent GitHub user-events feed window
 
 6.7 Vault activity import
@@ -153,7 +153,7 @@ The human-owned personal daily note path is controlled by `.obsidian/daily-notes
 - `YYYY-MM-DD weave.md` copies that snapshot verbatim into the managed `## Vault activity` section
 - entries are rendered as `- created: [[<path>|<label>]] — <summary>` (label and summary read from frontmatter `title`/`summary` when present); created entries first, then modified, each block sorted by path
 - today is omitted; a day finalizes after a 6-hour stabilization window in the configured local timezone
-- finalized days are tracked in `$XDG_CACHE_HOME/wballethin/weave/vault-activity-manifest.json` and skipped on subsequent runs
+- finalized days are tracked in `$XDG_CACHE_HOME/wballenthin/weave/vault-activity-manifest.json` and skipped on subsequent runs
 
 7. Daily note integration
 

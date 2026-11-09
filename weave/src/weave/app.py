@@ -1445,26 +1445,40 @@ def _parse_session_timestamp(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
-def get_agent_session_manifest_path() -> Path:
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "wballethin" / "weave" / "agent-session-manifest.json"
+def get_weave_cache_dir(cache_home: Path) -> Path:
+    """Return the weave cache directory under `cache_home`.
 
+    Moves the misspelled legacy directory `wballethin/weave` into place when
+    the current directory does not exist yet, so sync manifests persist.
+    """
+    cache_dir = cache_home / "wballenthin" / "weave"
+    legacy_dir = cache_home / "wballethin" / "weave"
+    if legacy_dir.is_dir() and not cache_dir.exists():
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        legacy_dir.rename(cache_dir)
+        logger.info("moved weave cache from %s to %s", legacy_dir, cache_dir)
+    return cache_dir
+
+
+def get_default_weave_cache_dir() -> Path:
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return get_weave_cache_dir(cache_home)
+
+
+def get_agent_session_manifest_path() -> Path:
+    return get_default_weave_cache_dir() / "agent-session-manifest.json"
 
 
 def get_github_activity_manifest_path() -> Path:
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "wballethin" / "weave" / "github-activity-manifest.json"
+    return get_default_weave_cache_dir() / "github-activity-manifest.json"
 
 
 def get_vault_activity_manifest_path() -> Path:
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "wballethin" / "weave" / "vault-activity-manifest.json"
-
+    return get_default_weave_cache_dir() / "vault-activity-manifest.json"
 
 
 def get_drive_activity_manifest_path() -> Path:
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "wballethin" / "weave" / "drive-activity-manifest.json"
+    return get_default_weave_cache_dir() / "drive-activity-manifest.json"
 
 
 

@@ -35,6 +35,7 @@ from weave.app import (
     get_args,
     get_github_activity_manifest_path,
     get_variant_address,
+    get_weave_cache_dir,
     is_gemini_notes,
     is_shared_notes,
     parse_claude_session,
@@ -1857,3 +1858,30 @@ def test_agent_session_scraper_skips_noncanonical_session_filenames(
     assert run.report.scanned == 1
     assert len(run.results) == 1
     assert run.results[0].note_path.name == "11111111-1111-1111-1111-111111111111.md"
+
+
+def test_weave_cache_dir_moves_legacy_misspelled_dir(tmp_path: Path) -> None:
+    legacy = tmp_path / "wballethin" / "weave"
+    legacy.mkdir(parents=True)
+    (legacy / "agent-session-manifest.json").write_text('{"version": 1}')
+
+    cache_dir = get_weave_cache_dir(tmp_path)
+
+    assert cache_dir == tmp_path / "wballenthin" / "weave"
+    assert (cache_dir / "agent-session-manifest.json").read_text() == '{"version": 1}'
+    assert not legacy.exists()
+
+
+def test_weave_cache_dir_prefers_existing_dir_over_legacy(tmp_path: Path) -> None:
+    legacy = tmp_path / "wballethin" / "weave"
+    legacy.mkdir(parents=True)
+    (legacy / "agent-session-manifest.json").write_text("legacy")
+    current = tmp_path / "wballenthin" / "weave"
+    current.mkdir(parents=True)
+    (current / "agent-session-manifest.json").write_text("current")
+
+    cache_dir = get_weave_cache_dir(tmp_path)
+
+    assert cache_dir == current
+    assert (current / "agent-session-manifest.json").read_text() == "current"
+    assert (legacy / "agent-session-manifest.json").read_text() == "legacy"
