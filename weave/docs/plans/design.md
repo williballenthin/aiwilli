@@ -83,6 +83,7 @@ For one-shot commands:
 - writes notes into `agent sessions/`
 - still uses a manifest for incremental sync
 - all sync manifests live in `$XDG_CACHE_HOME/wballenthin/weave/`; `get_weave_cache_dir()` renames a misspelled legacy `wballethin/weave` directory into place when the current directory does not exist, so an upgrade does not re-import or re-summarize sessions
+- when summarization raises `SummarizationError`, the session note is still written but gets no manifest entry, so the next run summarizes it again
 - summarizers run `llm` as a subprocess; `get_llm_command()` builds `llm -m openai-codex/gpt-6-luna --no-log -o reasoning_effort low <prompt>` and the content goes on stdin
 - `llm` and `llm-openai-via-codex` are project dependencies, so `uv run weave` puts the pinned `llm` first on `PATH`
 - keeps two summarizers:
@@ -117,7 +118,7 @@ Rebuild strategy:
   - reads GitHub content from `_weave/github activity.md` when present
   - collects imported note entries from the day category directories
   - also reads legacy `sink/YYYY/MM/DD/*.md` files during migration compatibility
-  - backfills missing frontmatter summaries when a summarizer is configured; when the summarizer returns empty (e.g. safety filter blocks the response), writes `summary: "-"` as a sentinel so the note is never re-summarized
+  - backfills missing frontmatter summaries when a summarizer is configured; when the model answers with empty output (e.g. a safety filter blocks the response), writes `summary: "-"` as a sentinel so the note is never re-summarized; when `llm` itself fails (`SummarizationError`: missing binary, auth, quota), leaves the note untouched so the next run retries
   - renders the generated daily note with deterministic section markers
   - writes the generated daily note only if content changed
   - removes legacy inline `#weave` content from the personal daily note

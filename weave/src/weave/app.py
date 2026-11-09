@@ -282,6 +282,10 @@ class ConfigError(Exception):
     """Raised when startup configuration is invalid."""
 
 
+class SummarizationError(Exception):
+    """Raised when the summarization model cannot be called."""
+
+
 def get_variant_address(base_email: str, variant: str) -> str:
     """Build a plus-address variant from a base mailbox address.
 
@@ -744,6 +748,11 @@ def get_llm_command(
 
 class SubprocessLlmInvoker:
     def run(self, model: str, prompt: str, content: str) -> str:
+        """Run `llm` and return its stripped output, which may be empty.
+
+        Raises:
+            SummarizationError: If `llm` is missing or exits non-zero.
+        """
         try:
             result = subprocess.run(
                 get_llm_command(model, prompt),
@@ -752,9 +761,10 @@ class SubprocessLlmInvoker:
                 text=True,
                 check=True,
             )
-        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-            logger.warning("summarization failed: %s", exc)
-            return ""
+        except subprocess.CalledProcessError as exc:
+            raise SummarizationError(f"llm command failed: {exc.stderr.strip()}") from exc
+        except FileNotFoundError as exc:
+            raise SummarizationError("llm command not found") from exc
         return result.stdout.strip()
 
 
@@ -1994,11 +2004,16 @@ class AgentSessionScraper:
 
         turns_text = render_session_turns(session)
         body_summary = ""
-        if self.summarizer:
-            body_summary = self.summarizer.summarize(turns_text)
         index_summary = ""
-        if self.index_summarizer:
-            index_summary = self.index_summarizer.summarize(turns_text)
+        summarized = True
+        try:
+            if self.summarizer:
+                body_summary = self.summarizer.summarize(turns_text)
+            if self.index_summarizer:
+                index_summary = self.index_summarizer.summarize(turns_text)
+        except SummarizationError as exc:
+            logger.warning("summarization failed for %s: %s", jsonl_path.name, exc)
+            summarized = False
 
         content = render_session_note(
             session,
@@ -2009,13 +2024,16 @@ class AgentSessionScraper:
         out_path.write_text(content)
         logger.info("wrote agent session: %s", out_path)
 
-        manifest.sessions[source_key] = AgentSessionManifestEntry(
-            session_id=session.session_id,
-            session_sha256=session_sha256,
-            sink_path=str(out_path.resolve()),
-            source_mtime_ns=source_mtime_ns,
-        )
         action = "updated" if entry else "imported"
+        if summarized:
+            manifest.sessions[source_key] = AgentSessionManifestEntry(
+                session_id=session.session_id,
+                session_sha256=session_sha256,
+                sink_path=str(out_path.resolve()),
+                source_mtime_ns=source_mtime_ns,
+            )
+        else:
+            manifest.sessions.pop(source_key, None)
         return (
             action,
             AgentSessionScrapeResult(
@@ -3050,7 +3068,11 @@ class DailyNoteWriter:
             return existing_summary
         if self.summarizer is None:
             return ""
-        summary = self.summarizer.summarize(content)
+        try:
+            summary = self.summarizer.summarize(content)
+        except SummarizationError as exc:
+            logger.warning("summarization failed for %s: %s", note_path, exc)
+            return ""
         if not summary:
             note_path.write_text(
                 set_note_summary(content, self.SUMMARY_UNAVAILABLE)

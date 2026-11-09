@@ -23,6 +23,7 @@ from weave.app import (
     SessionData,
     SessionTokenUsage,
     SessionTurn,
+    SummarizationError,
     TodoHandler,
     VoiceNoteHandler,
     WeaveConfig,
@@ -500,6 +501,11 @@ class StaticSummarizer:
 
     def summarize(self, content: str) -> str:
         return self.summary
+
+
+class UnavailableSummarizer:
+    def summarize(self, content: str) -> str:
+        raise SummarizationError("llm command failed: credits depleted")
 
 
 def test_agent_session_index_summarizer_accepts_compact_output() -> None:
@@ -1932,3 +1938,59 @@ def test_llm_command_uses_luna_with_low_effort_and_no_logging() -> None:
         "low",
         "summarize",
     ]
+
+
+def test_get_or_create_summary_retries_after_summarizer_error(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".obsidian"
+    config_dir.mkdir(parents=True)
+    (config_dir / "daily-notes.json").write_text(json.dumps({"folder": "daily"}))
+    note_path = tmp_path / "daily" / "2026/03/01" / "transcriptions" / "note.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("Some content without frontmatter.")
+
+    failing = DailyNoteWriter(vault_root=tmp_path, summarizer=UnavailableSummarizer())
+    assert failing._get_or_create_summary(note_path) == ""
+    assert note_path.read_text() == "Some content without frontmatter."
+
+    working = DailyNoteWriter(vault_root=tmp_path, summarizer=StaticSummarizer("Later summary."))
+    assert working._get_or_create_summary(note_path) == "Later summary."
+    assert 'summary: "Later summary."' in note_path.read_text()
+
+
+def test_agent_session_scraper_retries_after_summarizer_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    sessions_dir = tmp_path / "sessions"
+    claude_dir = sessions_dir / "claude" / "-Users-user-code-proj"
+    claude_dir.mkdir(parents=True)
+    session_path = claude_dir / "11111111-1111-1111-1111-111111111111.jsonl"
+    session_path.write_text(_build_claude_session_jsonl())
+    output_dir = tmp_path / "sink"
+    output_dir.mkdir()
+
+    failing = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+        summarizer=UnavailableSummarizer(),
+        index_summarizer=UnavailableSummarizer(),
+    )
+    run1 = failing.scrape_once()
+    assert run1.report.imported == 1
+    note_path = run1.results[0].note_path
+    assert "Fixed a bug." not in note_path.read_text()
+
+    working = AgentSessionScraper(
+        sessions_dir=sessions_dir,
+        output_dir=output_dir,
+        summarizer=StaticSummarizer("Fixed a bug."),
+        index_summarizer=StaticSummarizer("compact summary"),
+    )
+    run2 = working.scrape_once()
+    assert run2.report.imported == 1
+    content = note_path.read_text()
+    assert "Fixed a bug." in content
+    assert 'summary: "compact summary"' in content
+
+    run3 = working.scrape_once()
+    assert run3.report.unchanged == 1
